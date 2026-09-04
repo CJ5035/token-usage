@@ -11,6 +11,8 @@ tests/evidence/
 .pytest_cache/
 .venv/
 venv/
+.codegraph/
+.probe/
 
 # 编辑器
 .vscode/
