@@ -28,7 +28,7 @@ DEFAULT_USAGE_SERVER_ID = (
     "bfd684bfc2e4eed05cd0b518f5e4eafd3f3376e3938abb9e536e7c03df831e5c"
 )
 USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Gecko/20100101 Firefox/148.0"
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:148.0) Gecko/20100101 Firefox/148.0"
 )
 REQUEST_TIMEOUT = 30.0
 MAX_BODY_BYTES = 4 << 20  # 4 MiB

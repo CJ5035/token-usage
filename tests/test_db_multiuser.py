@@ -278,3 +278,83 @@ def test_settings_roundtrip_preserves_extras(tmp_db):
     assert db.get_key_names() == {"k1": "名字"}
     assert db.get_settings()["sync_interval_sec"] == 60
     assert db.get_active_account_id() == aid
+
+
+# ---------------------------------------------------------------------------
+# accounts.source 列 + BAI 去重 (task-2)
+# ---------------------------------------------------------------------------
+
+
+def test_source_column_fresh_default_opencode(tmp_db):
+    """全新库建表自带 source 列, 默认 'opencode'."""
+    conn = db.get_db()
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
+    assert "source" in cols
+    assert db.list_accounts()[0]["source"] == "opencode"
+
+
+def test_source_column_migration_from_old_db(tmp_db):
+    """旧 accounts 表(无 source 列)-> 打开自动补列, 老行默认 'opencode'."""
+    path = tmp_db / "gousage.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript("""
+        CREATE TABLE accounts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL DEFAULT 'Default',
+          workspace_id TEXT NOT NULL DEFAULT 'Default',
+          resolved_workspace_id TEXT,
+          token TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO accounts (id, name, workspace_id, token, created_at, updated_at)
+        VALUES (1, 'Old', 'wrk_old', 'tok-old', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z');
+    """)
+    conn.commit()
+    conn.close()
+    db.get_db()  # 触发迁移
+    conn = db.get_db()
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
+    assert "source" in cols
+    row = conn.execute("SELECT source FROM accounts WHERE id = 1").fetchone()
+    assert row["source"] == "opencode"
+
+
+def test_bai_add_first_row(tmp_db):
+    """source='bai' 首次调用建行, source 落库为 'bai'."""
+    aid = db.add_account("bai-cookie-1", workspace_hint="ws", switch=True, source="bai", dedupe_key="usr-1")
+    row = next(x for x in db.list_accounts() if x["id"] == aid)
+    assert row["source"] == "bai"
+    assert row["workspace_id"] == "usr-1"
+    assert row["has_token"]
+
+
+def test_bai_same_dedupe_key_updates_token_no_dup(tmp_db):
+    """source='bai' 同 dedupe_key 重登 -> 不产生新行, 仅更新 token."""
+    a = db.add_account("cookie-1", source="bai", dedupe_key="usr-1")
+    before = db.count_accounts()
+    b = db.add_account("cookie-2", source="bai", dedupe_key="usr-1")
+    assert a == b
+    assert db.count_accounts() == before
+    row = next(x for x in db.list_accounts() if x["id"] == a)
+    assert row["has_token"]
+    conn = db.get_db()
+    assert conn.execute("SELECT token FROM accounts WHERE id = ?", (a,)).fetchone()["token"] == "cookie-2"
+
+
+def test_bai_different_dedupe_key_new_row(tmp_db):
+    """source='bai' 不同 dedupe_key -> 各自独立新行."""
+    a = db.add_account("cookie-1", source="bai", dedupe_key="usr-1")
+    b = db.add_account("cookie-2", source="bai", dedupe_key="usr-2")
+    assert a != b
+    assert db.count_accounts() == 3  # 种子 + 2
+
+
+def test_bai_dedupe_key_scoped_to_bai_only(tmp_db):
+    """BAI 去重只在 source='bai' 内生效; 同名 workspace 的 opencode 行不受影响."""
+    op = db.add_account("op-code", "usr-1")                      # opencode 行 workspace_id=usr-1
+    b = db.add_account("cookie-1", source="bai", dedupe_key="usr-1")
+    assert op != b                                               # 不命中 opencode 行, BAI 另建新行
+    rows = {r["id"]: r["source"] for r in db.list_accounts()}
+    assert rows[op] == "opencode" and rows[b] == "bai"
+    assert db.count_accounts() == 3                              # 种子 + opencode + bai

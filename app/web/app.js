@@ -73,7 +73,8 @@ const I18N = {
     quotaFail: "配额获取失败", retryTip: "点击右上角刷新重试",
     syncIntervalSet: "同步间隔已设为", syncRangeUpdated: "同步范围已更新，下次全量同步生效",
     trendHint: "30 天", totalTokenHint: "含缓存命中",
-    setUsers: "用户管理", addUser: "添加用户", addUserTip: "登录新的 OpenCode Go 账号并保存到本机",
+    sourceBai: "BAI", quotaPointsBalance: "余额 {n} 积分", quotaPointsExpiring: "其中 {n} 即将到期", estimateTip: "估算口径：成本为本地定价估算，非实际扣费", estimateBadge: "估算",
+    setUsers: "用户管理", addUser: "添加用户", addUserBai: "添加 BAI 账号", addUserTip: "登录新的 OpenCode Go 账号并保存到本机",
     userSwitchTip: "切换用户", userCountTip: "已登录用户数",
     switchTo: "切换", currentUserBadge: "当前", renameBtn: "重命名", deleteUser: "删除",
     renameTitle: "重命名用户", save: "保存", deleteUserTitle: "删除用户",
@@ -83,6 +84,32 @@ const I18N = {
     setToCurrent: "设为当前", loggedOut: "已退出登录",
     logoutUserConfirm: "将退出「{name}」并清除其本地用量数据与同步记录，确定？",
     reloginConfirmNew: "将打开官方授权页重新登录当前账号，确定？",
+    sourceCommandcode: "CommandCode", loginCommandcode: "登录 Command Code",
+    ccSummaryTitle: "账期汇总", ccRequests: "请求", ccTokens: "Token", ccCost: "费用", ccSuccessRate: "成功率",
+    ccHistoryNote: "API 仅提供最近 24 小时明细，更早历史自接入起本地积累",
+    zcodeQuotaTitle: "GLM Coding Plan · ZCode",
+    zcodeQuotaGuide: "未检测到 ZCode 登录凭证。请在 ZCode 客户端登录 GLM Coding Plan 订阅，额度将自动显示",
+    zcodeQuotaFail: "ZCode 额度获取失败",
+    mcpMonthly: "MCP 月度",
+    zcodeStatsTitle: "ZCode 本地用量",
+    zcodeStatsMissing: "未检测到 ZCode 本地数据（~/.zcode/cli/db/db.sqlite）",
+    zcodeCostHint: "费用为按量价目估算值（订阅套餐实际不按此扣费），未收录定价的模型按 0 计算",
+    zcodeChannel: "渠道", zcodeModel: "模型",
+    zcodeAvgTps: "平均输出速度", zcodeAvgTtft: "平均首字延迟",
+    zcodeEstCost: "估算费用", zcodeHitRate: "命中率",
+    zcodeNoData: "暂无数据", zcodeTimes: "次",
+    dshStatsTitle: "DSH 本地用量",
+    dshStatsMissing: "未检测到 DSH 本地数据（~/.dsh/sessions）",
+    dshSegTotal: "总量", dshSegToday: "今日",
+    dshTpsHint: "平均 {tps} tok/s",
+    dshTodayTableNote: "渠道/模型明细仅提供总量口径",
+    dshKpiSessions: "会话数", dshKpiInput: "总输入(含缓存)", dshKpiOutput: "总输出",
+    dshKpiTodayInput: "今日输入(含缓存)", dshKpiTodayOutput: "今日输出", dshKpiTodaySpeed: "今日秒速",
+    dshColSteps: "步数", dshColTps: "平均 tok/s",
+    claudecodeStatsTitle: "Claude Code 本地用量",
+    claudecodeStatsMissing: "未检测到 Claude Code 本地数据（~/.claude/projects）",
+    claudecodeCostHint: "费用为按量价目估算值（订阅套餐实际不按此扣费），未收录定价的模型按 0 计算",
+    claudecodeKpiOutput: "输出 TOKEN",
   },
   en: {
     syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh",
@@ -152,7 +179,8 @@ const I18N = {
     quotaFail: "Quota fetch failed", retryTip: "Click refresh in top bar to retry",
     syncIntervalSet: "Sync interval set to", syncRangeUpdated: "Sync range updated, takes effect on next full sync",
     trendHint: "30 days", totalTokenHint: "incl. cache hits",
-    setUsers: "User Management", addUser: "Add User", addUserTip: "Sign in with another OpenCode Go account",
+    sourceBai: "BAI", quotaPointsBalance: "Balance {n} points", quotaPointsExpiring: "of which {n} expiring", estimateTip: "Estimate: cost is a local price estimate, not actual billing", estimateBadge: "Est.",
+    setUsers: "User Management", addUser: "Add User", addUserBai: "Add BAI Account", addUserTip: "Sign in with another OpenCode Go account",
     userSwitchTip: "Switch user", userCountTip: "Logged-in users",
     switchTo: "Switch", currentUserBadge: "Active", renameBtn: "Rename", deleteUser: "Delete",
     renameTitle: "Rename User", save: "Save", deleteUserTitle: "Delete User",
@@ -162,6 +190,32 @@ const I18N = {
     setToCurrent: "Make Active", loggedOut: "Signed out",
     logoutUserConfirm: "Sign out \"{name}\" and remove their local usage data and sync history?",
     reloginConfirmNew: "This opens the auth page to re-login the current account. Continue?",
+    sourceCommandcode: "CommandCode", loginCommandcode: "Add CommandCode Account",
+    ccSummaryTitle: "Billing Summary", ccRequests: "Requests", ccTokens: "Tokens", ccCost: "Cost", ccSuccessRate: "Success Rate",
+    ccHistoryNote: "API provides only the last 24h of details; older history accumulates locally since first sync",
+    zcodeQuotaTitle: "GLM Coding Plan · ZCode",
+    zcodeQuotaGuide: "No ZCode credentials detected. Sign in to a GLM Coding Plan subscription in the ZCode client and quotas will appear automatically",
+    zcodeQuotaFail: "Failed to fetch ZCode quota",
+    mcpMonthly: "MCP Monthly",
+    zcodeStatsTitle: "ZCode Local Usage",
+    zcodeStatsMissing: "ZCode local data not found (~/.zcode/cli/db/db.sqlite)",
+    zcodeCostHint: "Costs are pay-as-you-go estimates (subscriptions are not actually billed this way); models without pricing are counted as 0",
+    zcodeChannel: "Channel", zcodeModel: "Model",
+    zcodeAvgTps: "Avg Output Speed", zcodeAvgTtft: "Avg First-Token Latency",
+    zcodeEstCost: "Est. Cost", zcodeHitRate: "Hit Rate",
+    zcodeNoData: "No data", zcodeTimes: "times",
+    dshStatsTitle: "DSH Local Usage",
+    dshStatsMissing: "DSH local data not found (~/.dsh/sessions)",
+    dshSegTotal: "Total", dshSegToday: "Today",
+    dshTpsHint: "Avg {tps} tok/s",
+    dshTodayTableNote: "Channel/model details are totals only",
+    dshKpiSessions: "Sessions", dshKpiInput: "Total Input (incl. cache)", dshKpiOutput: "Total Output",
+    dshKpiTodayInput: "Today Input (incl. cache)", dshKpiTodayOutput: "Today Output", dshKpiTodaySpeed: "Today Speed",
+    dshColSteps: "Steps", dshColTps: "Avg tok/s",
+    claudecodeStatsTitle: "Claude Code Local Usage",
+    claudecodeStatsMissing: "Claude Code local data not found (~/.claude/projects)",
+    claudecodeCostHint: "Costs are pay-as-you-go estimates (subscriptions are not actually billed this way); models without pricing are counted as 0",
+    claudecodeKpiOutput: "Output Tokens",
   },
 };
 let lang = "zh";
@@ -172,6 +226,7 @@ let state = {
   range: "today",
   statsRange: "7d",
   modelDim: "input",
+  dshDim: "total",
   data: null,
   exchangeRate: 7.0,
   currency: "CNY",
@@ -185,7 +240,7 @@ let state = {
 };
 
 const COLOR = { input: "#4f8ef7", output: "#22c55e", reasoning: "#a78bfa", cache: "#06b6d4", cost: "#d97706" };
-const QUOTA_LABEL = { "5h Rolling": () => t("rolling"), "Weekly": () => t("weekly"), "Monthly": () => t("monthly") };
+const QUOTA_LABEL = { "5h Rolling": () => t("rolling"), "Weekly": () => t("weekly"), "Monthly": () => t("monthly"), "MCP Monthly": () => t("mcpMonthly") };
 const PLAN_BADGE = { lite: "GO", sub: "GO", byok: "BYOK" };
 
 /* ---------------- 格式化 ---------------- */
@@ -205,6 +260,13 @@ function fmtMoney(usd) {
   }
   if (usd >= 1) return "$" + usd.toFixed(2);
   if (usd > 0) return "$" + usd.toFixed(4);
+  return "$0";
+}
+function fmtUsd(v) {
+  // USD 额度固定美元显示 (commandcode 配额池/账期费用为美元计价, 不随默认货币换算)
+  v = Number(v) || 0;
+  if (v >= 1) return "$" + v.toFixed(2);
+  if (v > 0) return "$" + v.toFixed(4);
   return "$0";
 }
 function fmtDur(sec) {
@@ -270,6 +332,11 @@ function applyLang(l) {
     renderSettings();
     loadRecords().catch(() => {});
   }
+  // ZCode 区块随语言即时重渲染 (复用已拉取数据, 不重发请求)
+  if (zcodeQuotaLast) renderZcodeQuota(zcodeQuotaLast);
+  if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);
+  if (dshUsageLast) renderDsh(dshUsageLast);
+  if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);
 }
 
 /* ---------------- 弹框 / Toast ---------------- */
@@ -374,6 +441,8 @@ function applyCurrency(cur) {
   renderDetail6(state.data.totals);
   loadRecords().catch(() => {});
   if (state.page === "overview") loadOverview(true).catch(() => {});  // 总览页费用随货币即时换算
+  if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);  // ZCode 估算费用随货币即时换算
+  if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);  // Claude Code 估算费用随货币即时换算
 }
 
 /* ---------------- 页面路由 ---------------- */
@@ -383,6 +452,9 @@ function switchPage(page) {
   $("page-" + page).hidden = false;
   document.querySelectorAll(".side-item").forEach((b) => b.classList.toggle("active", b.dataset.page === page));
   if (page === "home" || page === "stats") loadDashboard();
+  if (page === "stats") loadZcodeSummary().catch(() => {});  // ZCode 本地用量区块
+  if (page === "stats") loadDshUsage().catch(() => {});  // DSH 本地用量区块
+  if (page === "stats") loadClaudecodeSummary().catch(() => {});  // Claude Code 本地用量区块
   if (page === "overview") loadOverview().catch(() => {});
   if (page === "records") { loadSessions().catch(() => {}); loadRecords().catch(() => {}); }
   if (page === "settings") renderSettings();
@@ -413,6 +485,7 @@ async function loadDashboard(quiet = false) {
     if (seq !== loadSeq) return;
     renderAll(data);
     showLoading(false);
+    loadZcodeQuota().catch(() => {});  // ZCode 额度卡: 并发拉取, 失败不阻塞 dashboard
   } catch (e) {
     if (seq === loadSeq) showLoading(false);
     if (!quiet) console.error("dashboard load failed", e);
@@ -421,6 +494,20 @@ async function loadDashboard(quiet = false) {
 function showLoading(show) { $("top-loading").hidden = !show; }
 
 /* ---------------- 首页: 用量块 ---------------- */
+/* USD 额度窗口块 (commandcode): used/cap 为美元额度, 进度条按 used/total,
+   数值固定美元显示 (额度口径, 不随默认货币换算); reset_in_sec 订阅信息不可用时
+   可能为 null, fmtDur 内部按 0 处理显示"即将重置" */
+function usdWindowHtml(w, extraCls) {
+  const used = Number(w.used) || 0;
+  const total = Number(w.total) || 0;
+  const pct = total > 0 ? Math.min(100, (used / total) * 100) : 0;
+  const cls = w.label === "5h Rolling" ? "c-rolling" : w.label === "Weekly" ? "c-week" : "c-month";
+  return `<div class="ub ${cls}${extraCls ? " " + extraCls : ""}">
+    <div class="ub-head"><span class="ub-l">${(QUOTA_LABEL[w.label] || (() => w.label))()}</span><span class="ub-rem">${t("remaining")} ${fmtUsd(w.remaining)}</span></div>
+    <div class="ub-bar"><div class="ub-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
+    <div class="ub-meta"><span>${fmtUsd(used)} / ${fmtUsd(total)}</span><span>${t("resetsIn")} ${fmtDur(w.reset_in_sec)}</span></div>
+  </div>`;
+}
 function renderUsageBlocks(quota) {
   const row = $("usage-blocks");
   if (!quota || !quota.success) {
@@ -437,6 +524,23 @@ function renderUsageBlocks(quota) {
   if (state.quotaRetryTimer) { clearTimeout(state.quotaRetryTimer); state.quotaRetryTimer = null; }
   const blocks = [];
   for (const w of quota.windows || []) {
+    // BAI 配额: 单积分格 (unit==="points" 或存在 points_balance), 不走百分比进度条
+    if (w.unit === "points" || w.points_balance != null) {
+      const exp = Number(w.points_expiring) || 0;
+      blocks.push({
+        bai: true,
+        cls: "c-bai",
+        label: (QUOTA_LABEL[w.label] || (() => w.label))(),
+        balance: t("quotaPointsBalance").replace("{n}", fmtInt(w.points_balance)),
+        expiring: exp > 0 ? t("quotaPointsExpiring").replace("{n}", fmtInt(exp)) : "",
+      });
+      continue;
+    }
+    // CommandCode 配额: USD 额度窗口 (unit==="USD"), 复用 USD 块模板
+    if (w.unit === "USD") {
+      blocks.push({ usd: true, html: usdWindowHtml(w, "") });
+      continue;
+    }
     const used = Number(w.used) || 0;
     blocks.push({
       cls: w.label === "5h Rolling" ? "c-rolling" : w.label === "Weekly" ? "c-week" : "c-month",
@@ -446,23 +550,464 @@ function renderUsageBlocks(quota) {
       reset: `${t("resetsIn")} ${fmtDur(w.reset_in_sec)}`,
     });
   }
-  row.innerHTML = blocks.map((b) => `
-    <div class="ub ${b.cls}">
+  row.innerHTML = blocks.map((b) => b.bai ? `<div class="ub ${b.cls}">
+      <div class="ub-head"><span class="ub-l">${b.label}</span></div>
+      <div class="ub-bal">${b.balance}</div>
+      ${b.expiring ? `<div class="ub-exp">${b.expiring}</div>` : ""}
+    </div>` : b.usd ? b.html : `<div class="ub ${b.cls}">
       <div class="ub-head"><span class="ub-l">${b.label}</span><span class="ub-rem">${t("remaining")} ${b.remaining}</span></div>
       <div class="ub-bar"><div class="ub-bar-fill" style="width:${b.used}%"></div></div>
       <div class="ub-meta"><span>${t("used")} ${b.used.toFixed(0)}%</span><span>${b.reset}</span></div>
     </div>`).join("");
 }
 
+/* ---------------- 首页: CommandCode 账期汇总卡 ---------------- */
+/* 仅 commandcode 账户且 cc_summary 存在时显示 (账期口径快照, 由服务层同步缓存) */
+function renderCcSummary(data) {
+  const box = $("cc-summary");
+  if (!box) return;
+  const cs = data && data.account && data.account.source === "commandcode" ? data.cc_summary : null;
+  if (!cs || !Object.keys(cs).length) { box.hidden = true; return; }
+  const cards = [
+    { cls: "c-blue", l: t("ccRequests"), v: fmtInt(cs.totalCount) },
+    { cls: "c-violet", l: t("ccTokens"), v: fmtTokens(cs.totalTokens) },
+    { cls: "c-amber", l: t("ccCost"), v: fmtUsd(cs.totalCost) },
+    { cls: "c-green", l: t("ccSuccessRate"), v: (Number(cs.successRate) || 0).toFixed(1) + "%" },
+  ];
+  $("cc-grid").innerHTML = cards.map((c) => `
+    <div class="card kpi ${c.cls}"><div class="kpi-l">${c.l}</div><div class="kpi-v">${c.v}</div></div>`).join("");
+  box.hidden = false;
+}
+
+/* ---------------- 首页: ZCode (GLM Coding Plan) 额度卡 ---------------- */
+/* 数据源 /api/zcode/quota (后端契约固定): fetch 抛异常 (端点不存在/网络错误)
+   时整个容器保持 hidden, 对无 ZCode 用户零打扰; 凭证缺失 (错误文案以
+   「未找到 ZCode Coding Plan 凭证」开头, 后端 CREDENTIAL_ERROR_PREFIX 契约)
+   显示登录引导框 */
+let zcodeQuotaLast = null;
+async function loadZcodeQuota() {
+  const box = $("zcode-quota");
+  if (!box) return;
+  try {
+    const data = await api("/api/zcode/quota");
+    zcodeQuotaLast = data;
+    renderZcodeQuota(data);
+  } catch (e) {
+    zcodeQuotaLast = null;
+    box.hidden = true;  // ZCode 不可用: 不显示错误, 容器隐藏
+  }
+}
+function zcodeLevelText(level) {
+  const s = String(level || "").trim();
+  if (!s) return "";
+  const lower = s.toLowerCase();
+  if (lower === "pro") return "Pro";
+  if (lower === "max") return "Max";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+function zcodeResetCell(sec) {
+  // reset_in_sec 为 0 表示未知 (后端契约), 显示 "—" 而非 fmtDur 的"即将重置"
+  return (Number(sec) || 0) > 0 ? `${t("resetsIn")} ${fmtDur(sec)}` : "—";
+}
+function renderZcodeQuota(data) {
+  const box = $("zcode-quota");
+  if (!box) return;
+  const head = $("zcode-quota-head");
+  const badge = $("zcode-level");
+  const row = $("zcode-quota-cards");
+  if (data == null) {  // 后端获取中的占位: 骨架 (照 renderUsageBlocks 骨架模式)
+    box.hidden = false;
+    head.hidden = true;
+    row.innerHTML = `<div class="ub skeleton"><div class="sk-line w40"></div><div class="sk-line w20 lg"></div><div class="sk-bar"></div><div class="sk-line w60"></div></div>`.repeat(3);
+    return;
+  }
+  if (!data.success) {
+    box.hidden = false;
+    head.hidden = true;
+    const err = String(data.error || "");
+    row.innerHTML = err.includes("未找到 ZCode Coding Plan 凭证")
+      ? `<div class="ub ub-hint">${t("zcodeQuotaGuide")}</div>`
+      : `<div class="ub ub-error">${t("zcodeQuotaFail")}：${escapeHtml(err || "?")}</div>`;
+    return;
+  }
+  box.hidden = false;
+  head.hidden = false;
+  const lvl = zcodeLevelText(data.level);
+  badge.textContent = lvl;
+  badge.hidden = !lvl;
+  row.innerHTML = (data.windows || []).map((w) => {
+    const cls = w.label === "5h Rolling" ? "c-rolling" : w.label === "Weekly" ? "c-week" : "c-month";
+    const label = escapeHtml((QUOTA_LABEL[w.label] || (() => w.label))());
+    const used = Math.min(100, Math.max(0, Number(w.used) || 0));  // 后端契约为百分比 0-100
+    const reset = zcodeResetCell(w.reset_in_sec);
+    if (w.label === "MCP Monthly") {
+      const uc = Number(w.used_count) || 0;
+      const tc = Number(w.total_count) || 0;
+      const cnt = tc > 0 ? `${fmtInt(uc)}/${fmtInt(tc)}` : fmtInt(uc);
+      return `<div class="ub ${cls}">
+        <div class="ub-head"><span class="ub-l">${label}</span><span class="ub-rem">${cnt}</span></div>
+        <div class="ub-bar"><div class="ub-bar-fill" style="width:${used.toFixed(1)}%"></div></div>
+        <div class="ub-meta"><span>${t("used")} ${cnt} ${t("zcodeTimes")}</span><span>${reset}</span></div>
+      </div>`;
+    }
+    return `<div class="ub ${cls}">
+      <div class="ub-head"><span class="ub-l">${label}</span><span class="ub-rem">${used.toFixed(0)}%</span></div>
+      <div class="ub-bar"><div class="ub-bar-fill" style="width:${used.toFixed(1)}%"></div></div>
+      <div class="ub-meta"><span>${t("used")} ${used.toFixed(0)}%</span><span>${reset}</span></div>
+    </div>`;
+  }).join("");
+}
+
+/* ---------------- 统计页: ZCode 本地用量区块 ---------------- */
+/* 数据源 /api/zcode/summary?range=<statsRange> (与 loadDashboard 统计页 range 同源);
+   db_found=false → 仅显示引导文案; fetch 异常 → 整块隐藏 */
+let zcodeSummaryLast = null;
+let zcodeSumSeq = 0;
+let cZcodeTrend = null;
+async function loadZcodeSummary() {
+  const seq = ++zcodeSumSeq;
+  const box = $("zcode-stats");
+  if (!box) return;
+  try {
+    const data = await api(`/api/zcode/summary?range=${state.statsRange}`);
+    if (seq !== zcodeSumSeq) return;  // 丢弃过期响应 (快速切 range 时旧请求)
+    renderZcodeSummary(data);
+  } catch (e) {
+    if (seq === zcodeSumSeq) { zcodeSummaryLast = null; box.hidden = true; }
+  }
+}
+function zcodeProviderLabel(p) {
+  // 1) provider_name 非空 → 原样; 2) 内置渠道映射; 3) 其余 (UUID) → 前 8 位 + "…"
+  const name = p && p.provider_name != null ? String(p.provider_name).trim() : "";
+  if (name) return name;
+  const id = String((p && p.provider_id) || "");
+  if (id === "builtin:bigmodel-coding-plan" || id === "builtin:zai-coding-plan") return "GLM Coding Plan";
+  if (id.includes("-start-plan")) return "GLM Start";
+  return id ? id.slice(0, 8) + "…" : "—";
+}
+function zcodeSpeed(v) { return v == null ? "—" : Number(v).toFixed(1); }
+function zcodeLatency(v) { return v == null ? "—" : String(Math.round(Number(v))); }
+function zcodeRenderHeads() {
+  $("zcode-prov-head").innerHTML = `
+    <th>${t("zcodeChannel")}</th><th class="num">${t("totalRequests")}</th>
+    <th class="num">${t("input")}(${t("inclCache")})</th><th class="num">${t("output")}</th>
+    <th class="num">${t("hitAmount")}</th><th class="num">${t("zcodeEstCost")}</th>
+    <th class="num">${t("zcodeAvgTps")}</th><th class="num">${t("zcodeAvgTtft")}</th>`;
+  $("zcode-model-head").innerHTML = `
+    <th>${t("zcodeChannel")}</th><th>${t("zcodeModel")}</th><th class="num">${t("totalRequests")}</th>
+    <th class="num">${t("input")}(${t("inclCache")})</th><th class="num">${t("output")}</th>
+    <th class="num">${t("hitAmount")}</th><th class="num">${t("zcodeHitRate")}</th>
+    <th class="num">${t("zcodeEstCost")}</th><th class="num">${t("zcodeAvgTps")}</th>`;
+}
+function renderZcodeSummary(data) {
+  zcodeSummaryLast = data;
+  const box = $("zcode-stats");
+  if (!box) return;
+  const missing = $("zcode-missing");
+  const kpis = $("zcode-kpis");
+  const tables = $("zcode-tables");
+  const trendBox = $("zcode-trend-box");
+  if (!data || data.db_found === false) {
+    // 未检测到本地库: 仅显示引导文案, 隐藏 KPI/表格/图
+    box.hidden = false;
+    missing.hidden = false;
+    kpis.hidden = true;
+    kpis.innerHTML = "";
+    tables.hidden = true;
+    trendBox.hidden = true;
+    if (cZcodeTrend) { cZcodeTrend.destroy(); cZcodeTrend = null; }
+    return;
+  }
+  box.hidden = false;
+  missing.hidden = true;
+  kpis.hidden = false;
+  tables.hidden = false;
+  trendBox.hidden = false;
+  zcodeRenderHeads();
+  const tt = data.totals || {};
+  const totalTokens = (tt.total_input_tokens || 0) + (tt.total_output_tokens || 0) + (tt.total_reasoning_tokens || 0);
+  const cards = [
+    { cls: "c-blue", l: t("totalRequests"), v: fmtInt(tt.request_count) },
+    { cls: "c-violet", l: t("totalTokens"), v: fmtTokens(totalTokens) },
+    { cls: "c-amber", l: t("zcodeEstCost"), v: fmtMoney(tt.total_cost_usd) },
+    { cls: "c-green", l: t("zcodeAvgTps"), v: tt.avg_tps == null ? "—" : Number(tt.avg_tps).toFixed(1) + " tok/s" },
+    { cls: "c-cyan", l: t("zcodeAvgTtft"), v: tt.avg_ttft_ms == null ? "—" : Math.round(Number(tt.avg_ttft_ms)) + " ms" },
+  ];
+  kpis.innerHTML = cards.map((c) => `
+    <div class="card kpi ${c.cls}"><div class="kpi-l">${c.l}</div><div class="kpi-v">${c.v}</div></div>`).join("");
+  const provs = data.providers || [];
+  $("zcode-prov-body").innerHTML = provs.length ? provs.map((p) => `
+    <tr><td>${escapeHtml(zcodeProviderLabel(p))}</td>
+    <td class="num">${fmtInt(p.request_count)}</td>
+    <td class="num">${fmtTokens(p.total_input_tokens)}</td>
+    <td class="num">${fmtTokens(p.total_output_tokens)}</td>
+    <td class="num">${fmtTokens(p.cache_hit_tokens)}</td>
+    <td class="num">${fmtMoney(p.total_cost_usd)}</td>
+    <td class="num">${zcodeSpeed(p.avg_tps)}</td>
+    <td class="num">${zcodeLatency(p.avg_ttft_ms)}</td></tr>`).join("")
+    : `<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
+  const models = data.models || [];
+  $("zcode-model-body").innerHTML = models.length ? models.map((m) => `
+    <tr><td>${escapeHtml(zcodeProviderLabel(m))}</td>
+    <td><span class="model-cell">${modelIcon(m.model_id)}${escapeHtml(m.model_id)}</span></td>
+    <td class="num">${fmtInt(m.request_count)}</td>
+    <td class="num">${fmtTokens(m.total_input_tokens)}</td>
+    <td class="num">${fmtTokens(m.total_output_tokens)}</td>
+    <td class="num">${fmtTokens(m.cache_hit_tokens)}</td>
+    <td class="num">${m.hit_rate == null ? "—" : Number(m.hit_rate).toFixed(1) + "%"}</td>
+    <td class="num">${fmtMoney(m.total_cost_usd)}</td>
+    <td class="num">${zcodeSpeed(m.avg_tps)}</td></tr>`).join("")
+    : `<tr><td colspan="9" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
+  chartZcodeTrend(data.daily7 || []);
+}
+/* 7 日趋势: Token + 估算费用两条线, 固定近 7 天窗口 (数据源 daily7, 不随 range 变化) */
+function chartZcodeTrend(daily7) {
+  const canvas = $("zcode-trend-chart");
+  const emptyEl = $("zcode-trend-empty");
+  if (!canvas) return;
+  if (cZcodeTrend) { cZcodeTrend.destroy(); cZcodeTrend = null; }
+  if (!daily7 || !daily7.length) {
+    if (emptyEl) { emptyEl.textContent = t("zcodeNoData"); emptyEl.hidden = false; }
+    return;
+  }
+  if (emptyEl) emptyEl.hidden = true;
+  cZcodeTrend = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: daily7.map((d) => d.date.slice(5)),
+      datasets: [
+        { label: t("totalTokens"), data: daily7.map((d) => (d.total_input_tokens || 0) + (d.total_output_tokens || 0) + (d.total_reasoning_tokens || 0)), borderColor: COLOR.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
+        { label: t("zcodeEstCost"), data: daily7.map((d) => d.total_cost_usd || 0), borderColor: COLOR.input, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y1" },
+      ],
+    },
+    options: {
+      responsive: false, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
+        tooltip: { callbacks: { label: (it) => ` ${it.dataset.label}: ${it.dataset.yAxisID === "y" ? fmtTokens(it.parsed.y) : fmtMoney(it.parsed.y)}` } },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 7 } },
+        y: { position: "left", grid: { color: cssVar("--grid") }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtTokens(v) } },
+        y1: { position: "right", grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtMoney(v) } },
+      },
+    },
+  });
+  cZcodeTrend.resize();
+}
+
+/* ---------------- 统计页: DSH 本地用量区块 ---------------- */
+/* 数据源 /api/dsh/usage (TTL 缓存在后端 dsh_api 模块内部, 端点不加缓存);
+   found=false → 显示空态文案; fetch 异常 → 整块隐藏 (照 ZCode 容错);
+   注意: 后端返回模块缓存对象本体, 只读消费, 严禁原地修改;
+   providers/models 仅总量口径: today 档保持总量数据并显示口径说明 (dshTodayTableNote) */
+let dshUsageLast = null;
+async function loadDshUsage() {
+  const box = $("dsh-stats");
+  if (!box) return;
+  try {
+    const data = await api("/api/dsh/usage");
+    dshUsageLast = data;
+    renderDsh(data);
+  } catch (e) {
+    dshUsageLast = null;
+    box.hidden = true;  // DSH 端点不可用: 不显示错误, 容器隐藏
+  }
+}
+function dshRenderHeads() {
+  $("dsh-prov-head").innerHTML = `
+    <th>${t("zcodeChannel")}</th><th class="num">${t("dshColSteps")}</th>
+    <th class="num">${t("input")}(${t("inclCache")})</th><th class="num">${t("output")}</th>
+    <th class="num">${t("dshColTps")}</th>`;
+  $("dsh-model-head").innerHTML = `
+    <th>${t("zcodeChannel")}</th><th>${t("zcodeModel")}</th><th class="num">${t("dshColSteps")}</th>
+    <th class="num">${t("input")}(${t("inclCache")})</th><th class="num">${t("output")}</th>
+    <th class="num">${t("dshColTps")}</th>`;
+}
+function renderDsh(data) {
+  const box = $("dsh-stats");
+  if (!box) return;
+  const missing = $("dsh-missing");
+  const body = $("dsh-body");
+  if (!data || data.found === false) {
+    // 未检测到 DSH 本地数据: 仅显示引导文案, 隐藏 KPI/表格
+    box.hidden = false;
+    missing.hidden = false;
+    body.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  missing.hidden = true;
+  body.hidden = false;
+  dshRenderHeads();
+  const tt = data.total || {};
+  const td = data.today || {};
+  $("dsh-tps-hint").textContent = t("dshTpsHint").replace("{tps}", (Number(tt.tps) || 0).toFixed(1));
+  const kpi = (cls, l, v) => `<div class="card kpi ${cls}"><div class="kpi-l">${l}</div><div class="kpi-v">${v}</div></div>`;
+  $("dsh-kpis-total").innerHTML = [
+    kpi("c-blue", t("dshKpiSessions"), fmtInt(data.sessions_count)),
+    kpi("c-green", t("dshKpiInput"), fmtTokens(tt.input)),
+    kpi("c-violet", t("dshKpiOutput"), fmtTokens(tt.output)),
+  ].join("");
+  $("dsh-kpis-today").innerHTML = [
+    kpi("c-blue", t("dshKpiTodayInput"), fmtTokens(td.input)),
+    kpi("c-green", t("dshKpiTodayOutput"), fmtTokens(td.output)),
+    kpi("c-amber", t("dshKpiTodaySpeed"), (Number(td.tps) || 0).toFixed(1) + " tok/s"),
+  ].join("");
+  // 渠道/模型明细仅总量口径: 两档都渲染总量数字, today 档显示口径说明
+  const provs = data.providers || [];
+  $("dsh-prov-body").innerHTML = provs.length ? provs.map((p) => `
+    <tr><td>${escapeHtml(p.provider || "—")}</td>
+    <td class="num">${fmtInt(p.steps)}</td>
+    <td class="num">${fmtTokens(p.input)}</td>
+    <td class="num">${fmtTokens(p.output)}</td>
+    <td class="num">${(Number(p.tps) || 0).toFixed(1)}</td></tr>`).join("")
+    : `<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
+  const models = data.models || [];
+  $("dsh-model-body").innerHTML = models.length ? models.map((m) => `
+    <tr><td>${escapeHtml(m.provider || "—")}</td>
+    <td><span class="model-cell">${modelIcon(m.model)}${escapeHtml(m.model || "—")}</span></td>
+    <td class="num">${fmtInt(m.steps)}</td>
+    <td class="num">${fmtTokens(m.input)}</td>
+    <td class="num">${fmtTokens(m.output)}</td>
+    <td class="num">${(Number(m.tps) || 0).toFixed(1)}</td></tr>`).join("")
+    : `<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
+  const note = $("dsh-today-note");
+  if (note) note.hidden = state.dshDim !== "today";
+}
+
+/* ---------------- 统计页: Claude Code 本地用量区块 ---------------- */
+/* 数据源 /api/claudecode/summary?range=<statsRange> (与 loadDashboard 统计页 range 同源);
+   db_found=false → 仅显示引导文案; fetch 异常 → 整块隐藏 (照 ZCode 容错);
+   渠道名导入时已落中文名/hostname, 直接渲染 channel 字段, 无需前端映射 */
+let claudecodeSummaryLast = null;
+let claudecodeSumSeq = 0;
+let cClaudecodeTrend = null;
+async function loadClaudecodeSummary() {
+  const seq = ++claudecodeSumSeq;
+  const box = $("claudecode-stats");
+  if (!box) return;
+  try {
+    const data = await api(`/api/claudecode/summary?range=${state.statsRange}`);
+    if (seq !== claudecodeSumSeq) return;  // 丢弃过期响应 (快速切 range 时旧请求)
+    renderClaudecodeSummary(data);
+  } catch (e) {
+    if (seq === claudecodeSumSeq) { claudecodeSummaryLast = null; box.hidden = true; }
+  }
+}
+function claudecodeRenderHeads() {
+  $("claudecode-prov-head").innerHTML = `
+    <th>${t("zcodeChannel")}</th><th class="num">${t("totalRequests")}</th>
+    <th class="num">${t("totalTokens")}</th><th class="num">${t("output")}</th>
+    <th class="num">${t("zcodeAvgTps")}</th><th class="num">${t("zcodeEstCost")}</th>`;
+  $("claudecode-model-head").innerHTML = `
+    <th>${t("zcodeModel")}</th><th class="num">${t("totalRequests")}</th>
+    <th class="num">${t("totalTokens")}</th><th class="num">${t("output")}</th>
+    <th class="num">${t("zcodeAvgTps")}</th><th class="num">${t("zcodeEstCost")}</th>`;
+}
+function renderClaudecodeSummary(data) {
+  claudecodeSummaryLast = data;
+  const box = $("claudecode-stats");
+  if (!box) return;
+  const missing = $("claudecode-missing");
+  const kpis = $("claudecode-kpis");
+  const tables = $("claudecode-tables");
+  const trendBox = $("claudecode-trend-box");
+  if (!data || data.db_found === false) {
+    // 未检测到本地数据目录: 仅显示引导文案, 隐藏 KPI/表格/图
+    box.hidden = false;
+    missing.hidden = false;
+    kpis.hidden = true;
+    kpis.innerHTML = "";
+    tables.hidden = true;
+    trendBox.hidden = true;
+    if (cClaudecodeTrend) { cClaudecodeTrend.destroy(); cClaudecodeTrend = null; }
+    return;
+  }
+  box.hidden = false;
+  missing.hidden = true;
+  kpis.hidden = false;
+  tables.hidden = false;
+  trendBox.hidden = false;
+  claudecodeRenderHeads();
+  const tt = data.totals || {};
+  const cards = [
+    { cls: "c-violet", l: t("totalTokens"), v: fmtTokens(tt.total_tokens) },
+    { cls: "c-green", l: t("claudecodeKpiOutput"), v: fmtTokens(tt.total_output_tokens) },
+    { cls: "c-blue", l: t("totalRequests"), v: fmtInt(tt.request_count) },
+    { cls: "c-cyan", l: t("zcodeAvgTps"), v: tt.avg_tps == null ? "—" : Number(tt.avg_tps).toFixed(1) + " tok/s" },
+    { cls: "c-amber", l: t("zcodeEstCost"), v: fmtMoney(tt.total_cost_usd) },
+  ];
+  kpis.innerHTML = cards.map((c) => `
+    <div class="card kpi ${c.cls}"><div class="kpi-l">${c.l}</div><div class="kpi-v">${c.v}</div></div>`).join("");
+  const channels = data.channels || [];
+  $("claudecode-prov-body").innerHTML = channels.length ? channels.map((p) => `
+    <tr><td>${escapeHtml(p.channel || "—")}</td>
+    <td class="num">${fmtInt(p.request_count)}</td>
+    <td class="num">${fmtTokens(p.total_tokens)}</td>
+    <td class="num">${fmtTokens(p.total_output_tokens)}</td>
+    <td class="num">${zcodeSpeed(p.avg_tps)}</td>
+    <td class="num">${fmtMoney(p.total_cost_usd)}</td></tr>`).join("")
+    : `<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
+  const models = data.models || [];
+  $("claudecode-model-body").innerHTML = models.length ? models.map((m) => `
+    <tr><td><span class="model-cell">${modelIcon(m.model)}${escapeHtml(m.model || "—")}</span></td>
+    <td class="num">${fmtInt(m.request_count)}</td>
+    <td class="num">${fmtTokens(m.total_tokens)}</td>
+    <td class="num">${fmtTokens(m.total_output_tokens)}</td>
+    <td class="num">${zcodeSpeed(m.avg_tps)}</td>
+    <td class="num">${fmtMoney(m.total_cost_usd)}</td></tr>`).join("")
+    : `<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
+  chartClaudecodeTrend(data.daily7 || []);
+}
+/* 7 日趋势: Token + 估算费用两条线, 固定近 7 天窗口 (数据源 daily7, 不随 range 变化) */
+function chartClaudecodeTrend(daily7) {
+  const canvas = $("claudecode-trend-chart");
+  const emptyEl = $("claudecode-trend-empty");
+  if (!canvas) return;
+  if (cClaudecodeTrend) { cClaudecodeTrend.destroy(); cClaudecodeTrend = null; }
+  if (!daily7 || !daily7.length) {
+    if (emptyEl) { emptyEl.textContent = t("zcodeNoData"); emptyEl.hidden = false; }
+    return;
+  }
+  if (emptyEl) emptyEl.hidden = true;
+  cClaudecodeTrend = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: daily7.map((d) => d.date.slice(5)),
+      datasets: [
+        { label: t("totalTokens"), data: daily7.map((d) => d.total_tokens || 0), borderColor: COLOR.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
+        { label: t("zcodeEstCost"), data: daily7.map((d) => d.total_cost_usd || 0), borderColor: COLOR.input, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y1" },
+      ],
+    },
+    options: {
+      responsive: false, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
+        tooltip: { callbacks: { label: (it) => ` ${it.dataset.label}: ${it.dataset.yAxisID === "y" ? fmtTokens(it.parsed.y) : fmtMoney(it.parsed.y)}` } },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 7 } },
+        y: { position: "left", grid: { color: cssVar("--grid") }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtTokens(v) } },
+        y1: { position: "right", grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtMoney(v) } },
+      },
+    },
+  });
+  cClaudecodeTrend.resize();
+}
+
 /* ---------------- 首页: 用量概览 6 格 ---------------- */
-function renderOverview(totals) {
+function renderOverview(totals, source) {
+  const isBai = source === "bai";
   const totalTokens = totals.total_input_tokens + totals.total_output_tokens + totals.total_reasoning_tokens;
   const cards = [
     { cls: "c-green", l: t("hitRate"), v: totals.hit_rate.toFixed(1) + "%", s: `${t("hit")} ${fmtTokens(totals.cache_hit_tokens)} · ${t("miss")} ${fmtTokens(totals.uncached_input_tokens)}` },
     { cls: "c-cyan", l: t("hitAmount"), v: fmtTokens(totals.cache_hit_tokens), s: `${t("pctOfInput")} ${totals.hit_rate.toFixed(1)}%` },
     { cls: "c-blue", l: t("totalTokens"), v: fmtTokens(totalTokens), s: t("inclCache") },
     { cls: "c-slate", l: t("totalRequests"), v: fmtInt(totals.request_count), s: t("currentRange") },
-    { cls: "c-amber", l: t("totalCost"), v: fmtMoney(totals.total_cost_usd), s: `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
+    { cls: "c-amber", l: t("totalCost") + (isBai ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: fmtMoney(totals.total_cost_usd), s: `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
     { cls: "c-violet", l: t("sessions"), v: fmtInt(totals.session_count), s: t("dedup") },
   ];
   $("overview-grid").innerHTML = cards.map((c) => `
@@ -500,10 +1045,11 @@ function chartToday(trend) {
 }
 
 /* ---------------- 统计页: 4 总卡 + 6 明细 ---------------- */
-function renderStatsTotal(totals) {
+function renderStatsTotal(totals, source) {
+  const isBai = source === "bai";
   const totalTokens = totals.total_input_tokens + totals.total_output_tokens + totals.total_reasoning_tokens;
   const cards = [
-    { cls: "c-amber", l: t("totalCost"), v: fmtMoney(totals.total_cost_usd), s: `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
+    { cls: "c-amber", l: t("totalCost") + (isBai ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: fmtMoney(totals.total_cost_usd), s: `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
     { cls: "c-blue", l: t("totalRequests"), v: fmtInt(totals.request_count), s: t("currentRange") },
     { cls: "c-violet", l: t("totalTokens"), v: fmtTokens(totalTokens), s: `${t("input")} ${fmtTokens(totals.total_input_tokens)} · ${t("output")} ${fmtTokens(totals.total_output_tokens)}` },
     { cls: "c-green", l: t("hitRate"), v: totals.hit_rate.toFixed(1) + "%", s: `${t("hit")} ${fmtTokens(totals.cache_hit_tokens)} / ${t("miss")} ${fmtTokens(totals.uncached_input_tokens)}` },
@@ -703,12 +1249,15 @@ async function loadRecords() {
 function modelIcon(m) {
   const s = String(m || "").toLowerCase();
   const base = s.split("-")[0];
-  const map = { deepseek: "deepseek", glm: "glm", gpt: "gpt", grok: "grok", kimi: "kimi", meta: "meta", mimo: "mimo", minimax: "minimax", muse: "meta", qwen: "qwen", hy: "hy" };
+  const map = { deepseek: "deepseek", glm: "glm", gpt: "gpt", grok: "grok", kimi: "kimi", meta: "meta", mimo: "mimo", minimax: "minimax", muse: "meta", qwen: "qwen", hy: "hy", claude: "claude" };
   // hy2/hy3 等混元系列模型统一使用 hy 图标 (首段非精确 hy 时按前缀匹配)
   let name = map[base];
   if (!name) name = base.startsWith("hy") ? "hy" : "deepseek";
   const dark = document.documentElement.dataset.theme === "dark";
-  const themed = dark && ["gpt", "grok", "mimo"].includes(name) ? `${name}-color` : name;
+  // kimi 白 K 仅适配深色背景, 浅色主题切 color 变体; gpt/grok/mimo 相反, 深色主题切 color 变体
+  const themed = dark
+    ? (["gpt", "grok", "mimo"].includes(name) ? `${name}-color` : name)
+    : (name === "kimi" ? "kimi-color" : name);
   return `<img src="icons/${themed}.svg" alt="${escapeHtml(m)}" title="${escapeHtml(m)}" style="width:16px;height:16px">`;
 }
 function refreshIcons() {
@@ -720,13 +1269,14 @@ function renderAll(data) {
   state.data = data;
   if (data.exchange_rate?.usd_cny) state.exchangeRate = data.exchange_rate.usd_cny;
   renderUsageBlocks(data.quota);
-  renderOverview(data.totals);
+  renderCcSummary(data);
+  renderOverview(data.totals, data.account?.source);
   const homeVisible = !document.getElementById("page-home").hidden;
   const statsVisible = !document.getElementById("page-stats").hidden;
   // 只重建当前可见页面的图表 (hidden 页面的 canvas 尺寸为 0, 创建会失败)
   if (homeVisible) chartToday(data.today_trend);
   if (statsVisible) {
-    renderStatsTotal(data.totals);
+    renderStatsTotal(data.totals, data.account?.source);
     renderDetail6(data.totals);
     chartModel(data.models);
     chartTrend(data.trend);
@@ -856,10 +1406,21 @@ function renderAccountOverview(data) {
 }
 
 function renderAccountCard(a) {
-  // 配额三窗口: 有缓存时展示, 缓存未就绪 (后台刷新中) 显示占位
+  // 配额卡片: opencode 三百分比窗口 / BAI 单积分格; 缓存未就绪显示占位
   let quotaHtml;
   if (a.quota && a.quota.success && a.quota.windows) {
     quotaHtml = `<div class="ov-quota-grid">${a.quota.windows.map((w) => {
+      // BAI 积分单格
+      if (w.unit === "points" || w.points_balance != null) {
+        const exp = Number(w.points_expiring) || 0;
+        return `<div class="ub c-bai ov-ub">
+          <div class="ub-head"><span class="ub-l">${(QUOTA_LABEL[w.label] || (() => w.label))()}</span></div>
+          <div class="ub-bal">${t("quotaPointsBalance").replace("{n}", fmtInt(w.points_balance))}</div>
+          ${exp > 0 ? `<div class="ub-exp">${t("quotaPointsExpiring").replace("{n}", fmtInt(exp))}</div>` : ""}
+        </div>`;
+      }
+      // CommandCode USD 额度窗口 (与首页同模板)
+      if (w.unit === "USD") { return usdWindowHtml(w, "ov-ub"); }
       const used = Number(w.used) || 0;
       const cls = w.label === "5h Rolling" ? "c-rolling" : w.label === "Weekly" ? "c-week" : "c-month";
       return `<div class="ub ${cls} ov-ub">
@@ -876,7 +1437,7 @@ function renderAccountCard(a) {
   return `<div class="card ov-acc">
     <div class="ov-acc-head">
       <span class="ov-acc-name">${escapeHtml(a.name)}</span>
-      <span class="ov-acc-badges">${a.active ? `<span class="plan-badge">${t("activeAccount")}</span>` : ""}</span>
+      <span class="ov-acc-badges">${a.source === "bai" ? `<span class="src-badge">${t("sourceBai")}</span>` : ""}${a.active ? `<span class="plan-badge">${t("activeAccount")}</span>` : ""}</span>
       <span class="ov-acc-sync">${t("lastSync")} ${fmtRelative(a.last_sync_at)}</span>
     </div>
     ${quotaHtml}
@@ -1023,7 +1584,7 @@ function renderUserMenu(accounts, activeId) {
     <div class="um-item" data-id="${a.id}">
       <span class="um-check">${a.id === activeId ? "✓" : ""}</span>
       <span class="um-meta">
-        <span class="um-name">${escapeHtml(a.name)}</span>
+        <span class="um-name-row"><span class="um-name">${escapeHtml(a.name)}</span>${a.source === "bai" ? `<span class="src-badge">${t("sourceBai")}</span>` : a.source === "commandcode" ? `<span class="src-badge">${t("sourceCommandcode")}</span>` : ""}</span>
         <span class="um-ws">${escapeHtml(a.workspace_id || "—")}${a.has_token ? "" : " · " + t("notLoggedIn")}</span>
       </span>
     </div>`).join("") : `<div class="um-item um-empty">${t("noUsers")}</div>`) +
@@ -1072,8 +1633,9 @@ function renderUsersList(accounts, activeId) {
     return `
     <div class="user-row${isActive ? " active" : ""}" data-id="${a.id}">
       <div class="ur-meta">
-        <div class="ur-name">${escapeHtml(a.name)}${isActive ? `<span class="badge ok ur-badge">${t("currentUserBadge")}</span>` : ""}</div>
+        <div class="ur-name">${escapeHtml(a.name)}${a.source === "bai" ? `<span class="src-badge ur-badge">${t("sourceBai")}</span>` : a.source === "commandcode" ? `<span class="src-badge ur-badge">${t("sourceCommandcode")}</span>` : ""}${isActive ? `<span class="badge ok ur-badge">${t("currentUserBadge")}</span>` : ""}</div>
         <div class="ur-ws">${escapeHtml(a.workspace_id || "—")} · ${t("loggedIn")}</div>
+        ${a.source === "commandcode" ? `<div class="ur-note">${t("ccHistoryNote")}</div>` : ""}
       </div>
       <div class="ur-actions">${actions}</div>
     </div>`;
@@ -1224,12 +1786,20 @@ function bindEvents() {
   document.querySelectorAll("#stats-pills .pill").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll("#stats-pills .pill").forEach((x) => x.classList.remove("active"));
     b.classList.add("active"); state.statsRange = b.dataset.r; loadDashboard();
+    loadZcodeSummary();  // ZCode 区块跟随 range 切换
+    loadClaudecodeSummary();  // Claude Code 区块跟随 range 切换
   }));
   $("mr-dim").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
     document.querySelectorAll("#mr-dim button").forEach((x) => x.classList.remove("active"));
     b.classList.add("active"); state.modelDim = b.dataset.dim;
     if (state.data) chartModel(state.data.models);
+  });
+  $("dsh-dim").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    document.querySelectorAll("#dsh-dim button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active"); state.dshDim = b.dataset.d;
+    if (dshUsageLast) renderDsh(dshUsageLast);  // seg 切换: 复用已拉取数据重渲, 不重新请求
   });
   $("tb-refresh").addEventListener("click", () => startSync("incremental"));
   $("btn-full-sync").addEventListener("click", () => {
@@ -1315,6 +1885,26 @@ function bindEvents() {
       toast(t("loginNote"));
     } catch (e) { toast(e.message || t("loadFailed"), "err"); }
   });
+  // 添加 BAI 账号: pywebview 打开 BAI 登录页; 浏览器兜底走 /api/accounts/add source=bai
+  $("btn-add-bai").addEventListener("click", async () => {
+    startLoginWatch();
+    const a = await pywebviewApi();
+    if (a && a.open_login) { a.open_login("add_bai"); return; }
+    try {  // 浏览器环境兜底
+      await api("/api/accounts/add", { method: "POST", body: JSON.stringify({ source: "bai" }) });
+      toast(t("loginNote"));
+    } catch (e) { toast(e.message || t("loadFailed"), "err"); }
+  });
+  // 添加 CommandCode 账号: pywebview 打开 commandcode.ai 登录页; 浏览器兜底走 /api/accounts/add source=commandcode
+  $("btn-add-commandcode").addEventListener("click", async () => {
+    startLoginWatch();
+    const a = await pywebviewApi();
+    if (a && a.open_login) { a.open_login("add_commandcode"); return; }
+    try {  // 浏览器环境兜底
+      await api("/api/accounts/add", { method: "POST", body: JSON.stringify({ source: "commandcode" }) });
+      toast(t("loginNote"));
+    } catch (e) { toast(e.message || t("loadFailed"), "err"); }
+  });
   $("users-list").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-act]");
     if (!btn) return;
@@ -1360,6 +1950,8 @@ function rerenderCharts() {
   if (!document.getElementById("page-stats").hidden) {
     chartModel(state.data.models);
     chartTrend(state.data.trend);
+    if (zcodeSummaryLast) chartZcodeTrend(zcodeSummaryLast.daily7);  // ZCode 趋势随主题重绘
+    if (claudecodeSummaryLast) chartClaudecodeTrend(claudecodeSummaryLast.daily7);  // Claude Code 趋势随主题重绘
   }
 }
 
@@ -1378,6 +1970,8 @@ window.addEventListener("resize", () => {
     if (!document.getElementById("page-stats").hidden) {
       safeResize(cModel);
       safeResize(cTrend);
+      safeResize(cZcodeTrend);  // ZCode 趋势图窗口缩放跟随
+      safeResize(cClaudecodeTrend);  // Claude Code 趋势图窗口缩放跟随
     }
     if (!document.getElementById("page-overview").hidden) safeResize(cOvTrendChart);
   }, 250);

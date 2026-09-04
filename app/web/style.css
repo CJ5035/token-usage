@@ -200,7 +200,14 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
 .ub.c-week .ub-bar-fill { background: linear-gradient(90deg, #4f8ef7, #22c55e); }
 .ub.c-month .ub-bar-fill { background: linear-gradient(90deg, #f59e0b, #ef4444); }
 .ub-meta { display: flex; justify-content: space-between; margin-top: 8px; font-size: 11.5px; color: var(--text3); }
+/* BAI 积分单格 */
+.ub.c-bai::before { background: linear-gradient(90deg, #06b6d4, #0d9488); }
+.ub-bal { font-size: 15px; font-weight: 700; font-family: var(--font-mono); color: var(--text); margin-top: 4px; letter-spacing: -0.3px; }
+.ub-exp { margin-top: 6px; font-size: 11px; font-weight: 600; color: var(--amber); }
 .ub-error { font-size: 12px; color: var(--red); padding: 12px 14px; }
+/* CommandCode 账期汇总卡 (默认 hidden, 仅 commandcode 账户渲染) */
+.cc-summary { margin-bottom: 12px; padding-bottom: 12px; }
+.cc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 12px 14px 6px; }
 
 /* ---------- KPI / 用量概览 (6 格 2×3) ---------- */
 .kpi-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
@@ -238,9 +245,10 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
 #page-records .sessions, #page-records .records { margin-bottom: 0; }
 .sessions .pager, .records .pager { padding: 8px 0 6px; }
 .sessions .card-h, .records .card-h { min-height: 40px; }
-/* 统计页: 底部两卡片弹性拉伸填满剩余空间, 消除底部空白 */
-#page-stats { display: flex; flex-direction: column; }
-#page-stats .two-col { margin-bottom: 0; flex: 1; min-height: 0; align-items: stretch; grid-template-columns: 1fr 1.6fr; }
+/* 统计页: 内容自然排列, 超高由 overflow-y:auto 滚动;
+   不用 flex:1 填满剩余空间 — ZCode/DSH/Claude Code 本地用量卡片会撑高页面,
+   flex:1 + min-height:0 会把 two-col 压塌, 内部图表(responsive:false)溢出重叠到下方卡片 */
+#page-stats .two-col { align-items: stretch; grid-template-columns: 1fr 1.6fr; }
 #page-stats .model-rank, #page-stats .usage-trend { display: flex; flex-direction: column; min-height: 0; }
 #page-stats .mr-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #page-stats .chart-box { flex: 1; min-height: 180px; }
@@ -312,6 +320,11 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
 }
 .badge.ok { background: #e8f7ef; color: #16a34a; border-color: transparent; }
 .badge.no { background: var(--danger-soft); color: var(--red); border-color: transparent; }
+/* 账号来源徽标 (BAI) */
+.src-badge { display: inline-flex; align-items: center; justify-content: center; border-radius: 99px; padding: 1px 8px; font-size: 10px; font-weight: 700; letter-spacing: .5px; background: #e0f2fb; color: #0891b2; border: 1px solid transparent; }
+html[data-theme="dark"] .src-badge { background: #123144; color: #67e8f9; }
+/* 成本"估算"口径标注 */
+.est-badge { display: inline-flex; align-items: center; margin-left: 8px; padding: 1px 8px; border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: .3px; background: var(--primary-soft); color: var(--primary); vertical-align: middle; cursor: help; }
 .sw { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
 .sw input { opacity: 0; width: 0; height: 0; }
 .slider { position: absolute; inset: 0; background: var(--border); border-radius: 99px; transition: .25s; cursor: pointer; }
@@ -392,6 +405,7 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
 .um-empty { color: var(--text3); font-size: 12px; cursor: default; }
 .um-check { width: 14px; text-align: center; color: var(--primary); font-weight: 700; font-size: 12px; flex-shrink: 0; }
 .um-meta { display: flex; flex-direction: column; min-width: 0; }
+.um-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .um-name { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .um-ws { font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .um-manage { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 9px; }
@@ -402,5 +416,32 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
 .ur-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; line-height: 1.35; }
 .ur-badge { margin-left: 8px; padding: 1px 8px; font-size: 10.5px; }
 .ur-ws { font-size: 11.5px; color: var(--text3); margin-top: 0; word-break: break-all; line-height: 1.35; }
+/* CommandCode 账户卡片的历史口径小字说明 */
+.ur-note { font-size: 11px; color: var(--text3); margin-top: 2px; line-height: 1.4; }
 .ur-actions { display: flex; gap: 6px; flex-shrink: 0; }
 #rename-input { width: 100%; margin-top: 4px; }
+
+/* ---------- ZCode (GLM Coding Plan) ---------- */
+/* 首页额度卡: 标题行 + 三窗口卡 */
+#zcode-quota { margin-bottom: 12px; }
+.zcode-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.zcode-title { font-size: 13.5px; font-weight: 600; }
+.zcode-badge { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 99px; font-size: 10.5px; font-weight: 700; letter-spacing: .5px; background: var(--primary-soft); color: var(--primary); }
+.zcode-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+/* 登录引导信息框 (天蓝色, 照 ub-error 的做法) / 错误框通栏 */
+.zcode-cards .ub-hint, .zcode-cards .ub-error { grid-column: 1 / -1; }
+.ub.ub-hint { font-size: 12px; color: #0891b2; background: #e0f2fb; border-color: transparent; }
+html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
+/* 统计页本地用量区块 */
+.zcode-stats { margin-bottom: 12px; padding-bottom: 12px; }
+.zcode-stats .kpi-row { padding: 12px 14px 0; margin-bottom: 4px; }
+.kpi-row.kpi5 { grid-template-columns: repeat(5, 1fr); }
+.zcode-stats .tbl + .tbl { margin-top: 12px; }
+/* 渠道/模型名为用户自定义字符串, 超长单元格省略防破版 */
+.zcode-stats .tbl td { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.zcode-stats .chart-box { margin-top: 10px; }
+.zcode-missing { margin: 12px 16px 14px; padding: 12px 14px; font-size: 12px; color: var(--text2); background: var(--muted); border-radius: 10px; }
+.zcode-chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text3); font-size: 12px; }
+@media (max-width: 1200px) {
+  .kpi-row.kpi5 { grid-template-columns: repeat(3, 1fr); }
+}

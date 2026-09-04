@@ -13,7 +13,7 @@ import json
 import os
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import Any, Optional
 
 _DB: Optional[sqlite3.Connection] = None
@@ -137,6 +137,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           workspace_id TEXT NOT NULL DEFAULT 'Default',
           resolved_workspace_id TEXT,
           token TEXT NOT NULL DEFAULT '',
+          source TEXT NOT NULL DEFAULT 'opencode',
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
@@ -157,6 +158,93 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           id INTEGER PRIMARY KEY CHECK (id = 1),
           payload TEXT NOT NULL,
           updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS charts_buckets (
+          account_id INTEGER NOT NULL,
+          model TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          time_bucket TEXT NOT NULL,          -- 服务端原样 UTC 字符串 "YYYY-MM-DD HH:MM:SS"
+          requests INTEGER NOT NULL DEFAULT 0,
+          total_cost REAL NOT NULL DEFAULT 0,
+          input_cost REAL NOT NULL DEFAULT 0,
+          output_cost REAL NOT NULL DEFAULT 0,
+          cache_cost REAL NOT NULL DEFAULT 0,
+          cache_savings REAL NOT NULL DEFAULT 0,
+          consumed_free_credits REAL NOT NULL DEFAULT 0,
+          consumed_monthly_credits REAL NOT NULL DEFAULT 0,
+          consumed_purchased_credits REAL NOT NULL DEFAULT 0,
+          tokens_in INTEGER NOT NULL DEFAULT 0,
+          tokens_out INTEGER NOT NULL DEFAULT 0,
+          tokens_total INTEGER NOT NULL DEFAULT 0,
+          cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+          synced_at TEXT NOT NULL,
+          PRIMARY KEY (account_id, model, provider, time_bucket)
+        );
+
+        -- ZCode 本地用量镜像表 (数据来源: zcode_api 只读采集本机 ZCode 用量库
+        -- model_usage → 导入本表; 采集侧绝不写入本机库)。列名以本表为准,
+        -- 导入时做映射: cache_creation_input_tokens→cache_write_tokens,
+        -- computed_total_tokens→total_tokens, time_to_first_token_ms→ttft_ms
+        CREATE TABLE IF NOT EXISTS zcode_usage (
+          id TEXT PRIMARY KEY,              -- model_usage.id，幂等去重键
+          started_at TEXT NOT NULL,         -- epoch ms → UTC ISO（聚合统一转 localtime）
+          session_id TEXT,
+          provider_id TEXT,
+          provider_name TEXT,               -- config.json 的 provider.name 快照（可 NULL）
+          model_id TEXT,
+          status TEXT,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0,   -- ← cache_creation_input_tokens
+          cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          total_tokens INTEGER NOT NULL DEFAULT 0,         -- ← computed_total_tokens
+          duration_ms INTEGER,
+          ttft_ms INTEGER,                  -- ← time_to_first_token_ms
+          cost_raw INTEGER NOT NULL DEFAULT 0,  -- 导入时估算（1e-8 USD，同 BAI 口径）
+          synced_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_zcode_time ON zcode_usage(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_zcode_provider ON zcode_usage(provider_id);
+
+        -- Claude Code 本地用量镜像表 (数据来源: claudecode_api 只读采集
+        -- ~/.claude/projects 会话 JSONL → 导入本表; 列名/口径对齐 zcode_usage。
+        -- JSONL 行内无费用列, cost_raw 导入时按定价表估算)
+        CREATE TABLE IF NOT EXISTS claudecode_usage (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          dedupe_key TEXT NOT NULL UNIQUE,    -- message.id 全局; 无 id/含'|' → "<session_id>|<行序号>"
+          session_id TEXT,                    -- 会话 uuid (主会话=文件名 stem; 子代理=父目录名)
+          project_path TEXT,                  -- 行内顶层 cwd
+          model TEXT,
+          channel TEXT,                       -- 渠道标记 (启用时刻判定, 首插为准)
+          started_at TEXT NOT NULL,           -- UTC ISO (Z 后缀, 同 zcode_usage; 聚合用 'localtime')
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0,   -- ← cache_creation_input_tokens
+          total_tokens INTEGER NOT NULL DEFAULT 0,         -- 四项之和
+          duration_ms REAL,                   -- 旧版 CLI 行无此字段 → NULL
+          speed_tps REAL,                     -- 导入时计算的 token/s (§2 优先级 ①②③, 查询侧仅 AVG/MAX)
+          cost_raw INTEGER NOT NULL DEFAULT 0,  -- 导入时估算 (1e-8 USD, 同 zcode 口径)
+          file_path TEXT,
+          updated_at TEXT,                    -- "总量大者胜"修订标记 (首插为 NULL)
+          synced_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_cc_time ON claudecode_usage(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_cc_channel ON claudecode_usage(channel);
+        CREATE INDEX IF NOT EXISTS idx_cc_model ON claudecode_usage(model);
+
+        -- Claude Code JSONL 文件续读进度 (字节偏移推进到最后一条完整行末尾;
+        -- 文件被重写变短时由采集编排重置 offset, 靠去重键幂等兜底)
+        CREATE TABLE IF NOT EXISTS claude_file_progress (
+          path TEXT PRIMARY KEY,
+          offset INTEGER NOT NULL DEFAULT 0,  -- 已消费字节偏移 (最后一条完整行末尾)
+          size INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT
         );
         """
     )
@@ -198,6 +286,19 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_usage_account_time ON usage_records(account_id, created_at DESC)"
     )
+
+    # 迁移 2b: 旧库 accounts 补充 source 列 (缺则补, 幂等; 老行默认 'opencode')
+    acc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
+    if "source" not in acc_cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN source TEXT NOT NULL DEFAULT 'opencode'")
+        conn.commit()
+
+    # 迁移 2c: claudecode_usage 补充 speed_tps 列 (冒烟期建表无此列, 缺则补, 幂等;
+    # 表尚不存在时 PRAGMA 为空 → 跳过, 由上方 CREATE TABLE 带列创建)
+    cc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(claudecode_usage)").fetchall()}
+    if cc_cols and "speed_tps" not in cc_cols:
+        conn.execute("ALTER TABLE claudecode_usage ADD COLUMN speed_tps REAL")
+        conn.commit()
 
     # 迁移 3: 单行 usage_sync_state(id 主键) 重建为按账号多行 (数据无损搬运)
     ss_cols = {row["name"] for row in conn.execute("PRAGMA table_info(usage_sync_state)").fetchall()}
@@ -314,6 +415,7 @@ def _account_dict(row: sqlite3.Row) -> dict[str, Any]:
         "name": row["name"],
         "workspace_id": row["workspace_id"],
         "resolved_workspace_id": row["resolved_workspace_id"],
+        "source": row["source"] or "opencode",   # NULL -> 'opencode' 兜底
         "has_token": bool(row["token"].strip()),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -414,11 +516,102 @@ def get_account_credentials(account_id: int) -> tuple[str, str]:
     return (row["token"] or "").strip(), hint
 
 
-def add_account(token: str, workspace_hint: str = "", switch: bool = True) -> int:
-    """添加新账号; 若已有完全相同的 token 则视为同一用户, 更新工作区提示后返回其 id."""
+def add_account(
+    token: str,
+    workspace_hint: str = "",
+    switch: bool = True,
+    source: str = "opencode",
+    dedupe_key: str = "",
+) -> int:
+    """添加新账号; 默认按 token 去重 (重复则更新工作区提示后返回其 id).
+
+    source="bai": 不按 token 去重, 改按 ``dedupe_key``(BAI 用户标识, 存入
+    workspace_id 列) 判同 — 已有 ``source='bai' AND workspace_id = dedupe_key``
+    的行则更新其 token 后返回该 id, 不产生新行. BAI 每次登录 cookie 不同,
+    故不能按 token 去重.
+
+    source="commandcode": 与 bai 同型, 按 ``source='commandcode' AND
+    workspace_id = dedupe_key`` 判同 (dedupe_key = userId; 登录流程经
+    workspace_hint 形参传入时兜底取 hint), 同理不按 token 去重.
+    """
     conn = get_db()
     token = token.strip()
     hint = (workspace_hint or "").strip()
+    if source == "bai":
+        dedupe_key = (dedupe_key or "").strip()
+        existing = None
+        if dedupe_key:
+            existing = conn.execute(
+                "SELECT id FROM accounts WHERE source = 'bai' AND workspace_id = ?"
+                " ORDER BY id LIMIT 1",
+                (dedupe_key,),
+            ).fetchone()
+        if existing is not None:
+            aid = int(existing["id"])
+            conn.execute(
+                "UPDATE accounts SET token = ?, updated_at = ? WHERE id = ?",
+                (token, _now_iso(), aid),
+            )
+            if switch:
+                _persist_active(conn, aid)
+            else:
+                conn.commit()
+            return aid
+        # 无匹配 -> 新建 BAI 行
+        nxt = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM accounts").fetchone()["n"]
+        name = hint[:50] if hint else f"User {nxt}"
+        now = _now_iso()
+        cur = conn.execute(
+            """INSERT INTO accounts (name, workspace_id, resolved_workspace_id, token, source, created_at, updated_at)
+               VALUES (?, ?, NULL, ?, 'bai', ?, ?)""",
+            (name, dedupe_key or hint or "Default", token, now, now),
+        )
+        aid = int(cur.lastrowid or nxt)
+        _ensure_state_row(conn, aid)
+        if switch:
+            _persist_active(conn, aid)
+        else:
+            conn.commit()
+        return aid
+    if source == "commandcode":
+        # dedupe_key = userId; 登录流程若只把它放进 workspace_hint (照 bai 约定两者同值),
+        # 兜底取 hint, 保证只传 hint 的调用方也能正确去重
+        dedupe_key = (dedupe_key or "").strip() or hint
+        existing = None
+        if dedupe_key:
+            existing = conn.execute(
+                "SELECT id FROM accounts WHERE source = 'commandcode' AND workspace_id = ?"
+                " ORDER BY id LIMIT 1",
+                (dedupe_key,),
+            ).fetchone()
+        if existing is not None:
+            aid = int(existing["id"])
+            conn.execute(
+                "UPDATE accounts SET token = ?, updated_at = ? WHERE id = ?",
+                (token, _now_iso(), aid),
+            )
+            if switch:
+                _persist_active(conn, aid)
+            else:
+                conn.commit()
+            return aid
+        # 无匹配 -> 新建 commandcode 行
+        nxt = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM accounts").fetchone()["n"]
+        name = hint[:50] if hint else f"User {nxt}"
+        now = _now_iso()
+        cur = conn.execute(
+            """INSERT INTO accounts (name, workspace_id, resolved_workspace_id, token, source, created_at, updated_at)
+               VALUES (?, ?, NULL, ?, 'commandcode', ?, ?)""",
+            (name, dedupe_key or hint or "Default", token, now, now),
+        )
+        aid = int(cur.lastrowid or nxt)
+        _ensure_state_row(conn, aid)
+        if switch:
+            _persist_active(conn, aid)
+        else:
+            conn.commit()
+        return aid
+    # source == "opencode" (默认): 原逻辑不变, 按 TRIM(token) 去重
     existing = conn.execute(
         "SELECT id FROM accounts WHERE TRIM(token) = ? ORDER BY id LIMIT 1", (token,)
     ).fetchone() if token else None
@@ -470,7 +663,9 @@ def delete_account(account_id: int) -> int:
     aid = int(account_id)
     conn.execute("DELETE FROM usage_records WHERE account_id = ?", (aid,))
     conn.execute("DELETE FROM usage_sync_state WHERE account_id = ?", (aid,))
+    conn.execute("DELETE FROM charts_buckets WHERE account_id = ?", (aid,))
     conn.execute("DELETE FROM accounts WHERE id = ?", (aid,))
+    clear_cc_summary(aid)
     remaining = int(conn.execute("SELECT COUNT(*) AS c FROM accounts").fetchone()["c"])
     active = _raw_payload(conn).get("active_account_id")
     if active == aid:
@@ -493,6 +688,7 @@ def clear_account() -> None:
     if not aid:
         return
     conn.execute("DELETE FROM usage_records WHERE account_id = ?", (aid,))
+    conn.execute("DELETE FROM charts_buckets WHERE account_id = ?", (aid,))
     conn.execute(
         "UPDATE accounts SET token = '', resolved_workspace_id = NULL, updated_at = ? WHERE id = ?",
         (_now_iso(), aid),
@@ -504,6 +700,7 @@ def clear_account() -> None:
         " oldest_record_at = NULL, newest_record_at = NULL WHERE account_id = ?",
         (aid,),
     )
+    clear_cc_summary(aid)
     conn.commit()
 
 
@@ -616,6 +813,208 @@ def _refresh_sync_totals(conn: sqlite3.Connection, account_id: int) -> None:
         " WHERE account_id = ?",
         (row["total"], row["oldest"], row["newest"], account_id),
     )
+
+
+# ---------------------------------------------------------------------------
+# commandcode charts 5 分钟桶 (服务端 charts 数据缓存, 最后拉取覆盖) + 聚合
+# ---------------------------------------------------------------------------
+
+
+_CHARTS_COLS = (
+    "account_id, model, provider, time_bucket, requests, total_cost, input_cost,"
+    " output_cost, cache_cost, cache_savings, consumed_free_credits,"
+    " consumed_monthly_credits, consumed_purchased_credits, tokens_in, tokens_out,"
+    " tokens_total, cache_read_tokens, cache_creation_tokens, synced_at"
+)
+
+# 聚合列: 口径与 usage_records 侧对齐 — tokens_in 是含缓存命中的总输入,
+# 未缓存输入 = tokens_in - cache_read_tokens; 桶无会话/推理维度 (键存在但恒 0)
+_CHARTS_AGG_COLS = """
+               COALESCE(SUM(requests), 0) AS request_count,
+               COALESCE(SUM(tokens_in), 0) AS total_input_tokens,
+               COALESCE(SUM(tokens_in - cache_read_tokens), 0) AS uncached_input_tokens,
+               COALESCE(SUM(cache_read_tokens), 0) AS cache_hit_tokens,
+               COALESCE(SUM(cache_creation_tokens), 0) AS cache_write_tokens,
+               COALESCE(SUM(tokens_out), 0) AS total_output_tokens,
+               COALESCE(SUM(total_cost), 0) AS total_cost_usd"""
+
+
+def upsert_charts_buckets(records: list[dict[str, Any]], account_id: Optional[int] = None) -> int:
+    """批量写入 commandcode charts 5 分钟桶 (归属指定/活跃账号); 返回受影响行数.
+
+    records 键名与 charts_buckets 列一致 (调用方负责从 API data[] 映射);
+    同 (account_id, model, provider, time_bucket) 冲突时整体覆盖为本次值 —
+    服务端桶值是该 5 分钟窗的累计值, 重拉覆盖而非累加, 避免重复计数.
+    """
+    if not records:
+        return 0
+    aid = _resolve_account_id(account_id)
+    conn = get_db()
+    synced_at = _now_iso()
+    stmt = (
+        f"INSERT INTO charts_buckets ({_CHARTS_COLS})"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT(account_id, model, provider, time_bucket) DO UPDATE SET"
+        " requests = excluded.requests, total_cost = excluded.total_cost,"
+        " input_cost = excluded.input_cost, output_cost = excluded.output_cost,"
+        " cache_cost = excluded.cache_cost, cache_savings = excluded.cache_savings,"
+        " consumed_free_credits = excluded.consumed_free_credits,"
+        " consumed_monthly_credits = excluded.consumed_monthly_credits,"
+        " consumed_purchased_credits = excluded.consumed_purchased_credits,"
+        " tokens_in = excluded.tokens_in, tokens_out = excluded.tokens_out,"
+        " tokens_total = excluded.tokens_total,"
+        " cache_read_tokens = excluded.cache_read_tokens,"
+        " cache_creation_tokens = excluded.cache_creation_tokens,"
+        " synced_at = excluded.synced_at"
+    )
+    affected = 0
+    try:
+        conn.execute("BEGIN")
+        for rec in records:
+            cur = conn.execute(
+                stmt,
+                (
+                    aid, rec["model"], rec["provider"], rec["time_bucket"],
+                    rec.get("requests", 0), rec.get("total_cost", 0),
+                    rec.get("input_cost", 0), rec.get("output_cost", 0),
+                    rec.get("cache_cost", 0), rec.get("cache_savings", 0),
+                    rec.get("consumed_free_credits", 0),
+                    rec.get("consumed_monthly_credits", 0),
+                    rec.get("consumed_purchased_credits", 0),
+                    rec.get("tokens_in", 0), rec.get("tokens_out", 0),
+                    rec.get("tokens_total", 0), rec.get("cache_read_tokens", 0),
+                    rec.get("cache_creation_tokens", 0),
+                    rec.get("synced_at") or synced_at,
+                ),
+            )
+            affected += max(cur.rowcount, 0)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return affected
+
+
+def _charts_totals_dict(row: sqlite3.Row) -> dict[str, Any]:
+    """桶聚合行 -> totals()/model_stats() 元素同构字典 (键名逐一对照现有函数)."""
+    hit = int(row["cache_hit_tokens"] or 0)
+    miss = int(row["uncached_input_tokens"] or 0)
+    hit_rate = (hit / (hit + miss) * 100) if (hit + miss) > 0 else 0.0
+    return {
+        "request_count": int(row["request_count"] or 0),
+        "session_count": 0,            # 桶数据无会话维度, 记 0 保持键存在
+        "total_input_tokens": int(row["total_input_tokens"] or 0),
+        "uncached_input_tokens": miss,
+        "total_reasoning_tokens": 0,   # 桶无推理 token
+        "cache_hit_tokens": hit,
+        "cache_write_tokens": int(row["cache_write_tokens"] or 0),
+        "total_output_tokens": int(row["total_output_tokens"] or 0),
+        "total_cost_usd": round(float(row["total_cost_usd"] or 0), 6),
+        "hit_rate": round(hit_rate, 2),
+    }
+
+
+def _charts_daily_dict(row: sqlite3.Row) -> dict[str, Any]:
+    """桶聚合行 -> daily_stats() 元素同构字典 (无 session_count, 多 date)."""
+    hit = int(row["cache_hit_tokens"] or 0)
+    miss = int(row["uncached_input_tokens"] or 0)
+    hit_rate = (hit / (hit + miss) * 100) if (hit + miss) > 0 else 0.0
+    return {
+        "date": row["date"],
+        "total_input_tokens": int(row["total_input_tokens"] or 0),
+        "uncached_input_tokens": miss,
+        "total_reasoning_tokens": 0,
+        "cache_hit_tokens": hit,
+        "cache_write_tokens": int(row["cache_write_tokens"] or 0),
+        "total_output_tokens": int(row["total_output_tokens"] or 0),
+        "total_cost_usd": round(float(row["total_cost_usd"] or 0), 6),
+        "request_count": int(row["request_count"] or 0),
+        "hit_rate": round(hit_rate, 2),
+    }
+
+
+def charts_aggregate(account_id: Optional[int] = None, days: Optional[int] = None) -> dict[str, Any]:
+    """commandcode charts_buckets 聚合, 产出与 dashboard 六个统计键同构的数据.
+
+    time_bucket 是服务端原样 UTC 字符串, 统一用 datetime(time_bucket, 'localtime')
+    做 SQLite 本地化 (SQLite 把无时区串当 UTC 处理, 对照 daily_stats 对 created_at
+    的 localtime 用法). 键名与现有函数输出逐一对照:
+    - totals: 全量; today: 仅今日 (session_count 恒 0, 桶无会话维度)
+    - daily: 固定近 7 天 (对应 dashboard "daily"); trend: days 参数控制, None=不限
+    - today_trend: 今日 24 小时补 0, input=未缓存输入 (对照 today_trend 的
+      input_tokens 口径), 桶无推理 token 故 reasoning 恒 0
+    - models: 按模型聚合 (对应 dashboard "models")
+    hit_rate 口径与现有函数一致: cache_read / (cache_read + uncached_input).
+    """
+    aid = _resolve_account_id(account_id)
+    conn = get_db()
+    day_expr = "substr(datetime(time_bucket, 'localtime'), 1, 10)"
+    today_cond = f"{day_expr} = date('now', 'localtime')"
+
+    row_all = conn.execute(
+        f"SELECT {_CHARTS_AGG_COLS} FROM charts_buckets WHERE account_id = ?", (aid,)
+    ).fetchone()
+    row_today = conn.execute(
+        f"SELECT {_CHARTS_AGG_COLS} FROM charts_buckets WHERE account_id = ? AND {today_cond}",
+        (aid,),
+    ).fetchone()
+    daily_rows = conn.execute(
+        f"""SELECT {day_expr} AS date, {_CHARTS_AGG_COLS}
+        FROM charts_buckets
+        WHERE account_id = ? AND {day_expr} >= date('now', 'localtime', '-7 days')
+        GROUP BY {day_expr}
+        ORDER BY date ASC""",
+        (aid,),
+    ).fetchall()
+    trend_where = ""
+    trend_params: list[Any] = [aid]
+    if days is not None:
+        n = max(1, min(int(days), 365))
+        trend_where = f" AND {day_expr} >= date('now', 'localtime', ?)"
+        trend_params.append(f"-{n} days")
+    trend_rows = conn.execute(
+        f"""SELECT {day_expr} AS date, {_CHARTS_AGG_COLS}
+        FROM charts_buckets
+        WHERE account_id = ?{trend_where}
+        GROUP BY {day_expr}
+        ORDER BY date ASC""",
+        trend_params,
+    ).fetchall()
+    model_rows = conn.execute(
+        f"""SELECT model, {_CHARTS_AGG_COLS}
+        FROM charts_buckets
+        WHERE account_id = ?
+        GROUP BY model
+        ORDER BY (SUM(tokens_in) + SUM(tokens_out)) DESC""",
+        (aid,),
+    ).fetchall()
+    hour_rows = conn.execute(
+        f"""SELECT CAST(strftime('%H', datetime(time_bucket, 'localtime')) AS INTEGER) AS h,
+               COALESCE(SUM(tokens_in - cache_read_tokens), 0) AS input,
+               COALESCE(SUM(tokens_out), 0) AS output
+        FROM charts_buckets
+        WHERE account_id = ? AND {today_cond}
+        GROUP BY h""",
+        (aid,),
+    ).fetchall()
+    by_hour = {int(r["h"]): r for r in hour_rows}
+    today_trend = [
+        {
+            "hour": f"{h:02d}:00",
+            "input": int(by_hour[h]["input"]) if h in by_hour else 0,
+            "output": int(by_hour[h]["output"]) if h in by_hour else 0,
+            "reasoning": 0,
+        }
+        for h in range(24)
+    ]
+    return {
+        "totals": _charts_totals_dict(row_all),
+        "today": _charts_totals_dict(row_today),
+        "daily": [_charts_daily_dict(r) for r in daily_rows],
+        "trend": [_charts_daily_dict(r) for r in trend_rows],
+        "today_trend": today_trend,
+        "models": [{"model": r["model"], **_charts_totals_dict(r)} for r in model_rows],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -797,6 +1196,40 @@ def save_key_names(names: dict[str, str]) -> None:
     conn.commit()
 
 
+def get_cc_summary(account_id: int) -> dict[str, Any]:
+    """读取指定账号缓存的 commandcode summary 快照; 缺失/损坏返回 {}."""
+    raw = _raw_payload(get_db()).get("cc_summary")
+    if not isinstance(raw, dict):
+        return {}
+    summary = raw.get(str(account_id))
+    return summary if isinstance(summary, dict) else {}
+
+
+def save_cc_summary(account_id: int, summary: dict[str, Any]) -> None:
+    """持久化 commandcode summary 快照到 settings payload (按 account_id 分键)."""
+    conn = get_db()
+    data = _raw_payload(conn)
+    cc = data.get("cc_summary")
+    cc = cc if isinstance(cc, dict) else {}
+    cc[str(account_id)] = summary
+    data["cc_summary"] = cc
+    _write_payload(conn, data)
+    conn.commit()
+
+
+def clear_cc_summary(account_id: int) -> None:
+    """从 settings payload 移除指定账号的 summary 快照 (删除/登出账号时级联清理)."""
+    conn = get_db()
+    data = _raw_payload(conn)
+    cc = data.get("cc_summary")
+    if not isinstance(cc, dict) or str(account_id) not in cc:
+        return
+    cc.pop(str(account_id))
+    data["cc_summary"] = cc
+    _write_payload(conn, data)
+    conn.commit()
+
+
 def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
     conn = get_db()
     raw = _raw_payload(conn)
@@ -832,6 +1265,7 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
 _PERIOD_CLAUSES = {
     "5h": "datetime(created_at) >= datetime('now', '-5 hours')",
     "today": "substr(datetime(created_at, 'localtime'), 1, 10) = date('now', 'localtime')",
+    "yesterday": "substr(datetime(created_at, 'localtime'), 1, 10) = date('now', 'localtime', '-1 day')",
 }
 
 
@@ -1018,3 +1452,1037 @@ def totals(period: str = "30d", account_id: Optional[int] = None) -> dict[str, A
         "total_cost_usd": round(float(row["total_cost_usd"] or 0), 6),
         "hit_rate": round(hit_rate, 2),
     }
+
+
+# ---------------------------------------------------------------------------
+# ZCode 本地用量镜像 (数据来源: zcode_api 只读采集本机 ZCode 用量库 model_usage
+# → 导入 zcode_usage 镜像表并聚合; 采集侧绝不写入本机库)
+# 导入水位 zcode_last_started_at 存于 settings payload: 它是内部同步游标, 不属于
+# _DEFAULT_SETTINGS 白名单 (不应暴露给设置 API), 参照 key_names 先例用
+# _raw_payload/_write_payload 直读直写, 避免被 get_settings/save_settings 过滤.
+# ---------------------------------------------------------------------------
+
+# 水位 payload 键: 已导入的最大 model_usage.started_at (epoch ms)
+_ZCODE_WATERMARK_KEY = "zcode_last_started_at"
+
+# 有效生成窗口 gen (ms, 剔除首字等待): duration 无效 → NULL; TTFT 落在
+# [0, duration] 内时窗口 = duration - TTFT, 但 TTFT 已占 90% 以上时剩余窗口
+# 失真, 改用 TTFT 本身作为窗口; TTFT 缺失/越界 → 整个 duration 计入窗口
+_ZCODE_GEN_SQL = """
+CASE
+  WHEN duration_ms IS NULL OR duration_ms <= 0 THEN NULL
+  WHEN ttft_ms IS NOT NULL AND ttft_ms >= 0 AND ttft_ms <= duration_ms THEN
+       CASE WHEN ttft_ms * 10 >= duration_ms * 9 THEN ttft_ms
+            ELSE duration_ms - ttft_ms END
+  ELSE duration_ms
+END"""
+
+# 逐行速率 (token/s, 仅可信样本参与 AVG/MAX): 输出 >= 10 token、窗口 >= 100ms、
+# 速率 <= 500 token/s, 不满足的行置 NULL 不参与统计
+_ZCODE_TPS_SQL = f"""
+CASE WHEN COALESCE(output_tokens, 0) >= 10 AND ({_ZCODE_GEN_SQL}) >= 100
+          AND COALESCE(output_tokens, 0) * 1000.0 / ({_ZCODE_GEN_SQL}) <= 500.0
+     THEN COALESCE(output_tokens, 0) * 1000.0 / ({_ZCODE_GEN_SQL}) END"""
+
+# 有效 TTFT (参与 AVG): 需落在 [0, duration] 内, 否则 NULL
+_ZCODE_TTFT_SQL = """
+CASE WHEN ttft_ms >= 0 AND ttft_ms <= duration_ms THEN ttft_ms END"""
+
+# 公共聚合列: token/费用口径与 usage_records 侧 totals/daily_stats 对齐
+# (total_input 含缓存命中与缓存写入; 费用由 cost_raw 换算 USD)
+_ZCODE_AGG_COLS = """
+               COUNT(*) AS request_count,
+               COALESCE(SUM(input_tokens + cache_read_tokens + cache_write_tokens), 0) AS total_input_tokens,
+               COALESCE(SUM(input_tokens), 0) AS uncached_input_tokens,
+               COALESCE(SUM(reasoning_tokens), 0) AS total_reasoning_tokens,
+               COALESCE(SUM(cache_read_tokens), 0) AS cache_hit_tokens,
+               COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+               COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+               COALESCE(SUM(total_tokens), 0) AS total_tokens,
+               SUM(cost_raw) AS total_cost_raw"""
+
+# 速度聚合列 (无可信样本时 AVG/MAX 为 NULL, 由 Python 侧转 None)
+_ZCODE_SPEED_COLS = f"""
+               AVG({_ZCODE_TPS_SQL}) AS avg_tps,
+               MAX({_ZCODE_TPS_SQL}) AS max_tps,
+               AVG({_ZCODE_TTFT_SQL}) AS avg_ttft_ms"""
+
+
+def import_zcode_usage(rows: list[dict[str, Any]],
+                       provider_names: dict[str, str],
+                       pricing_models: list[dict[str, Any]] | None = None) -> int:
+    """把 zcode_api.collect_local_usage 的增量行导入 zcode_usage, 返回新增条数.
+
+    幂等: model_usage.id 作主键, INSERT OR IGNORE 重复导入自动跳过;
+    新增条数以导入前后 COUNT 差值对账. provider_name 为导入时的
+    config.json 快照 (改名不回写旧行), pricing_models 由调用方预载传入
+    (None 时 estimate_cost_raw 内部自行加载).
+    """
+    if not rows:
+        return 0
+    # 延迟导入: db 是最底层存储模块, 不建立对采集层 (zcode_api → bai_api) 的模块级依赖
+    from .zcode_api import estimate_cost_raw
+
+    conn = get_db()
+    synced_at = _now_iso()
+    payload = []
+    for r in rows:
+        started_ms = r.get("started_at") or 0
+        # epoch ms → UTC ISO (与 usage_records.created_at 同风格): 聚合侧统一
+        # 用 'localtime' 修饰符转本地时间, 这里若直接存本地时间会双重偏移
+        started_iso = datetime.fromtimestamp(
+            started_ms / 1000, timezone.utc
+        ).isoformat().replace("+00:00", "Z")
+        input_tokens = int(r.get("input_tokens") or 0)
+        output_tokens = int(r.get("output_tokens") or 0)
+        cache_read = int(r.get("cache_read_input_tokens") or 0)
+        cache_write = int(r.get("cache_creation_input_tokens") or 0)
+        model_id = r.get("model_id") or ""
+        cost_raw = estimate_cost_raw(
+            model_id, input_tokens, output_tokens, cache_read, cache_write, pricing_models
+        )
+        payload.append((
+            r.get("id"), started_iso, r.get("session_id"), r.get("provider_id"),
+            provider_names.get(r.get("provider_id")), model_id, r.get("status"),
+            input_tokens, output_tokens, int(r.get("reasoning_tokens") or 0),
+            cache_write, cache_read, int(r.get("computed_total_tokens") or 0),
+            r.get("duration_ms"), r.get("time_to_first_token_ms"), cost_raw, synced_at,
+        ))
+    before = int(conn.execute("SELECT COUNT(*) AS c FROM zcode_usage").fetchone()["c"])
+    conn.executemany(
+        """INSERT OR IGNORE INTO zcode_usage
+           (id, started_at, session_id, provider_id, provider_name, model_id, status,
+            input_tokens, output_tokens, reasoning_tokens, cache_write_tokens,
+            cache_read_tokens, total_tokens, duration_ms, ttft_ms, cost_raw, synced_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        payload,
+    )
+    conn.commit()
+    after = int(conn.execute("SELECT COUNT(*) AS c FROM zcode_usage").fetchone()["c"])
+    return after - before
+
+
+def get_zcode_watermark() -> int:
+    """读取 ZCode 导入水位 (epoch ms); 缺失/非法 → 0."""
+    raw = _raw_payload(get_db()).get(_ZCODE_WATERMARK_KEY)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return 0
+    return int(raw)
+
+
+def save_zcode_watermark(ms: int) -> None:
+    """写入 ZCode 导入水位 (白名单外键, 不污染 get_settings/save_settings)."""
+    conn = get_db()
+    data = _raw_payload(conn)
+    data[_ZCODE_WATERMARK_KEY] = int(ms)
+    _write_payload(conn, data)
+    conn.commit()
+
+
+_ZCODE_PERIOD_CLAUSES = {
+    "5h": "datetime(started_at) >= datetime('now', '-5 hours')",
+    "today": "substr(datetime(started_at, 'localtime'), 1, 10) = date('now', 'localtime')",
+}
+
+
+def _zcode_period_where(period: str) -> tuple[str, list[Any]]:
+    """zcode_usage 的 period 过滤 (口径照抄 _period_where, 列换成 started_at)."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if period in _ZCODE_PERIOD_CLAUSES:
+        clauses.append(_ZCODE_PERIOD_CLAUSES[period])
+    elif period != "all":
+        days = 30
+        match = _NUM_DAYS_RE.match(period or "")
+        if match:
+            days = max(1, int(match.group(1)))
+        clauses.append("datetime(started_at) >= datetime('now', ?)")
+        params.append(f"-{days} days")
+    return ("WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+
+def _zcode_speed_dict(row: sqlite3.Row) -> dict[str, Any]:
+    """速度聚合行 → 前端字段; 无可信样本时 AVG/MAX 为 NULL → None."""
+    avg_tps = row["avg_tps"]
+    max_tps = row["max_tps"]
+    avg_ttft = row["avg_ttft_ms"]
+    return {
+        "avg_tps": round(float(avg_tps), 2) if avg_tps is not None else None,
+        "max_tps": round(float(max_tps), 2) if max_tps is not None else None,
+        "avg_ttft_ms": round(float(avg_ttft), 1) if avg_ttft is not None else None,
+    }
+
+
+def _zcode_cost_usd(row: sqlite3.Row) -> float:
+    """cost_raw 求和 (1e-8 USD) → USD, 保留 6 位小数 (与现有 cost 口径一致)."""
+    return round(int(row["total_cost_raw"] or 0) / 100_000_000.0, 6)
+
+
+def zcode_totals(period: str = "30d") -> dict[str, Any]:
+    """ZCode 用量总览: token/费用口径与 totals() 一致, 附加速率与 TTFT."""
+    where, params = _zcode_period_where(period)
+    row = get_db().execute(
+        f"SELECT {_ZCODE_AGG_COLS}, {_ZCODE_SPEED_COLS} FROM zcode_usage {where}",
+        params,
+    ).fetchone()
+    return {
+        "request_count": int(row["request_count"]),
+        "total_input_tokens": int(row["total_input_tokens"]),
+        "uncached_input_tokens": int(row["uncached_input_tokens"]),
+        "total_reasoning_tokens": int(row["total_reasoning_tokens"]),
+        "cache_hit_tokens": int(row["cache_hit_tokens"]),
+        "cache_write_tokens": int(row["cache_write_tokens"]),
+        "total_output_tokens": int(row["total_output_tokens"]),
+        "total_tokens": int(row["total_tokens"]),
+        "total_cost_usd": _zcode_cost_usd(row),
+        **_zcode_speed_dict(row),
+    }
+
+
+def zcode_daily(days: int = 7) -> list[dict[str, Any]]:
+    """ZCode 每日聚合 (本地日归组), 口径镜像 daily_stats (无速度列)."""
+    days = max(1, min(days, 365))
+    day_expr = "substr(datetime(started_at, 'localtime'), 1, 10)"
+    rows = get_db().execute(
+        f"""
+        SELECT {day_expr} AS date,
+               {_ZCODE_AGG_COLS}
+        FROM zcode_usage
+        WHERE {day_expr} >= date('now', 'localtime', ?)
+        GROUP BY {day_expr}
+        ORDER BY date ASC
+        """,
+        (f"-{days} days",),
+    ).fetchall()
+    return [
+        {
+            "date": r["date"],
+            "request_count": int(r["request_count"]),
+            "total_input_tokens": int(r["total_input_tokens"]),
+            "uncached_input_tokens": int(r["uncached_input_tokens"]),
+            "total_reasoning_tokens": int(r["total_reasoning_tokens"]),
+            "cache_hit_tokens": int(r["cache_hit_tokens"]),
+            "cache_write_tokens": int(r["cache_write_tokens"]),
+            "total_output_tokens": int(r["total_output_tokens"]),
+            "total_tokens": int(r["total_tokens"]),
+            "total_cost_usd": _zcode_cost_usd(r),
+        }
+        for r in rows
+    ]
+
+
+def zcode_provider_stats(period: str = "30d") -> list[dict[str, Any]]:
+    """按渠道聚合; provider_name 取该渠道最新 synced_at 行的非空快照
+    (config.json 改名后旧快照不回写; 全 NULL → None, 前端回退内置映射/截断 UUID).
+    """
+    where, params = _zcode_period_where(period)
+    rows = get_db().execute(
+        f"""
+        SELECT z1.provider_id,
+               (SELECT z2.provider_name FROM zcode_usage z2
+                WHERE z2.provider_id IS z1.provider_id
+                  AND z2.provider_name IS NOT NULL
+                ORDER BY z2.synced_at DESC LIMIT 1) AS provider_name,
+               {_ZCODE_AGG_COLS},
+               {_ZCODE_SPEED_COLS}
+        FROM zcode_usage z1
+        {where}
+        GROUP BY z1.provider_id
+        ORDER BY (SUM(input_tokens + cache_read_tokens + cache_write_tokens)
+                  + SUM(output_tokens)) DESC
+        """,
+        params,
+    ).fetchall()
+    return [
+        {
+            "provider_id": r["provider_id"],
+            "provider_name": r["provider_name"],
+            "request_count": int(r["request_count"]),
+            "total_input_tokens": int(r["total_input_tokens"]),
+            "uncached_input_tokens": int(r["uncached_input_tokens"]),
+            "total_reasoning_tokens": int(r["total_reasoning_tokens"]),
+            "cache_hit_tokens": int(r["cache_hit_tokens"]),
+            "cache_write_tokens": int(r["cache_write_tokens"]),
+            "total_output_tokens": int(r["total_output_tokens"]),
+            "total_cost_usd": _zcode_cost_usd(r),
+            **_zcode_speed_dict(r),
+        }
+        for r in rows
+    ]
+
+
+def zcode_model_stats(period: str = "30d") -> list[dict[str, Any]]:
+    """按渠道+模型聚合, 行字段同 zcode_provider_stats 另含缓存命中率 hit_rate
+    (算法照抄 model_stats: hit/(hit+miss)*100).
+    """
+    where, params = _zcode_period_where(period)
+    rows = get_db().execute(
+        f"""
+        SELECT z1.provider_id,
+               z1.model_id,
+               (SELECT z2.provider_name FROM zcode_usage z2
+                WHERE z2.provider_id IS z1.provider_id
+                  AND z2.provider_name IS NOT NULL
+                ORDER BY z2.synced_at DESC LIMIT 1) AS provider_name,
+               {_ZCODE_AGG_COLS},
+               {_ZCODE_SPEED_COLS}
+        FROM zcode_usage z1
+        {where}
+        GROUP BY z1.provider_id, z1.model_id
+        ORDER BY (SUM(input_tokens + cache_read_tokens + cache_write_tokens)
+                  + SUM(output_tokens)) DESC
+        """,
+        params,
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        hit = int(r["cache_hit_tokens"])
+        miss = int(r["uncached_input_tokens"])
+        hit_rate = (hit / (hit + miss) * 100) if (hit + miss) > 0 else 0.0
+        result.append(
+            {
+                "provider_id": r["provider_id"],
+                "model_id": r["model_id"],
+                "provider_name": r["provider_name"],
+                "request_count": int(r["request_count"]),
+                "total_input_tokens": int(r["total_input_tokens"]),
+                "uncached_input_tokens": miss,
+                "total_reasoning_tokens": int(r["total_reasoning_tokens"]),
+                "cache_hit_tokens": hit,
+                "cache_write_tokens": int(r["cache_write_tokens"]),
+                "total_output_tokens": int(r["total_output_tokens"]),
+                "total_cost_usd": _zcode_cost_usd(r),
+                **_zcode_speed_dict(r),
+                "hit_rate": round(hit_rate, 2),
+            }
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Claude Code 本地用量镜像 (数据来源: claudecode_api 只读采集 ~/.claude/projects
+# 会话 JSONL → 导入 claudecode_usage 镜像表并聚合; 采集侧绝不写入本机目录)
+# 集成启用时刻 claudecode_enabled_at 存于 settings payload: 它是渠道判定基准,
+# 不属于 _DEFAULT_SETTINGS 白名单 (不应暴露给设置 API), 照 zcode 水位先例用
+# _raw_payload/_write_payload 直读直写.
+# ---------------------------------------------------------------------------
+
+# 启用时刻 payload 键: 渠道判定的分界 (epoch ms), 首次导入启动时写入一次
+_CC_ENABLED_AT_KEY = "claudecode_enabled_at"
+
+# 公共聚合列: 口径对齐 _ZCODE_AGG_COLS, Claude Code 无 reasoning 列故不含该项
+_CC_AGG_COLS = """
+               COUNT(*) AS request_count,
+               COALESCE(SUM(input_tokens + cache_read_tokens + cache_write_tokens), 0) AS total_input_tokens,
+               COALESCE(SUM(input_tokens), 0) AS uncached_input_tokens,
+               COALESCE(SUM(cache_read_tokens), 0) AS cache_hit_tokens,
+               COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+               COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+               COALESCE(SUM(total_tokens), 0) AS total_tokens,
+               SUM(cost_raw) AS total_cost_raw"""
+
+# 速度聚合列: speed_tps 已在采集解析时按实施文档 §2 口径算好落库 (durationMs
+# 优先, 否则同 message.id 多行 Δoutput/Δt, 单行 → NULL; 噪声过滤: 窗口 >=100ms、
+# 输出 >=10 tok、速率 <=500 tok/s), 查询侧仅 AVG/MAX; NULL 不参与聚合,
+# 无可信样本时 AVG/MAX 为 NULL → Python 侧转 None
+_CC_SPEED_COLS = """
+               AVG(speed_tps) AS avg_tps,
+               MAX(speed_tps) AS max_tps"""
+
+
+def import_claudecode_usage(rows: list[dict[str, Any]],
+                            pricing_models: list[dict[str, Any]] | None = None) -> int:
+    """把 claudecode_api 的增量行导入 claudecode_usage, 返回新增条数.
+
+    行 dict 键契约 (采集层组装, 键名逐字): dedupe_key/session_id/project_path/
+    model/channel/started_at/四 token/total_tokens/duration_ms/speed_tps/
+    file_path (speed_tps 可选, 缺省 None — 采集解析按 §2 口径算好, 单行/
+    噪声行可为 NULL); started_at 为采集层已转好的 UTC ISO (Z 后缀), 此处直接
+    落库. 幂等: dedupe_key UNIQUE + "总量大者胜" upsert — 同键重复导入且
+    total_tokens 未变大时不改动, 新增条数以导入前后 COUNT 差值对账.
+
+    "总量大者胜": 同一 message.id 边流式边落盘、usage 逐行累计 (末行=终值),
+    resume/continue 是 fork 语义会复制历史行, 故冲突时仅当新行 total_tokens
+    更大才修订 started_at/model/四 token/total/duration_ms/speed_tps/cost_raw,
+    并打 updated_at 修订标记 (首插为 NULL); channel/project_path/session_id/
+    file_path 归属列不参与覆盖, 首插为准.
+
+    行内无 cost: cost_raw 在此按定价表估算; pricing_models 由调用方预载传入
+    (None 时 estimate_cost_raw 内部自行加载).
+    """
+    if not rows:
+        return 0
+    # 延迟导入: db 是最底层存储模块, 不建立对采集层 (zcode_api → bai_api) 的模块级依赖
+    from .zcode_api import estimate_cost_raw
+
+    conn = get_db()
+    synced_at = _now_iso()
+    payload = []
+    for r in rows:
+        input_tokens = int(r.get("input_tokens") or 0)
+        output_tokens = int(r.get("output_tokens") or 0)
+        cache_read = int(r.get("cache_read_tokens") or 0)
+        cache_write = int(r.get("cache_write_tokens") or 0)
+        total_tokens = int(r.get("total_tokens") or 0)
+        model = r.get("model") or ""
+        cost_raw = estimate_cost_raw(
+            model, input_tokens, output_tokens, cache_read, cache_write, pricing_models
+        )
+        payload.append((
+            r.get("dedupe_key"), r.get("session_id"), r.get("project_path"),
+            model, r.get("channel"), r.get("started_at"),
+            input_tokens, output_tokens, cache_read, cache_write, total_tokens,
+            r.get("duration_ms"), r.get("speed_tps"), cost_raw, r.get("file_path"),
+            None,  # 首插不写修订标记, 仅冲突修订时落本次导入时刻 (见下方尾参)
+            synced_at, synced_at,
+        ))
+    before = int(conn.execute("SELECT COUNT(*) AS c FROM claudecode_usage").fetchone()["c"])
+    conn.executemany(
+        """INSERT INTO claudecode_usage
+           (dedupe_key, session_id, project_path, model, channel, started_at,
+            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+            total_tokens, duration_ms, speed_tps, cost_raw, file_path, updated_at, synced_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(dedupe_key) DO UPDATE SET
+             started_at = excluded.started_at,
+             model = excluded.model,
+             input_tokens = excluded.input_tokens,
+             output_tokens = excluded.output_tokens,
+             cache_read_tokens = excluded.cache_read_tokens,
+             cache_write_tokens = excluded.cache_write_tokens,
+             total_tokens = excluded.total_tokens,
+             duration_ms = excluded.duration_ms,
+             speed_tps = excluded.speed_tps,
+             cost_raw = excluded.cost_raw,
+             updated_at = ?
+           WHERE excluded.total_tokens > claudecode_usage.total_tokens""",
+        payload,
+    )
+    conn.commit()
+    after = int(conn.execute("SELECT COUNT(*) AS c FROM claudecode_usage").fetchone()["c"])
+    return after - before
+
+
+def get_claudecode_enabled_at() -> int:
+    """读取集成启用时刻 (epoch ms); 缺失/非法 → 0 (表示尚未启用)."""
+    raw = _raw_payload(get_db()).get(_CC_ENABLED_AT_KEY)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return 0
+    return int(raw)
+
+
+def save_claudecode_enabled_at(ms: int) -> None:
+    """写入集成启用时刻 (白名单外键, 不污染 get_settings/save_settings)."""
+    conn = get_db()
+    data = _raw_payload(conn)
+    data[_CC_ENABLED_AT_KEY] = int(ms)
+    _write_payload(conn, data)
+    conn.commit()
+
+
+def get_claude_file_progress_all() -> dict[str, tuple[int, int]]:
+    """载入全部 JSONL 续读进度: path → (offset, size), 一次读出供采集编排判定增量."""
+    rows = get_db().execute(
+        "SELECT path, offset, size FROM claude_file_progress"
+    ).fetchall()
+    return {r["path"]: (int(r["offset"]), int(r["size"])) for r in rows}
+
+
+def save_claude_file_progress(path: str, offset: int, size: int) -> None:
+    """保存单个 JSONL 文件的字节偏移进度 (size 变小时由编排侧传 offset=0 重置)."""
+    conn = get_db()
+    conn.execute(
+        """INSERT INTO claude_file_progress (path, offset, size, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(path) DO UPDATE SET
+             offset = excluded.offset, size = excluded.size,
+             updated_at = excluded.updated_at""",
+        (path, int(offset), int(size), _now_iso()),
+    )
+    conn.commit()
+
+
+_CC_PERIOD_CLAUSES = {
+    "today": "substr(datetime(started_at, 'localtime'), 1, 10) = date('now', 'localtime')",
+}
+
+
+def _cc_period_where(period: str) -> tuple[str, list[Any]]:
+    """claudecode_usage 的 period 过滤 (口径照 _zcode_period_where, 支持 today/all/Nd)."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if period in _CC_PERIOD_CLAUSES:
+        clauses.append(_CC_PERIOD_CLAUSES[period])
+    elif period != "all":
+        days = 30
+        match = _NUM_DAYS_RE.match(period or "")
+        if match:
+            days = max(1, int(match.group(1)))
+        clauses.append("datetime(started_at) >= datetime('now', ?)")
+        params.append(f"-{days} days")
+    return ("WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+
+def _cc_speed_dict(row: sqlite3.Row) -> dict[str, Any]:
+    """速度聚合行 → 前端字段; 无可信样本时 AVG/MAX 为 NULL → None."""
+    avg_tps = row["avg_tps"]
+    max_tps = row["max_tps"]
+    return {
+        "avg_tps": round(float(avg_tps), 2) if avg_tps is not None else None,
+        "max_tps": round(float(max_tps), 2) if max_tps is not None else None,
+    }
+
+
+def _cc_cost_usd(row: sqlite3.Row) -> float:
+    """cost_raw 求和 (1e-8 USD) → USD, 保留 6 位小数 (口径同 _zcode_cost_usd)."""
+    return round(int(row["total_cost_raw"] or 0) / 100_000_000.0, 6)
+
+
+def claudecode_totals(period: str = "30d") -> dict[str, Any]:
+    """Claude Code 用量总览: token/费用口径与 zcode_totals 一致, 附加速率."""
+    where, params = _cc_period_where(period)
+    row = get_db().execute(
+        f"SELECT {_CC_AGG_COLS}, {_CC_SPEED_COLS} FROM claudecode_usage {where}",
+        params,
+    ).fetchone()
+    return {
+        "request_count": int(row["request_count"]),
+        "total_input_tokens": int(row["total_input_tokens"]),
+        "uncached_input_tokens": int(row["uncached_input_tokens"]),
+        "cache_hit_tokens": int(row["cache_hit_tokens"]),
+        "cache_write_tokens": int(row["cache_write_tokens"]),
+        "total_output_tokens": int(row["total_output_tokens"]),
+        "total_tokens": int(row["total_tokens"]),
+        "total_cost_usd": _cc_cost_usd(row),
+        **_cc_speed_dict(row),
+    }
+
+
+def claudecode_daily(days: int = 7) -> list[dict[str, Any]]:
+    """Claude Code 每日聚合 (本地日归组), 口径镜像 zcode_daily (无速度列)."""
+    days = max(1, min(days, 365))
+    day_expr = "substr(datetime(started_at, 'localtime'), 1, 10)"
+    rows = get_db().execute(
+        f"""
+        SELECT {day_expr} AS date,
+               {_CC_AGG_COLS}
+        FROM claudecode_usage
+        WHERE {day_expr} >= date('now', 'localtime', ?)
+        GROUP BY {day_expr}
+        ORDER BY date ASC
+        """,
+        (f"-{days} days",),
+    ).fetchall()
+    return [
+        {
+            "date": r["date"],
+            "request_count": int(r["request_count"]),
+            "total_input_tokens": int(r["total_input_tokens"]),
+            "uncached_input_tokens": int(r["uncached_input_tokens"]),
+            "cache_hit_tokens": int(r["cache_hit_tokens"]),
+            "cache_write_tokens": int(r["cache_write_tokens"]),
+            "total_output_tokens": int(r["total_output_tokens"]),
+            "total_tokens": int(r["total_tokens"]),
+            "total_cost_usd": _cc_cost_usd(r),
+        }
+        for r in rows
+    ]
+
+
+def claudecode_channel_stats(period: str = "30d") -> list[dict[str, Any]]:
+    """按渠道聚合 (channel 首插判定, 归属规则见实施文档 §4), 行字段同
+    claudecode_totals 另含 channel; 按 输入+输出 token 降序.
+    """
+    where, params = _cc_period_where(period)
+    rows = get_db().execute(
+        f"""
+        SELECT channel, {_CC_AGG_COLS}, {_CC_SPEED_COLS}
+        FROM claudecode_usage
+        {where}
+        GROUP BY channel
+        ORDER BY (SUM(input_tokens + cache_read_tokens + cache_write_tokens)
+                  + SUM(output_tokens)) DESC
+        """,
+        params,
+    ).fetchall()
+    return [
+        {
+            "channel": r["channel"],
+            "request_count": int(r["request_count"]),
+            "total_input_tokens": int(r["total_input_tokens"]),
+            "uncached_input_tokens": int(r["uncached_input_tokens"]),
+            "cache_hit_tokens": int(r["cache_hit_tokens"]),
+            "cache_write_tokens": int(r["cache_write_tokens"]),
+            "total_output_tokens": int(r["total_output_tokens"]),
+            "total_tokens": int(r["total_tokens"]),
+            "total_cost_usd": _cc_cost_usd(r),
+            **_cc_speed_dict(r),
+        }
+        for r in rows
+    ]
+
+
+def claudecode_model_stats(period: str = "30d") -> list[dict[str, Any]]:
+    """按模型聚合, 行字段同 claudecode_channel_stats (model 替代 channel)."""
+    where, params = _cc_period_where(period)
+    rows = get_db().execute(
+        f"""
+        SELECT model, {_CC_AGG_COLS}, {_CC_SPEED_COLS}
+        FROM claudecode_usage
+        {where}
+        GROUP BY model
+        ORDER BY (SUM(input_tokens + cache_read_tokens + cache_write_tokens)
+                  + SUM(output_tokens)) DESC
+        """,
+        params,
+    ).fetchall()
+    return [
+        {
+            "model": r["model"],
+            "request_count": int(r["request_count"]),
+            "total_input_tokens": int(r["total_input_tokens"]),
+            "uncached_input_tokens": int(r["uncached_input_tokens"]),
+            "cache_hit_tokens": int(r["cache_hit_tokens"]),
+            "cache_write_tokens": int(r["cache_write_tokens"]),
+            "total_output_tokens": int(r["total_output_tokens"]),
+            "total_tokens": int(r["total_tokens"]),
+            "total_cost_usd": _cc_cost_usd(r),
+            **_cc_speed_dict(r),
+        }
+        for r in rows
+    ]
+
+
+def claudecode_last_import_at() -> Optional[str]:
+    """最近一次导入时刻 (MAX(synced_at) UTC ISO); 空表 → None."""
+    row = get_db().execute(
+        "SELECT MAX(synced_at) AS last_at FROM claudecode_usage"
+    ).fetchone()
+    return row["last_at"]
+
+
+# ---------------------------------------------------------------------------
+# report 聚合区块 (spec doc/20260904-token-summary-report.md v10 §5; R6 六渠道修订)
+# 渠道维度: 账号渠道 = accounts.source (禁止 GROUP BY provider —— opencode 的
+#   provider 是模型商); 本地渠道 = zcode_usage / claudecode_usage 镜像表 (R6);
+#   dsh 无历史表, 仅"今日"窗口, 由 server 层并入 (T6)。
+# tokens 统一口径 = input + output + reasoning (不含缓存, 与现有首页 totalTokens
+#   一致; claudecode 无 reasoning 列记 0); cost 统一 USD (镜像表 cost_raw/1e8)。
+# 范围窗口 = 自然日; 不复用 _period_where / _zcode_period_where 的滚动口径。
+# ---------------------------------------------------------------------------
+
+_REPORT_RANGE_DAYS = {"7d": 6, "30d": 29}  # 自然日窗口: 含今天共 N 天
+_CHANNEL_ORDER = ["opencode", "bai", "commandcode", "zcode", "claudecode", "dsh"]
+_LOCAL_EST_CHANNELS = {"bai", "zcode", "claudecode"}  # 费用为估算的渠道 (spec v6 est-badge)
+
+
+def _report_range_sql(range_: str, ts_col: str) -> str:
+    day = f"substr(datetime({ts_col},'localtime'),1,10)"
+    if range_ == "today":
+        return f"{day} = date('now','localtime')"
+    if range_ == "yesterday":
+        return f"{day} = date('now','localtime','-1 day')"
+    if range_ in _REPORT_RANGE_DAYS:
+        return f"{day} >= date('now','localtime','-{_REPORT_RANGE_DAYS[range_]} days')"
+    return "1=1"  # all
+
+
+def _report_channels_expr() -> str:
+    return "COALESCE(a.source,'opencode')"
+
+
+def _report_metric_exprs(metric: str) -> dict[str, str]:
+    """各表聚合表达式 (R6): tokens/cost/requests; cost 统一 USD。"""
+    if metric == "cost":
+        return {"records": "SUM(r.cost_usd)", "zcode": "SUM(z.cost_raw)/1e8",
+                "claudecode": "SUM(c.cost_raw)/1e8"}
+    if metric == "requests":
+        return {"records": "COUNT(*)", "zcode": "COUNT(*)", "claudecode": "COUNT(*)"}
+    return {"records": "SUM(r.input_tokens + r.output_tokens + r.reasoning_tokens)",
+            "zcode": "SUM(z.input_tokens + z.output_tokens + z.reasoning_tokens)",
+            "claudecode": "SUM(c.input_tokens + c.output_tokens)"}
+
+
+def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str = "tokens") -> dict[str, Any]:
+    """按自然日 × 渠道堆叠序列 (R6: usage_records + zcode_usage + claudecode_usage
+    三表 UNION); range=all 时粒度自适应 (>60 天按周 / >180 天按月)."""
+    exprs = _report_metric_exprs(metric)
+    include_records = channel is None or channel in ("opencode", "bai", "commandcode")
+    include_zcode = channel is None or channel == "zcode"
+    include_cc = channel is None or channel == "claudecode"
+    segs: list[str] = []
+    params: list[Any] = []
+    if include_records:
+        ch_where = ""
+        if channel:
+            ch_where = f" AND {_report_channels_expr()} = ?"
+            params.append(channel)
+        segs.append(
+            f"SELECT substr(datetime(r.created_at,'localtime'),1,10) AS b,"
+            f" {_report_channels_expr()} AS ch, {exprs['records']} AS v"
+            f" FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
+            f" WHERE {_report_range_sql(range_, 'r.created_at')}{ch_where} GROUP BY b, ch")
+    if include_zcode:
+        segs.append(
+            f"SELECT substr(datetime(z.started_at,'localtime'),1,10) AS b, 'zcode' AS ch,"
+            f" {exprs['zcode']} AS v FROM zcode_usage z"
+            f" WHERE {_report_range_sql(range_, 'z.started_at')} GROUP BY b")
+    if include_cc:
+        segs.append(
+            f"SELECT substr(datetime(c.started_at,'localtime'),1,10) AS b, 'claudecode' AS ch,"
+            f" {exprs['claudecode']} AS v FROM claudecode_usage c"
+            f" WHERE {_report_range_sql(range_, 'c.started_at')} GROUP BY b")
+    if not segs:
+        return {"granularity": "day", "labels": [], "series": {}, "metric": metric}
+    union = " UNION ALL ".join(segs)
+    # 粒度自适应: 三表最大跨度
+    span = get_db().execute(
+        "SELECT MAX(lo) lo, MAX(hi) hi FROM ("
+        " SELECT MIN(substr(datetime(created_at,'localtime'),1,10)) lo, MAX(substr(datetime(created_at,'localtime'),1,10)) hi FROM usage_records"
+        " UNION ALL SELECT MIN(substr(datetime(started_at,'localtime'),1,10)), MAX(substr(datetime(started_at,'localtime'),1,10)) FROM zcode_usage"
+        " UNION ALL SELECT MIN(substr(datetime(started_at,'localtime'),1,10)), MAX(substr(datetime(started_at,'localtime'),1,10)) FROM claudecode_usage)"
+    ).fetchone()
+    granularity = "day"
+    if range_ == "all" and span["lo"] and span["hi"]:
+        days = (date.fromisoformat(span["hi"]) - date.fromisoformat(span["lo"])).days + 1
+        granularity = "month" if days > 180 else ("week" if days > 60 else "day")
+    # UNION 段的 b 已是日粒度日期文本, 周/月对外层 b 再分组 (b 直接作为 datetime 输入)
+    if granularity == "day":
+        final_sql, final_params = f"SELECT b AS b2, ch, v FROM ({union}) ORDER BY b2", params
+    else:
+        fn = "strftime('%Y-W%W', b)" if granularity == "week" else "substr(b,1,7)"
+        final_sql = f"SELECT {fn} AS b2, ch, SUM(v) FROM ({union}) GROUP BY b2, ch ORDER BY b2"
+        final_params = params
+    rows = get_db().execute(final_sql, final_params).fetchall()
+    labels: list[str] = []
+    series: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        if r["b2"] not in labels:
+            labels.append(r["b2"])
+        series.setdefault(r["ch"], {})[r["b2"]] = r["v"]
+    return {"granularity": granularity, "labels": labels,
+            "series": {ch: [s.get(b, 0) for b in labels] for ch, s in series.items()},
+            "metric": metric}
+
+
+def _win_records(where: str, params: list[Any]) -> dict[str, Any]:
+    row = get_db().execute(
+        "SELECT SUM(r.input_tokens + r.output_tokens + r.reasoning_tokens) tokens,"
+        " SUM(r.cost_usd) cost, COUNT(*) requests"
+        " FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id WHERE " + where,
+        params,
+    ).fetchone()
+    return {"tokens": row["tokens"] or 0, "cost": row["cost"] or 0.0, "requests": row["requests"] or 0}
+
+
+def _win_zcode(where: str) -> dict[str, Any]:
+    row = get_db().execute(
+        "SELECT SUM(z.input_tokens + z.output_tokens + z.reasoning_tokens) tokens,"
+        " SUM(z.cost_raw)/1e8 cost, COUNT(*) requests FROM zcode_usage z WHERE " + where
+    ).fetchone()
+    return {"tokens": row["tokens"] or 0, "cost": row["cost"] or 0.0, "requests": row["requests"] or 0}
+
+
+def _win_cc(where: str) -> dict[str, Any]:
+    row = get_db().execute(
+        "SELECT SUM(c.input_tokens + c.output_tokens) tokens,"   # claudecode 无 reasoning 列 (R6)
+        " SUM(c.cost_raw)/1e8 cost, COUNT(*) requests FROM claudecode_usage c WHERE " + where
+    ).fetchone()
+    return {"tokens": row["tokens"] or 0, "cost": row["cost"] or 0.0, "requests": row["requests"] or 0}
+
+
+def _win_merge(*rows: dict[str, Any]) -> dict[str, Any]:
+    out = {"tokens": 0, "cost": 0.0, "requests": 0}
+    for r in rows:
+        out["tokens"] += r["tokens"]
+        out["cost"] += r["cost"]
+        out["requests"] += r["requests"]
+    return out
+
+
+def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
+    """时间窗口汇总条 (R6 三表求和): today/yesterday/7d/30d + 同时段环比 (样本保护)
+    + 数据深度 + 同步状态。dsh 今日由 server 层并入 (T6), db 层不碰 dsh_api。
+
+    同时段口径 (spec v4/v5): 今日截至当前 vs 昨日同时刻; 7 天同时段均值 = 近 7 个
+    完整自然日(不含今天)各日同时段之和/7; <03:00 由测试环境窗口保证, 或对比窗口
+    <5 条 -> 样本不足。
+    """
+    ch_filter, ch_params = ("", [])
+    if channel:
+        ch_filter, ch_params = f" AND {_report_channels_expr()} = ?", [channel]
+    import datetime as _dt
+
+    def records_where(range_: str, same_time: bool = False) -> tuple[str, list[Any]]:
+        w = _report_range_sql(range_, "r.created_at")
+        if same_time:
+            w += " AND datetime(r.created_at,'localtime') <= datetime('now','localtime')" \
+                 if range_ == "today" else \
+                 f" AND time(datetime(r.created_at,'localtime')) <= time('now','localtime')"
+        return w + ch_filter, list(ch_params)
+
+    def local_where(range_: str, ts: str, same_time: bool = False) -> str:
+        w = _report_range_sql(range_, ts)
+        if same_time:
+            w += f" AND datetime({ts},'localtime') <= datetime('now','localtime')" \
+                 if range_ == "today" else \
+                 f" AND time(datetime({ts},'localtime')) <= time('now','localtime')"
+        return w
+
+    def window(range_: str, same_time: bool = False) -> dict[str, Any]:
+        rw, rp = records_where(range_, same_time)
+        return _win_merge(
+            _win_records(rw, rp),
+            _win_zcode(local_where(range_, "z.started_at", same_time)) if not channel or channel == "zcode" else {"tokens": 0, "cost": 0.0, "requests": 0},
+            _win_cc(local_where(range_, "c.started_at", same_time)) if not channel or channel == "claudecode" else {"tokens": 0, "cost": 0.0, "requests": 0},
+        )
+
+    windows = {
+        "today": window("today"),
+        "yesterday": window("yesterday"),
+        "7d": window("7d"),
+        "30d": window("30d"),
+    }
+    same_y = window("yesterday", same_time=True)
+    # 新R5(本循环 R1) N19 修正: same_7 不走 7d 窗口(那是含今天的滚动 7 天), 直接用
+    # v7 的 BETWEEN 形式取近 7 个完整自然日(-7~-1)各日同时段
+    def same7_where(ts: str) -> str:
+        day = f"substr(datetime({ts},'localtime'),1,10)"
+        return (f"{day} BETWEEN date('now','localtime','-7 days') AND date('now','localtime','-1 day')"
+                f" AND time(datetime({ts},'localtime')) <= time('now','localtime')")
+    same_7 = _win_merge(
+        _win_records(same7_where("r.created_at") + ch_filter, list(ch_params)),
+        _win_zcode(same7_where("z.started_at")) if not channel or channel == "zcode" else {"tokens": 0, "cost": 0.0, "requests": 0},
+        _win_cc(same7_where("c.started_at")) if not channel or channel == "claudecode" else {"tokens": 0, "cost": 0.0, "requests": 0},
+    )
+    early = _dt.datetime.now().hour < 1
+    insufficient = early or same_y["requests"] < 5
+    pct = None
+    if not insufficient and same_y["tokens"]:
+        pct = round((windows["today"]["tokens"] - same_y["tokens"]) / same_y["tokens"] * 100, 1)
+    avg7 = (same_7["tokens"] / 7.0) if same_7["tokens"] else 0.0
+    spike = (not insufficient) and avg7 > 0 and windows["today"]["tokens"] > avg7 * 2
+    # 渠道归并: 账号渠道 sync_state (min + 失败优先); 本地渠道 last_sync=MAX(synced_at), ok 恒 True
+    rows = get_db().execute(
+        f"SELECT a.source AS ch,"
+        f" MIN(s.oldest_record_at) oldest, MIN(s.last_sync_at) last_sync,"
+        f" SUM(CASE WHEN s.last_sync_status IS NOT NULL AND s.last_sync_status != 'success' THEN 1 ELSE 0 END) fails"
+        f" FROM accounts a LEFT JOIN usage_sync_state s ON s.account_id = a.id GROUP BY ch"
+    ).fetchall()
+    channels = {
+        r["ch"]: {"oldest": (r["oldest"] or "")[:10] or None,
+                  "last_sync_at": r["last_sync"], "ok": (r["fails"] or 0) == 0}
+        for r in rows
+    }
+    for tbl, ch, ts in (("zcode_usage z", "zcode", "z.started_at"), ("claudecode_usage c", "claudecode", "c.started_at")):   # 新R8 N29: FROM 带别名, 否则 z.started_at 列不存在
+        if channel and channel != ch:
+            continue
+        r = get_db().execute(
+            f"SELECT MIN(substr({ts},1,10)) oldest, MAX(synced_at) last_sync FROM {tbl}"
+        ).fetchone()
+        channels[ch] = {"oldest": r["oldest"], "last_sync_at": r["last_sync"], "ok": True}
+    since_all = [v["oldest"] for v in channels.values() if v["oldest"]] if not channel else \
+        [channels[channel]["oldest"]] if channel in channels and channels[channel]["oldest"] else []
+    return {
+        **windows,
+        "compare": {"pct": pct, "insufficient_sample": insufficient, "spike": spike},
+        "data_since": min(since_all) if since_all else None,
+        "channels": {k: v for k, v in channels.items() if not channel or k == channel},
+    }
+
+
+def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
+    """渠道明细表行 (R6 五渠道; dsh 今日行由 server 层并入 T6)。estimated=估算渠道
+    {bai, zcode, claudecode}。"""
+    exprs_t = _report_metric_exprs("tokens")
+    exprs_c = _report_metric_exprs("cost")
+    rows = get_db().execute(
+        f"SELECT {_report_channels_expr()} AS ch,"
+        f" {exprs_t['records']} tokens, SUM(r.input_tokens) input, SUM(r.output_tokens) output,"
+        f" SUM(r.cache_read_tokens) cache_read, {_report_metric_exprs('requests')['records']} requests,"
+        f" {exprs_c['records']} cost"
+        f" FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
+        f" WHERE {_report_range_sql(range_, 'r.created_at')} GROUP BY ch"
+    ).fetchall()
+    agg = {r["ch"]: dict(r) for r in rows}
+    # R6: 本地渠道行 (各一次聚合, 同构 dict 并入)
+    for ch, alias, table, ts in (("zcode", "z", "zcode_usage", "z.started_at"),
+                                 ("claudecode", "c", "claudecode_usage", "c.started_at")):
+        r = get_db().execute(
+            f"SELECT {exprs_t[ch]} tokens, SUM({alias}.input_tokens) input,"
+            f" SUM({alias}.output_tokens) output, SUM({alias}.cache_read_tokens) cache_read,"
+            f" COUNT(*) requests, {exprs_c[ch]} cost"
+            f" FROM {table} {alias} WHERE {_report_range_sql(range_, ts)}"
+        ).fetchone()
+        if r and ((r["tokens"] or 0) or (r["requests"] or 0)):
+            agg[ch] = dict(r)
+    since = {r["ch"]: r["oldest"] for r in get_db().execute(
+        "SELECT a.source ch, MIN(substr(s.oldest_record_at,1,10)) oldest"
+        " FROM accounts a LEFT JOIN usage_sync_state s ON s.account_id = a.id"
+        " WHERE s.oldest_record_at IS NOT NULL GROUP BY ch"
+    ).fetchall()}
+    for ch, ts, table in (("zcode", "z.started_at", "zcode_usage z"), ("claudecode", "c.started_at", "claudecode_usage c")):   # 新R8 N29b: 同 N29, FROM 带别名
+        r = get_db().execute(f"SELECT MIN(substr({ts},1,10)) oldest FROM {table}").fetchone()
+        if r["oldest"]:
+            since[ch] = r["oldest"]
+    order = [c for c in _CHANNEL_ORDER if c != "dsh" and c in agg]
+    order += sorted((c for c in agg if c not in _CHANNEL_ORDER))
+    return [
+        {"channel": ch, "tokens": agg[ch]["tokens"] or 0, "input": agg[ch]["input"] or 0,
+         "output": agg[ch]["output"] or 0, "cache_read": agg[ch]["cache_read"] or 0,
+         "requests": agg[ch]["requests"] or 0, "cost": agg[ch]["cost"] or 0.0,
+         "data_since": since.get(ch), "estimated": ch in _LOCAL_EST_CHANNELS}
+        for ch in order
+    ]
+
+
+def list_channel_summary() -> list[dict[str, Any]]:
+    """渠道 tab 列表 (R6 五渠道; dsh 由 server 按 dsh_api found 追加): 账号渠道
+    accounts=账号行数, 本地渠道恒 1 (单数据源); 其余渠道按最早账号追加。"""
+    rows = get_db().execute(
+        "SELECT source ch, COUNT(*) accounts, MIN(created_at) first_at"
+        " FROM accounts GROUP BY source"
+    ).fetchall()
+    m = {r["ch"]: {"accounts": r["accounts"], "_at": r["first_at"]} for r in rows}
+    fixed = [c for c in _CHANNEL_ORDER if c != "dsh" and (c in m or c in ("zcode", "claudecode"))]
+    extra = sorted((c for c in m if c not in _CHANNEL_ORDER), key=lambda c: m[c]["_at"] or "")
+    # 新R8 N31: m 值为 {accounts,_at} dict, 必须取 ["accounts"]; 原写法 m.get(c,1) 返回整个 dict
+    return [{"channel": c, "accounts": m[c]["accounts"] if c in m else 1} for c in fixed + extra]
+
+
+def report_hourly(date_: str = "today", channel: Optional[str] = None) -> dict[str, Any]:
+    """24h × 渠道堆叠 (R6 三表 UNION); date_: today|yesterday; dsh 无历史不参与。"""
+    day_ts = {"today": "date('now','localtime')",
+              "yesterday": "date('now','localtime','-1 day')"}[date_ if date_ in ("today", "yesterday") else "today"]
+    segs: list[str] = []
+    params: list[Any] = []
+    if channel is None or channel in ("opencode", "bai", "commandcode"):
+        ch_where = ""
+        if channel:
+            ch_where = f" AND {_report_channels_expr()} = ?"
+            params.append(channel)
+        segs.append(
+            f"SELECT CAST(strftime('%H', datetime(r.created_at,'localtime')) AS INTEGER) h,"
+            f" {_report_channels_expr()} ch, SUM(r.input_tokens + r.output_tokens + r.reasoning_tokens) v"
+            f" FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
+            f" WHERE substr(datetime(r.created_at,'localtime'),1,10) = {day_ts}{ch_where} GROUP BY h, ch")
+    if channel is None or channel == "zcode":
+        segs.append(
+            f"SELECT CAST(strftime('%H', datetime(z.started_at,'localtime')) AS INTEGER) h, 'zcode' ch,"
+            f" SUM(z.input_tokens + z.output_tokens + z.reasoning_tokens) v FROM zcode_usage z"
+            f" WHERE substr(datetime(z.started_at,'localtime'),1,10) = {day_ts} GROUP BY h")
+    if channel is None or channel == "claudecode":
+        segs.append(
+            f"SELECT CAST(strftime('%H', datetime(c.started_at,'localtime')) AS INTEGER) h, 'claudecode' ch,"
+            f" SUM(c.input_tokens + c.output_tokens) v FROM claudecode_usage c"
+            f" WHERE substr(datetime(c.started_at,'localtime'),1,10) = {day_ts} GROUP BY h")
+    if not segs:
+        return {"labels": list(range(24)), "series": {}}
+    rows = get_db().execute(
+        f"SELECT h, ch, SUM(v) v FROM ({' UNION ALL '.join(segs)}) GROUP BY h, ch", params
+    ).fetchall()
+    series: dict[str, list[int]] = {}
+    for r in rows:
+        series.setdefault(r["ch"], [0] * 24)[r["h"]] = r["v"] or 0
+    return {"labels": list(range(24)), "series": series}
+
+
+def _totals_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    """聚合行 → db.totals 对齐键 + hit_rate (R6 抽公共, 供三表分派复用)。
+    空行回退全零 dict; int/round 规范化 + hit/(hit+miss) 口径逐字段对齐 totals()。"""
+    if row is None or row["request_count"] is None:
+        return {
+            "request_count": 0, "session_count": 0, "total_input_tokens": 0,
+            "uncached_input_tokens": 0, "total_reasoning_tokens": 0,
+            "cache_hit_tokens": 0, "cache_write_tokens": 0,
+            "total_output_tokens": 0, "total_cost_usd": 0.0, "hit_rate": 0.0,
+        }
+    hit = int(row["cache_hit_tokens"] or 0)
+    miss = int(row["uncached_input_tokens"] or 0)
+    hit_rate = (hit / (hit + miss) * 100) if (hit + miss) > 0 else 0.0
+    return {
+        "request_count": int(row["request_count"] or 0),
+        "session_count": int(row["session_count"] or 0),
+        "total_input_tokens": int(row["total_input_tokens"] or 0),
+        "uncached_input_tokens": miss,
+        "total_reasoning_tokens": int(row["total_reasoning_tokens"] or 0),
+        "cache_hit_tokens": hit,
+        "cache_write_tokens": int(row["cache_write_tokens"] or 0),
+        "total_output_tokens": int(row["total_output_tokens"] or 0),
+        "total_cost_usd": round(float(row["total_cost_usd"] or 0), 6),
+        "hit_rate": round(hit_rate, 2),
+    }
+
+
+def channel_totals(range_: str, channel: str) -> dict[str, Any]:
+    """单渠道聚合 totals (键与 db.totals 对齐, 供 renderOverview 复用; R6 三表分派;
+    dsh 由 server 层组装, 本函数不处理)。"""
+    if channel == "zcode":
+        row = get_db().execute(
+            f"SELECT COUNT(*) request_count,"
+            f" COUNT(DISTINCT CASE WHEN z.session_id IS NOT NULL AND z.session_id != '' THEN z.session_id END) session_count,"
+            f" SUM(z.input_tokens + z.cache_read_tokens + z.cache_write_tokens) total_input_tokens,"
+            f" SUM(z.input_tokens) uncached_input_tokens,"
+            f" SUM(z.output_tokens) total_output_tokens,"
+            f" SUM(z.reasoning_tokens) total_reasoning_tokens,"
+            f" SUM(z.cache_read_tokens) cache_hit_tokens,"
+            f" SUM(z.cache_write_tokens) cache_write_tokens,"
+            f" SUM(z.cost_raw)/1e8 total_cost_usd"
+            f" FROM zcode_usage z WHERE {_report_range_sql(range_, 'z.started_at')}"
+        ).fetchone()
+        return _totals_from_row(row)
+    if channel == "claudecode":
+        row = get_db().execute(
+            f"SELECT COUNT(*) request_count,"
+            f" COUNT(DISTINCT CASE WHEN c.session_id IS NOT NULL AND c.session_id != '' THEN c.session_id END) session_count,"
+            f" SUM(c.input_tokens + c.cache_read_tokens + c.cache_write_tokens) total_input_tokens,"
+            f" SUM(c.input_tokens) uncached_input_tokens,"
+            f" SUM(c.output_tokens) total_output_tokens,"
+            f" 0 total_reasoning_tokens,"                       # claudecode 无 reasoning 列 (R6)
+            f" SUM(c.cache_read_tokens) cache_hit_tokens,"
+            f" SUM(c.cache_write_tokens) cache_write_tokens,"
+            f" SUM(c.cost_raw)/1e8 total_cost_usd"
+            f" FROM claudecode_usage c WHERE {_report_range_sql(range_, 'c.started_at')}"
+        ).fetchone()
+        return _totals_from_row(row)
+    row = get_db().execute(
+        f"SELECT COUNT(*) request_count,"
+        f" COUNT(DISTINCT CASE WHEN r.session_id IS NOT NULL AND r.session_id != '' THEN r.session_id END) session_count,"
+        f" SUM(r.input_tokens + r.cache_read_tokens + r.cache_write_5m_tokens + r.cache_write_1h_tokens) total_input_tokens,"
+        f" SUM(r.input_tokens) uncached_input_tokens,"
+        f" SUM(r.output_tokens) total_output_tokens,"
+        f" SUM(r.reasoning_tokens) total_reasoning_tokens,"
+        f" SUM(r.cache_read_tokens) cache_hit_tokens,"
+        f" SUM(r.cache_write_5m_tokens + r.cache_write_1h_tokens) cache_write_tokens,"
+        f" SUM(r.cost_usd) total_cost_usd"
+        f" FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
+        f" WHERE {_report_range_sql(range_, 'r.created_at')} AND {_report_channels_expr()} = ?",
+        [channel],
+    ).fetchone()
+    return _totals_from_row(row)
+
+
+def channel_trend(date_: str = "today", channel: str = "opencode") -> list[dict[str, Any]]:
+    """单渠道 24h input/output 双序列 (供 chartToday 复用; R6 三表分派; dsh 返回空)。"""
+    if channel == "dsh":
+        return []                                               # R6: dsh 无历史
+    ts = "z.started_at" if channel == "zcode" else ("c.started_at" if channel == "claudecode" else "r.created_at")
+    table = {"zcode": "zcode_usage z", "claudecode": "claudecode_usage c",
+             }.get(channel, "usage_records r LEFT JOIN accounts a ON a.id = r.account_id")
+    tok_in = {"zcode": "SUM(z.input_tokens)", "claudecode": "SUM(c.input_tokens)",
+              }.get(channel, "SUM(r.input_tokens)")
+    tok_out = {"zcode": "SUM(z.output_tokens)", "claudecode": "SUM(c.output_tokens)",
+               }.get(channel, "SUM(r.output_tokens)")
+    ch_filter = "" if channel in ("zcode", "claudecode") else \
+        f" AND {_report_channels_expr()} = ?"
+    params: list[Any] = [] if channel in ("zcode", "claudecode") else [channel]
+    day_eq = "date('now','localtime')" if date_ != "yesterday" else "date('now','localtime','-1 day')"
+    rows = get_db().execute(
+        f"SELECT CAST(strftime('%H', datetime({ts},'localtime')) AS INTEGER) h,"
+        f" {tok_in} i, {tok_out} o FROM {table}"
+        f" WHERE substr(datetime({ts},'localtime'),1,10) = {day_eq}{ch_filter} GROUP BY h",
+        params,
+    ).fetchall()
+    m = {r["h"]: r for r in rows}
+    return [{"hour": h, "input": (m[h]["i"] or 0) if h in m else 0,
+             "output": (m[h]["o"] or 0) if h in m else 0} for h in range(24)]

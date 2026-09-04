@@ -16,8 +16,9 @@ import time
 
 import webview
 
+from . import bai_channel
 from . import db, server
-from .auth import LoginWatcher, build_login_url
+from .auth import _login_window_title, LoginWatcher, build_login_url
 
 APP_TITLE = "GoGauge - OpenCode Go Usage Panel"
 WINDOW_SIZE = (1280, 840)
@@ -337,9 +338,13 @@ class WindowApi:
         self._on_open_login = cb
 
     def open_login(self, mode: str = "relogin") -> bool:
-        """前端登录入口: 弹出独立登录窗口. mode: "add"=添加新用户 / "relogin"=重登当前用户."""
+        """前端登录入口: 弹出独立登录窗口.
+
+        mode: "add"=添加新用户 / "relogin"=重登当前用户 / "add_bai"=添加 BAI 账号
+        / "add_commandcode"=添加 CommandCode 账号.
+        """
         if self._on_open_login:
-            self._on_open_login(mode if mode in ("add", "relogin") else "relogin")
+            self._on_open_login(mode if mode in ("add", "relogin", "add_bai", "add_commandcode") else "relogin")
         return True
 
     def minimize(self) -> bool:
@@ -402,15 +407,65 @@ def _destroy_all_windows() -> None:
             pass
 
 
+def _allow_native_popup(self, sender, args) -> None:
+    """放行 WebView2 原生弹窗 (NewWindowRequested 不拦截).
+
+    chat.b.ai 的 Google 登录为 popup 模式: 新开小窗完成登录后关闭并通知
+    原页刷新. pywebview 原实现会外抛浏览器或加载到当前窗, 均破坏 opener
+    链路导致登录卡死. 放行后 popup 与登录窗共享同一 WebView2 cookie 存储
+    (同进程同 UserDataFolder), session-token 可被 LoginWatcher 捕获.
+    见 doc/20260902-bug-diagnosis-bai-google-login.md.
+
+    例外: BAI 隐藏通道窗口一律拦截 — 会话失效时 chat.b.ai 登录页会自动
+    window.open 拉起授权弹窗, 放行会导致启动时未经用户操作弹出可见登录窗;
+    拦截 (Handled=True 且不导航) 后仅用户主动点击 登录/重新登录 才出现登录窗.
+    见 doc/20260904-bai-channel-popup-block.md.
+    """
+    if bai_channel.is_channel_window(getattr(self, "pywebview_window", None)):
+        args.set_Handled(True)
+        return
+    args.set_Handled(False)
+
+
+def _patch_webview_popup() -> None:
+    """用放行实现替换 pywebview 的新窗口请求处理 (幂等, 接口变更时快速失败)."""
+    from webview.platforms import edgechromium
+
+    if not hasattr(edgechromium.EdgeChrome, "on_new_window_request"):
+        raise RuntimeError(
+            "pywebview EdgeChrome.on_new_window_request 不存在 (接口变更?), "
+            "弹窗放行补丁无法应用"
+        )
+    edgechromium.EdgeChrome.on_new_window_request = _allow_native_popup
+
+
 def main() -> None:
     global _quitting
 
     # 单实例守卫: 已有实例在运行时激活其窗口, 当前进程直接退出
     _ensure_single_instance()
 
+    _patch_webview_popup()  # 放行原生弹窗 (chat.b.ai Google 登录为 popup 模式)
+
     db.get_db()  # 初始化数据库
 
+    # BAI 浏览器通道: 有 BAI 账号时预建隐藏通道窗口 (start 前创建, 随 start 初始化);
+    # transport 注册始终执行 (无 BAI 账号时不会被触达, 不产生额外请求)
+    try:
+        _has_bai = db.get_db().execute(
+            "SELECT 1 FROM accounts WHERE source = 'bai' LIMIT 1"
+        ).fetchone()
+    except Exception:  # noqa: BLE001 查询失败按无 BAI 账号处理
+        _has_bai = None
+    if _has_bai:
+        bai_channel.ensure_window()
+    bai_channel.activate()
+
     host, port = server.start_server()
+    # ZCode 本地用量启动导入 (后台线程, 读 ~/.zcode 用量库增量预热镜像表)
+    threading.Thread(target=server.zcode_import_async, daemon=True, name="gousage-zcode-import").start()
+    # Claude Code 本地用量启动导入 (后台线程, 读 ~/.claude/projects 会话 JSONL 增量预热镜像表)
+    threading.Thread(target=server.claude_import_async, daemon=True, name="gousage-claude-import").start()
     dashboard_url = f"http://{host}:{port}/"
     watcher: dict[str, object] = {"ref": None}
     api = WindowApi()
@@ -471,22 +526,38 @@ def main() -> None:
 
     _bind_login_close_cleanup(login_win_ref["win"])
 
-    # 登录模式: open_login(mode) 记录意图, on_login_success 按模式落库
-    pending_mode = {"mode": "relogin"}
+    # 登录模式: open_login(mode) 记录意图(mode + account_type), on_login_success 按模式落库
+    pending_mode = {"mode": "relogin", "account_type": "opencode"}
 
-    def on_login_success(auth_cookie: str, workspace_hint: str) -> None:
+    def on_login_success(credential: str, workspace_hint: str, account_type: str) -> None:
         """登录成功: 按模式保存 → 隐藏登录窗口 → 主窗口进入面板 → 全量同步.
 
         - add: 新建账号 (同 token 自动去重为既有账号) 并切换为活跃
         - relogin: 更新当前活跃账号凭证
+        - bai: 一律按 add 处理新建/去重 BAI 账号 (save_token 无法区分 source);
+          workspace_hint = BAI userId 作 dedupe_key, source="bai"
+        - commandcode: 一律按 add 处理新建/去重 CommandCode 账号;
+          workspace_hint = userId 作 dedupe_key (订阅信息不可用时为 "", 不去重),
+          credential = 会话 cookie jar JSON, source="commandcode"
         """
         mode = pending_mode.get("mode", "relogin")
-        _mlog(f"on_login_success: ws={workspace_hint} mode={mode}")
+        _mlog(f"on_login_success: ws={workspace_hint} mode={mode} type={account_type}")
         try:
-            if mode == "add":
-                db.add_account(auth_cookie, workspace_hint, switch=True)
+            if account_type == "bai":
+                db.add_account(
+                    credential, workspace_hint,
+                    switch=True, source="bai", dedupe_key=workspace_hint,
+                )
+                bai_channel.ensure_window()  # 新增 BAI 账号 → 确保通道窗口已建 (start 后创建, 线程安全)
+            elif account_type == "commandcode":
+                db.add_account(
+                    credential, workspace_hint,
+                    switch=True, source="commandcode", dedupe_key=workspace_hint,
+                )
+            elif mode == "add":
+                db.add_account(credential, workspace_hint, switch=True)
             else:
-                db.save_token(auth_cookie, workspace_hint)
+                db.save_token(credential, workspace_hint)
             _mlog("  token saved")
         except Exception as exc:  # noqa: BLE001
             _mlog(f"  save_token ERROR: {exc}")
@@ -514,7 +585,7 @@ def main() -> None:
     def _start_watcher(lw) -> None:
         """启动登录监听: 优先等 shown 事件 (避免 hidden 窗口调用窗口方法抛内部异常);
         复用窗口 (已显示过) 直接启动; 事件不触发时 3s 兜底启动 (LoginWatcher 对未就绪窗口有重试)."""
-        w = LoginWatcher(lw, on_login_success)
+        w = LoginWatcher(lw, on_login_success, account_type=pending_mode.get("account_type", "opencode"))
         watcher["ref"] = w
         if getattr(lw, "_gousage_shown", False):
             w.start()
@@ -539,8 +610,23 @@ def main() -> None:
         except Exception:  # noqa: BLE001
             return False
 
+    def _parse_login_mode(mode: str) -> tuple[str, str]:
+        """把 open_login 的 mode 分为 (mode, account_type).
+
+        "add_bai" → ("add", "bai"); "add_commandcode" → ("add", "commandcode");
+        其余 ("add"/"relogin") → (同值, "opencode"); 非法值回退 ("relogin", "opencode").
+        """
+        if mode == "add_bai":
+            return ("add", "bai")
+        if mode == "add_commandcode":
+            return ("add", "commandcode")
+        return (mode if mode in ("add", "relogin") else "relogin", "opencode")
+
     def open_login(mode: str = "relogin") -> None:
         """弹出独立登录窗口并开始监听 (欢迎页/设置页按钮). 单飞守卫: 已有登录流程时忽略."""
+        sub_mode, account_type = _parse_login_mode(mode)
+        pending_mode["mode"] = sub_mode
+        pending_mode["account_type"] = account_type
         # 登录窗已被手动关闭 => 旧监听已失效: 先停旧线程再重建窗口.
         # (修复: 依赖"线程存活"的单飞守卫会把死窗口场景永久拦截, 导致再次点击无响应)
         if not _login_win_alive():
@@ -549,17 +635,19 @@ def main() -> None:
                 w.stop()
             watcher["ref"] = None
             _mlog("[main] login window gone -> recreate")
-            pending_mode["mode"] = mode if mode in ("add", "relogin") else "relogin"
             _recreate_login_window()
             return
         w = watcher.get("ref")
         if isinstance(w, LoginWatcher) and w._thread and w._thread.is_alive() and not w.done:
             return  # 已有登录监听进行中 (窗口存活)
-        pending_mode["mode"] = mode if mode in ("add", "relogin") else "relogin"
         lw = login_win()
         try:
             lw.show()
-            lw.load_url(build_login_url())
+            try:
+                lw.title = _login_window_title(account_type)
+            except Exception as exc:  # noqa: BLE001 后端可能不支持运行时改标题
+                _mlog(f"  set title error: {exc}")
+            lw.load_url(build_login_url(account_type))
         except Exception as exc:  # noqa: BLE001 窗口可能被用户手动关闭, 重建
             print(f"[main] login window reopen: {exc}", flush=True)
             _recreate_login_window()
@@ -575,9 +663,10 @@ def main() -> None:
             login_win().destroy()
         except Exception:  # noqa: BLE001
             pass
+        account_type = pending_mode.get("account_type", "opencode")
         new_win = webview.create_window(
-            "GoGauge - OpenCode Go Login",
-            build_login_url(),
+            _login_window_title(account_type),
+            build_login_url(account_type),
             width=720,
             height=640,
             min_size=(560, 500),
