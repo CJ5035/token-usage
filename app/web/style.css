@@ -30,8 +30,8 @@
   --font-mono: "Fira Code", "Cascadia Code", Consolas, monospace;
   --ch-opencode: #4f8ef7;
   --ch-bai: #f59e0b;            /* 原 #d97706: 暗琥珀 → 亮琥珀 (问题3) */
-  --ch-commandcode: #a78bfa;
-  --ch-zcode: #06b6d4;
+  --ch-commandcode: #10b981;    /* 原 #a78bfa: 浅紫 → 翡翠绿 (用户调整渠道配色) */
+  --ch-zcode: #6366f1;          /* 原 #06b6d4 青 → 翡翠绿 → 靛蓝 (用户指定) */
   --ch-claudecode: #fb7185;     /* 原 #e11d48: 暗玫红 → 亮玫红 (问题3) */
   --ch-dsh: #64748b;
   --up: #16a34a;                /* 涨/成功语义色 (EVOLUTION-6 新增, 值=原 .wb-s .up 硬编码, 亮色逐像素不变) */
@@ -60,8 +60,8 @@ html[data-theme="dark"] {
   --down: #f87171;              /* 原亮色值 #dc2626 对 muted 仅 3.37:1 不达标, 提亮: muted 5.88:1 / card 6.28:1 */
   --ch-opencode: #6ba3ff;
   --ch-bai: #f59e0b;
-  --ch-commandcode: #b79bfd;
-  --ch-zcode: #22d3ee;
+  --ch-commandcode: #34d399;
+  --ch-zcode: #818cf8;
   --ch-claudecode: #fb7185;
   --ch-dsh: #94a3b8;
 }
@@ -506,7 +506,7 @@ html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
 #report-table td:first-child { transition: background .2s, color .2s; }
 
 /* 单渠道 tab: 逐账号配额块 (T12) */
-.acct-quota { margin-bottom: 10px; }
+.acct-quota { grid-column: 1 / -1; }
 .acct-name { font-size: 12px; font-weight: 600; color: var(--text2); margin: 4px 0; }
 
 /* 切渠道加载提示: 响应到达前旧内容降不透明度 (方案4③) */

@@ -1,7 +1,12 @@
 # zcode 渠道配色更换
 
 - 日期：2026-09-06
-- 状态：**待确认**
+- 状态：**已确认（用户看完色板预览指定）：commandcode → 翡翠绿，zcode → 靛蓝 indigo**
+- 范围：仅 `app/web/style.css` 四行 CSS 变量（commandcode/zcode × 亮/暗），不改 JS/Python
+- 备注：翡翠绿曾试用于 zcode（浅 `#10b981` / 暗 `#34d399`），用户反馈不好看；
+  色值腾挪给 commandcode，zcode 改用预览页候选 1 靛蓝 indigo（浅 `#6366f1` / 暗
+  `#818cf8`）。commandcode 紫退场后，indigo 与 opencode 蓝之间不再有紫色邻居，
+  并列区分度反而优于当初评估。
 - 范围：仅 `app/web/style.css` 两行 CSS 变量，不改 JS/Python
 
 ## 1. 问题
@@ -41,25 +46,31 @@
 **方案 C 靛蓝 indigo**：浅 `#6366f1` / 暗 `#818cf8`。贴近 GLM/Z.ai 品牌蓝紫调，但
 与 opencode 蓝、commandcode 紫的区分度下降，图表多系列并排时不易分辨。
 
-## 4. 改动点（按方案 A）
+## 4. 改动点（最终方案）
 
-`app/web/style.css`：
+`app/web/style.css`（亮/暗各两行）：
 
 ```diff
--  --ch-zcode: #06b6d4;
-+  --ch-zcode: #10b981;
-```
-```diff
--  --ch-zcode: #22d3ee;
-+  --ch-zcode: #34d399;
+# 浅色 :root
+-  --ch-commandcode: #a78bfa;
++  --ch-commandcode: #10b981;          /* 翡翠绿 emerald-500 */
+-  --ch-zcode: #10b981;
++  --ch-zcode: #6366f1;                /* 靛蓝 indigo-500 */
+
+# 暗色 html[data-theme="dark"]
+-  --ch-commandcode: #b79bfd;
++  --ch-commandcode: #34d399;          /* emerald-400 */
+-  --ch-zcode: #34d399;
++  --ch-zcode: #818cf8;                /* indigo-400 */
 ```
 
-无 JS/Python 改动：app.js 的 `CH_COLOR`/`chColor()` 均经 `var(--ch-zcode)` 动态取
-色，配额卡圆点/名称、渠道表文字、堆叠趋势图、占比环图自动生效。
+无 JS/Python 改动：app.js 的 `CH_COLOR`/`chColor()` 均经 CSS 变量动态取色，配额卡
+圆点/名称、渠道表文字、堆叠趋势图、占比环图自动生效。
 
 注意：app.js `COLOR.cache`、`OV_COLORS` 中的 `#06b6d4` 是 Token 构成图"缓存命中"
 用色，与渠道色无关，不动；style.css `.ub.c-bai::before` 渐变中的 `#06b6d4` 属于
-bai 渠道 KPI 装饰条，不动。
+bai 渠道 KPI 装饰条，不动；`:root --purple: #a78bfa` 与 app.js `COLOR.reasoning`
+（同值 #a78bfa）是通用色板/Token 构成图用色，不随 commandcode 渠道色联动，不动。
 
 ## 5. 验证
 

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>zcode 渠道色候选预览</title>
+<style>
+  body { font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; margin: 0; padding: 24px; background: #f7f6f4; color: #221f33; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  .tip { font-size: 13px; color: #5f5b73; margin-bottom: 20px; }
+  .cand { margin-bottom: 28px; }
+  .cand h2 { font-size: 14px; margin: 0 0 8px; }
+  .cand h2 code { background: rgba(0,0,0,.06); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+  .pair { display: flex; gap: 12px; flex-wrap: wrap; }
+  .panel { border-radius: 12px; padding: 16px; flex: 1; min-width: 340px; }
+  .panel.dark { background: #1a1a1c; color: #e8e8ea; }
+  .panel.light { background: #ffffff; color: #221f33; border: 1px solid #eae7f2; }
+  .qb { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .bars { display: flex; align-items: flex-end; gap: 6px; height: 72px; margin-bottom: 10px; }
+  .bar { width: 26px; border-radius: 3px 3px 0 0; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; }
+  .seg-z { height: 78%; }
+  .seg-o { height: 12%; background: #6ba3ff; }
+  .seg-b { height: 10%; background: #f59e0b; }
+  .donut { width: 84px; height: 84px; border-radius: 50%; position: relative; display: inline-block; vertical-align: middle; }
+  .donut::after { content: ""; position: absolute; inset: 22px; border-radius: 50%; }
+  .panel.dark .donut::after { background: #1a1a1c; }
+  .panel.light .donut::after { background: #ffffff; }
+  .legend { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; margin-left: 10px; color: inherit; opacity: .85; }
+  .legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body>
+<h1>zcode 渠道色候选预览</h1>
+<div class="tip">每个候选左侧为暗色主题、右侧为亮色主题。每组渲染：渠道配额卡标题 / 堆叠趋势柱（zcode 大占比）/ 渠道占比环图。挑好后回复色名或色号即可。</div>
+<div id="list"></div>
+<script>
+const others = { opencode: "#6ba3ff", bai: "#f59e0b", claudecode: "#fb7185", commandcode: "#b79bfd" };
+const cands = [
+  { name: "靛蓝 indigo", light: "#6366f1", dark: "#818cf8", note: "贴近 GLM 品牌蓝紫；与 opencode 蓝、commandcode 紫并列时区分度中等" },
+  { name: "青柠 lime", light: "#65a30d", dark: "#a3e635", note: "六色盘中独有色相，辨识度最高；暗色下较亮，大面积需适应" },
+  { name: "紫红 fuchsia", light: "#c026d3", dark: "#e879f9", note: "与 claudecode 橙粉有距离；色彩个性强" },
+  { name: "天蓝 sky", light: "#0284c7", dark: "#38bdf8", note: "清爽经典；与 opencode 浅蓝同属蓝系，并排图例需留意" },
+  { name: "鼠尾草绿 sage", light: "#6b9080", dark: "#84a98c", note: "低饱和柔和绿，保留绿感但去艳；大面积最耐看，个性较弱" },
+];
+const pie = (c) => `conic-gradient(${c} 0 78%, ${others.opencode} 78% 86%, ${others.claudecode} 86% 93%, ${others.bai} 93% 97.5%, ${others.commandcode} 97.5% 100%)`;
+document.getElementById("list").innerHTML = cands.map((c, i) => `
+  <div class="cand">
+    <h2>${i + 1}. ${c.name} <code>浅 ${c.light} / 暗 ${c.dark}</code> — ${c.note}</h2>
+    <div class="pair">
+      ${["dark", "light"].map((th) => {
+        const col = th === "dark" ? c.dark : c.light;
+        return `<div class="panel ${th}">
+          <div class="qb"><span class="dot" style="background:${col}"></span><span style="color:${col}">zcode</span><span style="font-size:11px;opacity:.6">Pro · 渠道配额卡</span></div>
+          <div class="bars">
+            ${[92, 55, 70, 40, 64].map((h) => `<div class="bar" style="height:${h}%"><div class="seg-z" style="height:78%;background:${col}"></div><div class="seg-o"></div><div class="seg-b"></div></div>`).join("")}
+          </div>
+          <div class="donut" style="background:${pie(col)}"></div>
+          <span class="legend"><i style="background:${col}"></i>zcode</span>
+          <span class="legend"><i style="background:${others.opencode}"></i>opencode</span>
+          <span class="legend"><i style="background:${others.claudecode}"></i>claudecode</span>
+          <span class="legend"><i style="background:${others.bai}"></i>bai</span>
+          <span class="legend"><i style="background:${others.commandcode}"></i>commandcode</span>
+        </div>`;
+      }).join("")}
+    </div>
+  </div>`).join("");
+</script>
+</body>
+</html>
