@@ -357,6 +357,12 @@ function applyLang(l) {
     renderSettings();
     loadRecords().catch(() => {});
   }
+  // EVOLUTION-7: 语言切换后重设已显示的空态占位文案 (today-empty 固定今日语义; report-hourly-empty 按范围语义近似, 档位瞬态可接受)
+  ["report-stack-empty", "report-donut-empty", "report-hourly-empty", "today-empty", "mr-empty", "trend-empty", "ov-trend-empty"].forEach((id) => {
+    const el = $(id);
+    if (el && !el.hidden) el.textContent = t(el.id.endsWith("today-empty") ? "noUsageToday" : "noDataInRange");
+  });
+  updateStatsScopeHint();   // EVOLUTION-7: 统计页口径 hint 文案随语言刷新
   // ZCode 区块随语言即时重渲染 (复用已拉取数据, 不重发请求)
   if (zcodeQuotaLast && state.page === "home" && state.channel === "zcode") renderZcodeQuota(zcodeQuotaLast);
   if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);
@@ -820,6 +826,7 @@ async function loadZcodeSummary() {
     renderZcodeSummary(data);
   } catch (e) {
     if (seq === zcodeSumSeq) { zcodeSummaryLast = null; box.hidden = true; }
+    updateStatsScopeHint();   // EVOLUTION-7: 缓存置空后自愈口径 hint
   }
 }
 function zcodeProviderLabel(p) {
@@ -905,6 +912,7 @@ function renderZcodeSummary(data) {
     <td class="num">${zcodeSpeed(m.avg_tps)}</td></tr>`).join("")
     : `<tr><td colspan="9" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
   chartZcodeTrend(data.daily7 || []);
+  updateStatsScopeHint();   // EVOLUTION-7: 成功路径末尾刷新口径 hint
 }
 /* 7 日趋势: Token + 估算费用两条线, 固定近 7 天窗口 (数据源 daily7, 不随 range 变化) */
 function chartZcodeTrend(daily7, noAnim) {
@@ -1028,6 +1036,7 @@ function renderDsh(data) {
     : `<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
   const note = $("dsh-today-note");
   if (note) note.hidden = state.dshDim !== "today";
+  updateStatsScopeHint();   // EVOLUTION-7: 成功路径末尾刷新口径 hint (失败路径保留旧缓存, 不加)
 }
 
 /* ---------------- 统计页: Claude Code 本地用量区块 ---------------- */
@@ -1047,6 +1056,7 @@ async function loadClaudecodeSummary() {
     renderClaudecodeSummary(data);
   } catch (e) {
     if (seq === claudecodeSumSeq) { claudecodeSummaryLast = null; box.hidden = true; }
+    updateStatsScopeHint();   // EVOLUTION-7: 缓存置空后自愈口径 hint
   }
 }
 function claudecodeRenderHeads() {
@@ -1113,6 +1123,7 @@ function renderClaudecodeSummary(data) {
     <td class="num">${fmtMoney(m.total_cost_usd)}</td></tr>`).join("")
     : `<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
   chartClaudecodeTrend(data.daily7 || []);
+  updateStatsScopeHint();   // EVOLUTION-7: 成功路径末尾刷新口径 hint
 }
 /* 7 日趋势: Token + 估算费用两条线, 固定近 7 天窗口 (数据源 daily7, 不随 range 变化) */
 function chartClaudecodeTrend(daily7, noAnim) {
@@ -1217,6 +1228,24 @@ function renderStatsTotal(totals, source) {
   ];
   $("stats-total-cards").innerHTML = cards.map((c) => `
     <div class="card kpi ${c.cls}"><div class="kpi-l">${c.l}</div><div class="kpi-v">${c.v}</div><div class="kpi-s">${c.s}</div></div>`).join("");
+  updateStatsScopeHint();   // EVOLUTION-7: 主区渲染后刷新口径 hint
+}
+function updateStatsScopeHint() {   // EVOLUTION-7: 主区全 0 且本地渠道区有数据时解释口径 (纯函数, 幂等, 多点调用自愈)
+  const el = $("stats-scope-hint");
+  if (!el) return;
+  const tt = state.data && state.data.totals;
+  const mainEmpty = !!tt && tt.request_count === 0 && tt.total_cost_usd === 0
+    && (tt.total_input_tokens || 0) + (tt.total_output_tokens || 0) + (tt.total_reasoning_tokens || 0) === 0;
+  const zcT = (zcodeSummaryLast || {}).totals || {};        // zcode totals 为 total_input/output/reasoning_tokens 三段 (与 renderZcodeSummary 同口径)
+  const ccT = (claudecodeSummaryLast || {}).totals || {};   // claudecode totals 为 total_tokens 单字段 (与 renderClaudecodeSummary 同口径)
+  const dsh = dshUsageLast || {};                           // dsh 为 total.input/output + 顶层 sessions_count (与 renderDsh 同口径)
+  const dshT = dsh.total || {};
+  const localHas = ((zcT.total_input_tokens || 0) + (zcT.total_output_tokens || 0) + (zcT.total_reasoning_tokens || 0)) > 0 || (zcT.request_count || 0) > 0
+    || (ccT.total_tokens || 0) > 0 || (ccT.request_count || 0) > 0
+    || ((dshT.input || 0) + (dshT.output || 0)) > 0 || (dsh.sessions_count || 0) > 0;
+  const show = mainEmpty && localHas;
+  if (show) el.textContent = t("statsScopeHint");
+  el.hidden = !show;
 }
 function renderDetail6(totals) {
   const total = totals.uncached_input_tokens + totals.total_output_tokens + totals.total_reasoning_tokens;
@@ -2290,7 +2319,8 @@ function renderWindows(w, hasEst = false) {
     <div class="wb-v">${fmtTokens(w[key].tokens)}</div><div class="wb-v2">${fmtMoney(w[key].cost)}</div>
     <div class="wb-s${w.compare.spike && key === "today" ? " spike" : ""}">${sub}</div></div>`;
   const cmp = w.compare.insufficient_sample ? t("sampleInsufficient")
-    : (w.compare.pct == null ? "" : `<span class="${w.compare.pct >= 0 ? "up" : "down"}">${w.compare.pct >= 0 ? "↑" : "↓"}${Math.abs(w.compare.pct)}%</span> ${t("vsSame")}`);
+    : (w.today && w.today.tokens === 0 ? t("noUsageToday")   // EVOLUTION-7: 今日零用量不渲染涨跌箭头 (无昨日基线时避免荒谬涨跌)
+    : (w.compare.pct == null ? "" : `<span class="${w.compare.pct >= 0 ? "up" : "down"}">${w.compare.pct >= 0 ? "↑" : "↓"}${Math.abs(w.compare.pct)}%</span> ${t("vsSame")}`));
   $("windows-bar").innerHTML =
     cell("today", t("today"), cmp) + cell("yesterday", t("yesterday"), "") +   // 新R1: 昨日格副行为空 (规格布局)
     cell("7d", t("d7"), w["7d"].tokens ? `${t("dailyAvg")} ${fmtTokens(Math.round(w["7d"].tokens / 7))}` : "") +
@@ -2299,6 +2329,7 @@ function renderWindows(w, hasEst = false) {
   const notes = [];
   if (w.data_since) notes.push(`${t("dataSince")} ${w.data_since}`);
   if (hasEst) notes.push(`<span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>`);
+  if (w.compare.pct != null && w.compare.includes_dsh_today === true) notes.push(t("cmpExcludesDsh"));   // EVOLUTION-7: 今日涨跌含 DSH 口径标注 (wb-since 通栏行)
   if (notes.length) $("windows-bar").insertAdjacentHTML("beforeend", `<div class="wb-since">${notes.join(" · ")}</div>`);
   // 点击格 -> 页头 pill 联动 (spec v4/v5 单向映射)
   document.querySelectorAll("#windows-bar .wb-cell").forEach((c) => c.addEventListener("click", () => {
