@@ -45,13 +45,18 @@ _TEXT_COLS = {"id", "session_id", "provider_id", "model_id", "status"}
 
 
 def _zcode_row(row_id, started_ms=1000, **overrides):
-    """构造一行 model_usage 记录 (默认值对应 cost_raw=39250)."""
+    """构造一行 model_usage 记录.
+
+    真实子集语义: input_tokens 为全量输入 (cache_read ⊆ input),
+    computed_total = input + cache_creation + output (不含 reasoning 单列).
+    默认值对应新口径 cost_raw=38250, 旧口径(修复前导入)=53250.
+    """
     values = {
         "id": row_id, "started_at": started_ms, "session_id": "sess-1",
         "provider_id": "p1", "model_id": "glm-5.3", "status": "success",
-        "input_tokens": 50, "output_tokens": 100, "reasoning_tokens": 10,
-        "cache_creation_input_tokens": 5, "cache_read_input_tokens": 200,
-        "computed_total_tokens": 365, "duration_ms": 1000,
+        "input_tokens": 200, "output_tokens": 100, "reasoning_tokens": 10,
+        "cache_creation_input_tokens": 5, "cache_read_input_tokens": 150,
+        "computed_total_tokens": 305, "duration_ms": 1000,
         "time_to_first_token_ms": 200,
     }
     values.update(overrides)
@@ -116,7 +121,7 @@ def test_first_full_import(tmp_db, zcode_source):
         # token 类 None → 0, duration/ttft None 保持 None
         _zcode_row("u3", base_ms + 456, reasoning_tokens=None,
                    duration_ms=None, time_to_first_token_ms=None,
-                   computed_total_tokens=355),
+                   computed_total_tokens=305),
     ])
     rows = zcode_api.collect_local_usage(0)
     assert len(rows) == 3
@@ -130,16 +135,17 @@ def test_first_full_import(tmp_db, zcode_source):
     assert r["provider_id"] == "p1"
     assert r["provider_name"] == "Plan A"          # config.json 快照
     assert r["model_id"] == "glm-5.3"
-    assert r["input_tokens"] == 50
+    assert r["input_tokens"] == 200
     assert r["output_tokens"] == 100
     assert r["reasoning_tokens"] == 10
     assert r["cache_write_tokens"] == 5            # ← cache_creation_input_tokens
-    assert r["cache_read_tokens"] == 200
-    assert r["total_tokens"] == 365                # ← computed_total_tokens
+    assert r["cache_read_tokens"] == 150
+    assert r["total_tokens"] == 305                # ← computed_total_tokens (input+cache_creation+output)
     assert r["duration_ms"] == 1000
     assert r["ttft_ms"] == 200                     # ← time_to_first_token_ms
-    # 手算: (50*1 + 100*3 + 200*0.2 + 5*0.5)/1e6*1e8 = 39250
-    assert r["cost_raw"] == 39250
+    # 手算: 未命中输入 200-150=50 → (50*1 + 100*3 + 150*0.2 + 5*0.5)/1e6*1e8 = 38250
+    # (缓存命中 150 只按缓存读价 0.2 计一次, 不再随全额 input 重复计费)
+    assert r["cost_raw"] == 38250
     assert r["synced_at"].endswith("Z")
 
     r2 = db.get_db().execute(
@@ -155,7 +161,7 @@ def test_first_full_import(tmp_db, zcode_source):
     assert r3["reasoning_tokens"] == 0             # None → 0
     assert r3["duration_ms"] is None               # None 保持 None
     assert r3["ttft_ms"] is None
-    assert r3["total_tokens"] == 355
+    assert r3["total_tokens"] == 305
 
 
 # ---------------------------------------------------------------------------
@@ -307,10 +313,10 @@ def test_four_layer_aggregates(tmp_db, zcode_source, monkeypatch):
     monkeypatch.setattr(db, "_now_iso", lambda: clock[0])
     # 第一次导入: p1 名为 "Plan A"
     _append_zcode_rows(zcode_source, [
-        # cost_raw = (100*1 + 200*3 + 50*0.2 + 10*0.5)*100 = 71500
+        # cost_raw = (50*1 + 200*3 + 50*0.2 + 10*0.5)*100 = 66500  [未命中输入 100-50=50]
         _zcode_row("r1", input_tokens=100, output_tokens=200, reasoning_tokens=30,
                    cache_creation_input_tokens=10, cache_read_input_tokens=50,
-                   computed_total_tokens=390, duration_ms=1000,
+                   computed_total_tokens=310, duration_ms=1000,
                    time_to_first_token_ms=200),
         # model m2 未收录定价表 → cost_raw = 0
         _zcode_row("r2", provider_id="p2", model_id="m2", input_tokens=20,
@@ -334,14 +340,14 @@ def test_four_layer_aggregates(tmp_db, zcode_source, monkeypatch):
     # --- totals ---
     t = db.zcode_totals("all")
     assert t["request_count"] == 3
-    assert t["total_input_tokens"] == 190          # (100+50+10) + 20 + 10
-    assert t["uncached_input_tokens"] == 130       # 100 + 20 + 10
+    assert t["total_input_tokens"] == 140          # (100+10) + (20+0) + (10+0)  [input+cache_write]
+    assert t["uncached_input_tokens"] == 80        # (100-50) + 20 + 10  [input-cache_read]
     assert t["total_reasoning_tokens"] == 30
     assert t["cache_hit_tokens"] == 50
     assert t["cache_write_tokens"] == 10
     assert t["total_output_tokens"] == 260         # 200 + 40 + 20
-    assert t["total_tokens"] == 480                # 390 + 60 + 30
-    assert t["total_cost_usd"] == 0.000785         # (71500+7000)/1e8
+    assert t["total_tokens"] == 400                # 310 + 60 + 30
+    assert t["total_cost_usd"] == 0.000735         # (66500+0+7000)/1e8
 
     # --- provider stats ---
     providers = db.zcode_provider_stats("all")
@@ -349,13 +355,13 @@ def test_four_layer_aggregates(tmp_db, zcode_source, monkeypatch):
     p1, p2 = providers
     assert p1["provider_name"] == "Plan A New"     # 取最新 synced_at 快照
     assert p1["request_count"] == 2
-    assert p1["total_input_tokens"] == 170         # (100+50+10) + 10
-    assert p1["uncached_input_tokens"] == 110
+    assert p1["total_input_tokens"] == 120         # (100+10) + (10+0)
+    assert p1["uncached_input_tokens"] == 60       # (100-50) + 10
     assert p1["total_reasoning_tokens"] == 30
     assert p1["cache_hit_tokens"] == 50
     assert p1["cache_write_tokens"] == 10
     assert p1["total_output_tokens"] == 220
-    assert p1["total_cost_usd"] == 0.000785        # (71500+7000)/1e8
+    assert p1["total_cost_usd"] == 0.000735        # (66500+7000)/1e8
     # 行1 rate=200*1000/800=250, 行3 rate=20*1000/400=50 → avg=150, max=250
     assert p1["avg_tps"] == 150.0
     assert p1["max_tps"] == 250.0
@@ -371,8 +377,8 @@ def test_four_layer_aggregates(tmp_db, zcode_source, monkeypatch):
     ]
     m1, m2 = models
     assert m1["provider_name"] == "Plan A New"
-    assert m1["hit_rate"] == 31.25                 # 50/(50+110)*100
-    assert m1["total_input_tokens"] == 170
+    assert m1["hit_rate"] == 45.45                 # 50/(50+60)*100 = cache/input
+    assert m1["total_input_tokens"] == 120
     assert m2["hit_rate"] == 0.0                   # 0/(0+20)*100
 
 
@@ -394,3 +400,49 @@ def test_empty_aggregates(tmp_db):
     assert db.zcode_daily(7) == []
     assert db.zcode_provider_stats("30d") == []
     assert db.zcode_model_stats("30d") == []
+
+
+# ---------------------------------------------------------------------------
+# 9. 历史 cost_raw 一次性回填 (缓存子集口径修复)
+# ---------------------------------------------------------------------------
+
+
+def test_recompute_cost_raw_backfill(tmp_db, zcode_source):
+    _append_zcode_rows(zcode_source, [_zcode_row("u1", 1000)])
+    assert _sync() == 1
+    # 模拟修复前导入的历史脏数据: 旧公式按全额 input 计费
+    # (200*1 + 100*3 + 150*0.2 + 5*0.5)*100 = 53250
+    db.get_db().execute("UPDATE zcode_usage SET cost_raw = 53250 WHERE id = 'u1'")
+    db.get_db().commit()
+
+    assert db.maybe_recompute_zcode_cost_raw(PRICING) == 1
+    r = db.get_db().execute(
+        "SELECT cost_raw FROM zcode_usage WHERE id = 'u1'"
+    ).fetchone()["cost_raw"]
+    assert r == 38250                     # 未命中输入 (200-150) 按输入价, 缓存只按缓存价
+
+    # 幂等: 标记位已置, 二次调用 0 行
+    assert db.maybe_recompute_zcode_cost_raw(PRICING) == 0
+    assert db._raw_payload(db.get_db()).get(db._ZCODE_COST_RECALC_KEY) == 1
+
+
+def test_recompute_cost_raw_empty_table(tmp_db):
+    # 空表: 置标记位并返回 0 (保证新版启动后即使无新数据也完成口径切换)
+    assert db.maybe_recompute_zcode_cost_raw(PRICING) == 0
+    assert db._raw_payload(db.get_db()).get(db._ZCODE_COST_RECALC_KEY) == 1
+
+
+def test_recompute_cost_raw_skips_without_pricing(tmp_db, zcode_source):
+    # 定价表缺失/为空: 不回填、不置标记 (否则 estimate_cost_raw 全返回 0,
+    # 会把全部历史 cost_raw 清零并误标"已完成", 不可逆)
+    _append_zcode_rows(zcode_source, [_zcode_row("u1", 1000)])
+    assert _sync() == 1
+    db.get_db().execute("UPDATE zcode_usage SET cost_raw = 53250 WHERE id = 'u1'")
+    db.get_db().commit()
+
+    assert db.maybe_recompute_zcode_cost_raw([]) == 0
+    r = db.get_db().execute(
+        "SELECT cost_raw FROM zcode_usage WHERE id = 'u1'"
+    ).fetchone()["cost_raw"]
+    assert r == 53250                                     # 原值未动
+    assert db._raw_payload(db.get_db()).get(db._ZCODE_COST_RECALC_KEY) is None

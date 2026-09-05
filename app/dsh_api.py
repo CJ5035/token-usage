@@ -14,11 +14,12 @@
 
 用法:
     from app import dsh_api
-    usage = dsh_api.get_dsh_usage()   # 带 15s TTL 缓存
+    usage = dsh_api.get_dsh_usage()   # 带 15s TTL 缓存; 过期即返 stale 并后台重扫
 """
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -376,17 +377,68 @@ def scan() -> dict[str, Any]:
     }
 
 
-# 模块级 TTL 缓存 (scan 结果 + 时间戳)
+# 模块级 TTL 缓存 (scan 结果 + 时间戳) 与后台刷新状态 (_cache_payload 引用替换
+# 在 GIL 下原子, server 层只读透传严禁原地修改)
 _cache_payload: Optional[dict[str, Any]] = None
 _cache_ts: float = 0.0
+_refreshing = False           # 防重入标志 (对齐 server.py _quota_refreshing 惰性模式)
+_fail_count = 0               # 连续失败计数 (>=3 触发降级, 经 degraded() 判定)
+_FAIL_BACKOFF_SECONDS = 60.0  # 失败退避窗 (区别于正常 TTL 15s)
+_last_fail_ts = 0.0           # 最近一次失败时刻 (退避判定基准)
 
 
 def get_dsh_usage() -> dict[str, Any]:
-    """scan() + 模块级 15s TTL 缓存 (TTL 内重复调用不重扫)."""
-    global _cache_payload, _cache_ts
+    """读 dsh 用量: 15s TTL 缓存内直接返回; 过期即返 stale 并触发后台重扫.
+
+    冷启动 (无缓存) 返回 found=false 空态不阻塞首屏; 后台重扫完成前持续
+    返回 stale, 完成后下一次调用取到新数据 (无自动轮询, 不做广播).
+    """
+    global _cache_payload, _cache_ts, _refreshing, _fail_count
     now = time.time()
     if _cache_payload is not None and now - _cache_ts < CACHE_TTL_SECONDS:
         return _cache_payload
-    _cache_payload = scan()
-    _cache_ts = now
-    return _cache_payload
+    # 后台刷新守卫: 防重入 + 连续失败 >=3 次停止自动重试 (降级路径见 scan_sync)
+    # + 失败退避 60s 内不再 spawn
+    if not _refreshing and _fail_count < 3 and now - _last_fail_ts >= _FAIL_BACKOFF_SECONDS:
+        _refreshing = True
+        threading.Thread(target=_rescan_worker, daemon=True, name="gousage-dsh-rescan").start()
+    return _cache_payload if _cache_payload is not None else _empty_result()  # 冷启动空态, found=false 天然兼容
+
+
+def degraded() -> bool:
+    """连续后台扫描失败 >=3 次的降级判定; server 层经此判定, 勿直接读 _fail_count 私有变量."""
+    return _fail_count >= 3
+
+
+def scan_sync() -> dict[str, Any]:
+    """同步扫描 (降级路径: degraded() 为真时 server 层调用, 返回新对象).
+
+    成功: 复位失败计数/退避并写缓存; 失败: 异常向上抛 (server 层 500 兜底,
+    前端 toast), 缓存与计数均不变.
+    """
+    global _cache_payload, _cache_ts, _fail_count, _last_fail_ts
+    payload = scan()
+    _cache_payload, _cache_ts = payload, time.time()
+    _fail_count = 0
+    _last_fail_ts = 0.0
+    return payload
+
+
+def _rescan_worker() -> None:
+    """后台重扫 (daemon 线程入口): 成功写缓存并复位计数; 失败记退避, 仅冷启动写空态."""
+    global _cache_payload, _cache_ts, _refreshing, _fail_count, _last_fail_ts
+    try:
+        payload = scan()
+        _cache_payload, _cache_ts, _fail_count = payload, time.time(), 0
+        _last_fail_ts = 0.0  # 退出退避窗 (_fail_count=0 已放行, 此举语义更完整)
+        print(f"[dsh] rescan ok: {payload.get('sessions_count')} sessions", flush=True)  # stale 仅日志
+    except Exception:  # noqa: BLE001 失败不外抛线程, 记退避后继续供 stale (对齐
+        # _ensure_quota_async "失败也写缓存, 防前端无限刷新" 意图)
+        _fail_count += 1
+        _last_fail_ts = time.time()
+        if _cache_payload is None:
+            # 仅冷启动失败写空态 (消解 payload=None 时 TTL 短路永不命中的退避漏洞);
+            # 热态失败【保留 stale 真数据】, 禁止用空态覆盖已持真数据
+            _cache_payload = _empty_result()
+    finally:
+        _refreshing = False

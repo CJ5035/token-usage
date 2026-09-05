@@ -314,13 +314,14 @@ class TestScanAggregation:
 # ---------------------------------------------------------------------------
 
 class TestCache:
-    def test_ttl_within_cache_no_rescan_then_refresh(self, tmp_path, monkeypatch):
+    def test_ttl_within_cache_no_rescan(self, tmp_path, monkeypatch):
+        """TTL 内直接复用缓存同一对象, 不重扫 (后台化后"过期返 stale + 后台重扫"
+        行为由 test_dsh_background.py 覆盖; 冷启动不再同步扫, 热态用 scan_sync 建立)."""
         _patch_root(monkeypatch, tmp_path)
-        fake = {"now": 1000.0}
-        monkeypatch.setattr(dsh_api.time, "time", lambda: fake["now"])
         events = [_ctx("p", "m"), _msg(1, 1, 0, {"inputTokens": 1, "outputTokens": 1})]
         _write_session(tmp_path, "ws", "session-1", events)
 
+        dsh_api.scan_sync()  # 同步扫描建立热态缓存 (避免真实后台线程的时序不稳定)
         r1 = dsh_api.get_dsh_usage()
         assert r1["found"] is True
         assert r1["sessions_count"] == 1
@@ -330,9 +331,3 @@ class TestCache:
         r2 = dsh_api.get_dsh_usage()
         assert r2 is r1
         assert r2["sessions_count"] == 1
-
-        # 过期后: 重扫取新值
-        fake["now"] += dsh_api.CACHE_TTL_SECONDS + 1
-        r3 = dsh_api.get_dsh_usage()
-        assert r3 is not r1
-        assert r3["sessions_count"] == 2

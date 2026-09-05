@@ -1,8 +1,8 @@
 # Bug 诊断报告：ZCode 本地用量总 TOKEN 与官方使用统计页不一致
 
-- **日期**：2026-09-04
-- **状态**：已确认（公式无 Bug，为统计口径差异 + 对比时间截面不同）
-- **严重级别**：P3 轻微（展示口径易误解，非计算错误）
+- **日期**：2026-09-04（2026-09-05 复诊更正，见文末"复诊与结论反转"）
+- **状态**：已修复（2026-09-05 按修复方案 v2 实施；历史 cost_raw 随新版首次启动自动回填）
+- **严重级别**：P1 严重（总 TOKEN 虚增 ~93%、估算费用虚增 4~5 倍、命中率显示 ~48% 实为 ~94%）
 - **报告人**：ZCode Agent（Bug Diagnosis Skill）
 
 ---
@@ -106,7 +106,8 @@ ZCode 本机库 cli/db/db.sqlite 的 model_usage 表
       总TOKEN = total_input + total_output + total_reasoning   [app/web/app.js:806]  ← KPI 348.61M
 
 【ZCode 官方侧】
-model_usage.computed_total_tokens (= input + cache_creation + output, 不含 cache_read)
+model_usage.computed_total_tokens (= input + cache_creation + output；
+    初诊误注"不含 cache_read"——实际 input 为全量输入、已含 cache_read，见复诊)
   → 官方云端聚合 → 使用统计页（2.1亿 / 累计16.9亿）
 ```
 
@@ -125,6 +126,10 @@ model_usage.computed_total_tokens (= input + cache_creation + output, 不含 cac
 
 ## 总结与建议
 
+> ⚠️ **【本节为初诊结论，已被 2026-09-05 复诊推翻】** 下文"程序计算公式没有错误""官方不含缓存命中"
+> 以及上方调用链/边缘情况表中"加法正确"等论断均不再成立；准确结论、行号与修复方案以下方
+> "复诊与结论反转"章节为准。初诊内容仅保留作复盘依据。
+
 **一句话结论：程序计算公式没有错误。** GoGauge"总 TOKEN 消耗"按"含缓存命中"的总消耗口径统计
 （348.61M = 未命中输入 178.72M + 缓存命中 168.05M + 输出/推理 1.84M，且为 16:53 的快照截面）；
 ZCode 官方页面的 Token 数不含缓存命中（同刻约 1.80 亿、18:48 实时为 2.1 亿）。
@@ -136,3 +141,111 @@ ZCode 官方页面的 Token 数不含缓存命中（同刻约 1.80 亿、18:48 �
 1. 【推荐】在"ZCode 本地用量"的"总 TOKEN 消耗"卡加副标题/tooltip，注明"含缓存命中，官方页面不计缓存命中"。
 2. 可选：KPI 增加官方口径对照值（`SUM(total_tokens)`，数据已入库，仅前端展示改动）。
 3. 可选：调查同步水位对"迟到写入行"的潜在漏采（见边缘情况表）。
+
+---
+---
+
+# 复诊与结论反转（2026-09-05）
+
+## 触发线索
+
+用户提供新证据：**ZCode 官方给出的缓存命中率约 95%**。而初诊采用的"input 与 cache_read 互斥"解释推不出这个数
+（该解释下全库命中率仅 48.5%），初诊结论存疑，遂复诊。
+
+## 决定性证据：cache_read ⊆ input_tokens（子集，非互斥）
+
+直接检验 ZCode 源库 `~/.zcode/cli/db/db.sqlite` 的 model_usage 全部原始记录：
+
+| 判别测试 | 结果 | 含义 |
+|---|---|---|
+| `cache_read > input_tokens` 的行数 | **0 / 17,019**（有缓存的行） | 互斥解释下命中率≈50%必有一半行 cache>input，实际 0 行 → 互斥不成立 |
+| `input=0 且 cache>0` 的行数 | **0** | 互斥解释下"全命中"请求应存在，实际不存在 |
+| `input_tokens - cache_read` 最小值 | **3**（17,019 行全部 ≥3） | 典型提示词缓存模式：全量输入，仅新后缀未命中 |
+| 全库命中率 `cache/input` | **94.0%** | ≈ 官方 95% ✓（互斥解释 48.5% ✗） |
+| 今天 0~9 点命中率 `cache/input` | **94.4%** | ≈ 官方 95% ✓ |
+
+单条记录示例（今天缓存最多的一条）：input=352,922、cache_read=351,744、output=1,178
+→ 该请求提示词共 35.3 万 token，99.7% 命中缓存，仅 1,178 token 新增。**input 是全量输入，cache_read 是其中的子集。**
+
+对照另两个数据源（确认 Bug 仅限 ZCode，是照抄口径时语义错配）：
+
+| 表 | cache>input 行数 | 语义 | 现行公式 |
+|---|---|---|---|
+| zcode_usage | 0 / 17,002 有缓存行 | **cache ⊆ input（子集）** | **错（双算）** |
+| claudecode_usage | 12,633 / 14,803 | 互斥（Anthropic JSONL） | 正确 |
+| usage_records（BAI） | 14,553 / 16,491 | 互斥 | 正确 |
+
+## 更正后的根因
+
+`_ZCODE_AGG_COLS`（app/db.py:1493-1502）与 `estimate_cost_raw`（app/zcode_api.py:418-423）
+按 BAI/Claude Code 的"input 与 cache 互斥"口径编写，但 ZCode 本地库的 `input_tokens`
+是**已包含缓存命中的全量输入**，导致：
+
+1. **总 TOKEN 消耗虚增**：`total_input = SUM(input + cache_read + cache_write)` 把缓存加了两遍。
+   用户截图 348.61M = 180.44M（真实，即官方口径 computed_total）+ 168.05M（缓存重复计入）+ 0.12M（推理另加）。
+   用户最初的怀疑"将总 token 和缓存 token 相加了"**完全正确**。
+2. **"未命中输入"标错**：`uncached_input_tokens = SUM(input_tokens)`（db.py:1496）实为全量输入。
+3. **缓存命中率显示错误**：`hit/(hit+miss)`（db.py:1777 等）中 miss 实为全量输入 → 显示 ~48.5%，实际 ~94%。
+4. **估算费用虚增 4~5 倍**：缓存部分先按全额输入价（0.075 USD/M）计费、再按缓存读价（0.015 USD/M）计一遍。
+   实测（同一定价表）：今天 0~9 点现行 $12.94 vs 修正 $3.04（4.3 倍）；9月4日全天 $145.69 vs $28.42（5.1 倍）。
+
+## 初诊为何出错（复盘）
+
+- 初诊验证"官方 2.1亿 = SUM(computed_total)"成立（这部分仍有效），但把 `input_tokens` 误读为"未命中输入"，
+  构造出了"GoGauge 含缓存、官方不含缓存"的错误口径故事。该故事与"差值恰等于 cache_read"的算术同样自洽
+  （两种解释都能对账），因此未被当日数据推翻。
+- 初诊"证据三（反证法）"是循环论证：官方累计 16.9亿 = SUM(computed_total) 在两种解释下都成立，不具判别力。
+- 判别性证据（cache 是否 ⊆ input、官方命中率 95%）当日未采集。教训：**字段语义必须用源数据逐行检验，
+  不能靠恒等式反推**。
+
+## 复诊后的问题定位（行号对齐 v2.2.0 / commit 8fc12d9）
+
+| 位置 | 问题 |
+|---|---|
+| app/db.py:1527 | `total_input_tokens = SUM(input + cache_read + cache_write)` 双算 cache_read（input 已含缓存命中） |
+| app/db.py:1528 | `uncached_input_tokens = SUM(input_tokens)` 实为全量输入，应为 `SUM(input - cache_read)` |
+| app/db.py:1573 | `estimate_cost_raw(model_id, input_tokens, ...)` 传入全量 input，缓存部分按输入价+缓存价双计费 |
+| app/db.py:1775 | hit_rate 分母 miss 取全量 input → 显示 ~48%（miss 修正后 hit/(hit+miss) 自动 = cache/input ≈ 94%） |
+| 镜像表已入库数据 | cost_raw 全部按错误公式写入，需重算；token 原始列本身无误 |
+| tests/test_zcode_sync.py | 夹具与断言编码了错误语义（见修复方案第 4 条），修复后必须同步更新 |
+
+**仓库内正确先例**：CommandCode 的 `_CHARTS_AGG_COLS`（app/db.py:855-864）注释明确
+"tokens_in 是含缓存命中的总输入，未缓存输入 = tokens_in - cache_read_tokens"。
+ZCode 实现应回归该模式（唯一差异：ZCode 源库的 computed_total = input + cache_creation + output
+把 cache_creation 作为独立加数，故 ZCode 的 total_input = input + cache_write）。
+
+## 修复方案 v2（待用户确认后实施；v1 经 review 修订）
+
+1. **聚合公式** `_ZCODE_AGG_COLS`（app/db.py:1525-1535）：
+   - `total_input_tokens = SUM(input_tokens + cache_write_tokens)`
+   - `uncached_input_tokens = SUM(input_tokens - cache_read_tokens)`（照 `_CHARTS_AGG_COLS` 先例，不加防御性 MAX——源数据恒 input ≥ cache_read）
+   - hit_rate 公式（app/db.py:1775 等）无需改动：miss 修正后 hit/(hit+miss) = cache/input，自动正确
+   - 两处内联排序键同步改为新口径：zcode_provider_stats（app/db.py:1727）、
+     zcode_model_stats（app/db.py:1768）。
+     ⚠️ 同型的 claudecode ORDER BY（app/db.py:2044/2075）为互斥语义（该表公式正确），勿改
+   - **假设声明**：cache_write 与 input 互斥。依据：ZCode 源库 17,901 行逐行满足
+     computed_total = input + cache_creation + output，ZCode 自身将 cache_creation 作独立加数。
+     本机 cache_write 恒 0，该假设不影响现网数据；未来出现非 0 数据时需复核。
+2. **导入侧费用估算**（app/db.py:1573-1575）：改传 `input_tokens - cache_read` 作为 input
+   （不动 bai_api 共用的 estimate_cost_raw，其互斥语义对 BAI/Claude Code 仍正确）。
+3. **历史数据回填**：cost_raw 无法用纯 SQL 重算（定价表 JSON + 模型名归一匹配是 Python 逻辑）。
+   在 db.py 增加幂等回填函数（读全表行 → 复用 estimate_cost_raw 以
+   (input-cache_read, output, cache_read, cache_write) 重算 → 批量 UPDATE），
+   启动同步后执行一次，settings 标记位（zcode_cost_recalc_v1）防重入。
+4. **测试更新**（tests/test_zcode_sync.py）：
+   - 夹具改为真实语义：input ⊇ cache_read（如 input=200, cache_read=150）、
+     computed_total = input + cache_creation + output；
+   - 更新断言：total_input_tokens / uncached_input_tokens / cost_raw 全部按新公式；
+   - 新增回归断言：hit_rate = cache/input、SUM(total_tokens) 恒等式；
+   - 全量 pytest 通过（项目规则：测试通过才算修改完成）。
+5. **前端**：app.js:868 的 ZCode KPI 公式（total_input + output + reasoning）保持不变
+   （与其他区块统一）；"输入(含缓存命中)"列头文案仍准确。
+6. **部署**：build.bat 重建分发并替换 `D:\绿色版\GoGauge` 实例；该实例 gousage.db 的
+   cost_raw 回填随新版首次启动自动完成。
+7. **回归验收**：
+   - ZCode"总 TOKEN 消耗" = SUM(total_tokens) + 推理量（本机 0.01 亿，<0.1%。
+     注：若需严格等于官方口径可去掉 KPI 的 reasoning 项，但会与其他区块公式不一致，暂不处理）
+   - 缓存命中率显示 ~94%（可与官方 ~95% 对照）
+   - 估算费用回落至修正值（9月4日全天约 $28 而非 $145）
+   - 与官方页面同窗口一致（方法：任选时间窗口，GoGauge"总 TOKEN 消耗" − 推理量 ≈ 官方该窗口
+     Token 数；此前实测参考：今日 0~9 点官方口径为 1.4165 亿、9月4日全天 2.1 亿）

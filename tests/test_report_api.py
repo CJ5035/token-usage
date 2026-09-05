@@ -51,15 +51,15 @@ def _seed_channels():
     return ids
 
 
-def _seed_local(iso: str = "2026-09-01T08:30:00Z", z_in=30, z_out=50, c_in=20, c_out=40):
+def _seed_local(iso: str = "2026-09-01T08:30:00Z", z_in=30, z_out=50, c_in=20, c_out=40, z_cr=0, z_cw=0):
     """本地镜像渠道造数 (R6): zcode_usage/claudecode_usage 各 1 行, 直 INSERT (表结构 db.py:190/216)."""
     conn = db.get_db()
     conn.execute(
         "INSERT INTO zcode_usage (id, started_at, provider_id, provider_name, model_id, status,"
         " input_tokens, output_tokens, reasoning_tokens, cache_write_tokens, cache_read_tokens,"
         " total_tokens, cost_raw, synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        ("z1", iso, "prov-1", "Provider1", "glm-4", "ok", z_in, z_out, 0, 0, 0,
-         z_in + z_out, (z_in + z_out) * 100_000, "2026-09-01T09:00:00"),
+        ("z1", iso, "prov-1", "Provider1", "glm-4", "ok", z_in, z_out, 0, z_cw, z_cr,
+         z_in + z_cw + z_out, (z_in + z_out) * 100_000, "2026-09-01T09:00:00"),
     )
     conn.execute(
         "INSERT INTO claudecode_usage (dedupe_key, session_id, model, channel, started_at,"
@@ -340,11 +340,13 @@ def test_report_hourly_buckets_and_channel_totals(tmp_report_db):
 def test_report_hourly_and_totals_local_dispatch(tmp_report_db):
     """R6: hourly 三表 UNION; channel_totals/channel_trend 按渠道分派本地表."""
     _seed_channels()
-    _seed_local(iso=_today_iso(10), z_in=30, z_out=50, c_in=20, c_out=40)
+    _seed_local(iso=_today_iso(10), z_in=30, z_out=50, c_in=20, c_out=40, z_cr=10, z_cw=2)
     h = db.report_hourly("today")
-    assert sum(h["series"]["zcode"]) == 80 and sum(h["series"]["claudecode"]) == 60
+    assert sum(h["series"]["zcode"]) == 80 and sum(h["series"]["claudecode"]) == 60   # in+out+reason, 与缓存无关
     t = db.channel_totals("today", "zcode")
-    assert t["request_count"] == 1 and t["total_input_tokens"] == 30 + 0 + 0   # input+cache_read+cache_write
+    assert t["request_count"] == 1 and t["total_input_tokens"] == 30 + 2      # input+cache_write
+    assert t["uncached_input_tokens"] == 30 - 10                              # input-cache_read
+    assert t["hit_rate"] == 33.33                                             # 10/(10+20)*100
     assert t["total_cost_usd"] == pytest.approx(80 * 100_000 / 1e8)
     tr = db.channel_trend("today", "claudecode")
     assert sum(x["output"] for x in tr) == 40
@@ -412,3 +414,30 @@ def test_range_sql_local_day_semantics(tmp_report_db):
     sql = ("SELECT COUNT(*) FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
            f" WHERE {where}")
     assert db.get_db().execute(sql, params).fetchone()[0] == 1
+
+
+def test_local_mirror_predicate_uses_expression_index(tmp_report_db):
+    """EVOLUTION-5 §2: zcode/cc 镜像表同款 UTC 表达式索引必须命中.
+    用 _report_range_sql 生成与生产逐字一致的谓词 (防手写测试 SQL 与生产漂移),
+    zcode(z.started_at) / claudecode(c.started_at) 两段各断言 SEARCH USING INDEX."""
+    conn = db.get_db()
+    conn.execute(
+        "INSERT INTO zcode_usage (id, started_at, cost_raw, synced_at)"
+        " VALUES ('z-ix', '2026-09-01T08:30:00Z', 0, '2026-09-01T08:30:00Z')")
+    conn.execute(
+        "INSERT INTO claudecode_usage (dedupe_key, started_at, cost_raw, synced_at)"
+        " VALUES ('c-ix', '2026-09-01T08:30:00Z', 0, '2026-09-01T08:30:00Z')")
+    conn.commit()
+    for range_ in ("today", "7d"):
+        z_where, z_params = db._report_range_sql(range_, "z.started_at")
+        plan = " | ".join(r["detail"] for r in conn.execute(
+            f"EXPLAIN QUERY PLAN SELECT COUNT(*) FROM zcode_usage z WHERE {z_where}",
+            z_params).fetchall())
+        assert "SEARCH" in plan and "INDEX idx_zcode_utc" in plan, \
+            f"{range_} zcode 谓词未命中 idx_zcode_utc: {plan}"
+        c_where, c_params = db._report_range_sql(range_, "c.started_at")
+        plan = " | ".join(r["detail"] for r in conn.execute(
+            f"EXPLAIN QUERY PLAN SELECT COUNT(*) FROM claudecode_usage c WHERE {c_where}",
+            c_params).fetchall())
+        assert "SEARCH" in plan and "INDEX idx_cc_utc" in plan, \
+            f"{range_} claudecode 谓词未命中 idx_cc_utc: {plan}"

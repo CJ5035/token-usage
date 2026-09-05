@@ -17,6 +17,7 @@ import time
 import webview
 
 from . import bai_channel
+from . import dsh_api
 from . import db, server
 from .auth import _login_window_title, LoginWatcher, build_login_url
 
@@ -472,6 +473,9 @@ def main() -> None:
     threading.Thread(target=server.claude_import_async, daemon=True, name="gousage-claude-import").start()
     # ZCode 额度缓存启动预热 (问题5): 首个 /api/zcode/quota 请求免 15s 同步首采
     threading.Thread(target=server.zcode_quota_warmup, daemon=True, name="gousage-zcode-quota-warm").start()
+    # DSH 用量启动预热 (EVOLUTION-5): 触发一次后台预热扫描 (get_dsh_usage 冷启动
+    # 即 spawn daemon 线程, 不阻塞), 预热完成后首页/统计页 dsh 行免冷启动空窗
+    dsh_api.get_dsh_usage()
     # 汇率缓存启动预热 (请求线程已不再外呼): 后台拉一次, 失败保留兜底 7.2
     threading.Thread(target=server._refresh_usd_cny, daemon=True, name="gousage-exchange-warm").start()
     dashboard_url = f"http://{host}:{port}/"

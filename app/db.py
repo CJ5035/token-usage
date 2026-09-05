@@ -308,6 +308,12 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_usage_utc ON usage_records(datetime(created_at))"
     )
+    # 迁移 2e (EVOLUTION-5): zcode/cc 镜像表同款 UTC 表达式索引, 对齐上方 2d 模式 —
+    # 报表三表 UNION 的 zcode/claudecode 段谓词 datetime(z.started_at) >= datetime(?)
+    # 与索引表达式逐字匹配后自动命中 (datetime 单参确定性可入索引; substr+localtime
+    # 非确定性修饰符已被 2d 注释记载否决). 存量库首次建索引一次性开销秒级.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_zcode_utc ON zcode_usage(datetime(started_at))")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cc_utc ON claudecode_usage(datetime(started_at))")
 
     # 迁移 2b: 旧库 accounts 补充 source 列 (缺则补, 幂等; 老行默认 'opencode')
     acc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
@@ -1520,12 +1526,14 @@ CASE WHEN COALESCE(output_tokens, 0) >= 10 AND ({_ZCODE_GEN_SQL}) >= 100
 _ZCODE_TTFT_SQL = """
 CASE WHEN ttft_ms >= 0 AND ttft_ms <= duration_ms THEN ttft_ms END"""
 
-# 公共聚合列: token/费用口径与 usage_records 侧 totals/daily_stats 对齐
-# (total_input 含缓存命中与缓存写入; 费用由 cost_raw 换算 USD)
+# 公共聚合列. 口径: zcode 源库 input_tokens 为全量输入 (cache_read ⊆ input,
+# 与 usage_records/claudecode_usage 的 "input 与 cache 互斥" 语义不同),
+# 参照 _CHARTS_AGG_COLS: total_input = input + cache_write (缓存写为独立加数);
+# 未命中输入 = input - cache_read; total_tokens 即源库 computed_total (官方口径)
 _ZCODE_AGG_COLS = """
                COUNT(*) AS request_count,
-               COALESCE(SUM(input_tokens + cache_read_tokens + cache_write_tokens), 0) AS total_input_tokens,
-               COALESCE(SUM(input_tokens), 0) AS uncached_input_tokens,
+               COALESCE(SUM(input_tokens + cache_write_tokens), 0) AS total_input_tokens,
+               COALESCE(SUM(input_tokens - cache_read_tokens), 0) AS uncached_input_tokens,
                COALESCE(SUM(reasoning_tokens), 0) AS total_reasoning_tokens,
                COALESCE(SUM(cache_read_tokens), 0) AS cache_hit_tokens,
                COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
@@ -1570,8 +1578,11 @@ def import_zcode_usage(rows: list[dict[str, Any]],
         cache_read = int(r.get("cache_read_input_tokens") or 0)
         cache_write = int(r.get("cache_creation_input_tokens") or 0)
         model_id = r.get("model_id") or ""
+        # ZCode 源库 input_tokens 已含缓存命中 (cache_read ⊆ input):
+        # 输入按未命中部分 (input-cache_read) 计价, 缓存读/写另按各自单价,
+        # 避免缓存命中先随全额 input 计费、再按缓存价重复计费
         cost_raw = estimate_cost_raw(
-            model_id, input_tokens, output_tokens, cache_read, cache_write, pricing_models
+            model_id, input_tokens - cache_read, output_tokens, cache_read, cache_write, pricing_models
         )
         payload.append((
             r.get("id"), started_iso, r.get("session_id"), r.get("provider_id"),
@@ -1613,6 +1624,52 @@ def save_zcode_watermark(ms: int) -> None:
         data[_ZCODE_WATERMARK_KEY] = int(ms)
         _write_payload(conn, data)
         conn.commit()
+
+
+_ZCODE_COST_RECALC_KEY = "zcode_cost_recalc_v1"
+
+
+def maybe_recompute_zcode_cost_raw(pricing_models: list[dict[str, Any]] | None = None) -> int:
+    """一次性按缓存子集口径重算 zcode_usage.cost_raw, 返回重算行数.
+
+    修复前导入的行按全额 input 计费, 缓存命中部分被双算 (input 已含缓存命中,
+    cache_read 又单算一次); 此处统一按 estimate_cost_raw(input-cache_read,
+    output, cache_read, cache_write) 重算. 幂等: settings 标记位防重入,
+    二次调用直接返回 0. 定价表缺失/为空时不更新也不置标记 (防止把历史
+    cost_raw 全表清零后误标完成), 待定价可用后随下次同步重跑.
+    """
+    conn = get_db()
+    if _raw_payload(conn).get(_ZCODE_COST_RECALC_KEY):
+        return 0
+    from .zcode_api import _load_model_pricing, estimate_cost_raw
+
+    models = pricing_models if pricing_models is not None else _load_model_pricing()
+    if not models:
+        return 0
+    # 只锁事务段 (仿 import_zcode_usage 先例): SELECT → 全表重算 → 置标记 → commit
+    # 需互斥, 防共享单连接上其他线程的写语句插入本事务; 定价加载与开头的
+    # flag 快速路径检查留在锁外
+    with _DB_LOCK:
+        rows = conn.execute(
+            "SELECT id, model_id, input_tokens, output_tokens,"
+            " cache_read_tokens, cache_write_tokens FROM zcode_usage"
+        ).fetchall()
+        conn.executemany(
+            "UPDATE zcode_usage SET cost_raw = ? WHERE id = ?",
+            [
+                (estimate_cost_raw(
+                    r["model_id"], r["input_tokens"] - r["cache_read_tokens"],
+                    r["output_tokens"], r["cache_read_tokens"], r["cache_write_tokens"],
+                    models,
+                ), r["id"])
+                for r in rows
+            ],
+        )
+        data = _raw_payload(conn)
+        data[_ZCODE_COST_RECALC_KEY] = 1
+        _write_payload(conn, data)
+        conn.commit()
+    return len(rows)
 
 
 _ZCODE_PERIOD_CLAUSES = {
@@ -1724,7 +1781,7 @@ def zcode_provider_stats(period: str = "30d") -> list[dict[str, Any]]:
         FROM zcode_usage z1
         {where}
         GROUP BY z1.provider_id
-        ORDER BY (SUM(input_tokens + cache_read_tokens + cache_write_tokens)
+        ORDER BY (SUM(input_tokens + cache_write_tokens)
                   + SUM(output_tokens)) DESC
         """,
         params,
@@ -1765,7 +1822,7 @@ def zcode_model_stats(period: str = "30d") -> list[dict[str, Any]]:
         FROM zcode_usage z1
         {where}
         GROUP BY z1.provider_id, z1.model_id
-        ORDER BY (SUM(input_tokens + cache_read_tokens + cache_write_tokens)
+        ORDER BY (SUM(input_tokens + cache_write_tokens)
                   + SUM(output_tokens)) DESC
         """,
         params,
@@ -2512,8 +2569,8 @@ def channel_totals(range_: str, channel: str) -> dict[str, Any]:
         row = get_db().execute(
             f"SELECT COUNT(*) request_count,"
             f" COUNT(DISTINCT CASE WHEN z.session_id IS NOT NULL AND z.session_id != '' THEN z.session_id END) session_count,"
-            f" SUM(z.input_tokens + z.cache_read_tokens + z.cache_write_tokens) total_input_tokens,"
-            f" SUM(z.input_tokens) uncached_input_tokens,"
+            f" SUM(z.input_tokens + z.cache_write_tokens) total_input_tokens,"
+            f" SUM(z.input_tokens - z.cache_read_tokens) uncached_input_tokens,"
             f" SUM(z.output_tokens) total_output_tokens,"
             f" SUM(z.reasoning_tokens) total_reasoning_tokens,"
             f" SUM(z.cache_read_tokens) cache_hit_tokens,"

@@ -721,6 +721,7 @@ def _sync_zcode_local() -> int:
     """
     global _zcode_sync_error
     try:
+        db.maybe_recompute_zcode_cost_raw()  # 历史 cost_raw 一次性口径回填 (标记位幂等, 二次起空转)
         wm = db.get_zcode_watermark()
         rows = zcode_api.collect_local_usage(wm - _ZCODE_OVERLAP_MS)
         if not rows:
@@ -1285,6 +1286,12 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
     if route == "/api/dsh/usage" and method == "GET":
         # 永远 200, 数据缺失由 found:false 表达; TTL 缓存在 dsh_api 模块内部 (15s).
         # get_dsh_usage() 返回模块缓存对象本体, 此处只读透传, 严禁原地修改
+        # (scan_sync 降级路径返回新对象, 同样只读透传).
+        if dsh_api.degraded():
+            # 连续 3 次后台扫描失败的降级: 同步重扫一次; 失败异常透传由外层 500
+            # 兜底, 前端 catch 后 toast 且保留旧内容
+            _json_response(handler, dsh_api.scan_sync())
+            return
         _json_response(handler, dsh_api.get_dsh_usage())
         return
 
