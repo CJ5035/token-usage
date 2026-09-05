@@ -251,7 +251,6 @@ let state = {
 
 const COLOR = { input: "#4f8ef7", output: "#22c55e", reasoning: "#a78bfa", cache: "#06b6d4", cost: "#d97706" };
 const QUOTA_LABEL = { "5h Rolling": () => t("rolling"), "Weekly": () => t("weekly"), "Monthly": () => t("monthly"), "MCP Monthly": () => t("mcpMonthly") };
-const PLAN_BADGE = { lite: "GO", sub: "GO", byok: "BYOK" };
 
 /* ---------------- 格式化 ---------------- */
 function fmtTokens(n) {
@@ -446,8 +445,7 @@ function applyDarkMode(on) {
   $("tb-theme").innerHTML = `◐ <span data-i18n="${on ? "themeLight" : "themeDark"}">${on ? t("themeLight") : t("themeDark")}</span>`;
   try { localStorage.setItem("gousage-dark", on ? "1" : "0"); } catch (e) { /* ignore */ }
   syncThemePills();
-  refreshIcons();
-  rerenderCharts();
+  rerenderCharts();   // EVOLUTION-4: refreshIcons 并入 rerenderCharts 末尾 (唯一入口, 消除双调用重复重建)
 }
 function syncThemePills() {
   document.querySelectorAll("#set-theme-pills .pill").forEach((b) => b.classList.toggle("active", b.dataset.v === (state.darkMode ? "dark" : "light")));
@@ -515,6 +513,7 @@ function renderDashboardError(e) {
 /* ---------------- 数据加载 ---------------- */
 let loadSeq = 0;
 let chSeq = 0;   // 单渠道响应序号: 快速连点渠道 tab 时丢弃旧响应 (方案4④)
+let allSeq = 0;  // all 分支响应序号: 与 chSeq 独立 (各自独立 seq 最小方案; #report-all/#report-single 独立容器, 切换必重发, 级联失效仅在实测乱序覆盖时再加)
 async function loadDashboard(quiet = false) {
   if (state.page === "home") {
     renderChannelTabs();                     // 每次刷新渠道列表(账号增减/删除回退)
@@ -545,6 +544,9 @@ async function loadDashboard(quiet = false) {
       api(`/api/accounts/overview`),
     ]).then(([totals, trend, ov]) => {
       if (seq !== chSeq) return;                          // 新增: 过期响应丢弃
+      // EVOLUTION-4: 单渠道 24h trend 缓存, 切主题零请求重渲 (声明见 loadReportAll 前)。
+      // seq 守卫块内 state.channel/state.range 即本次请求值 (最新胜出即写入键校验)
+      chTrendCache = { channel: state.channel, range: state.range, data: trend };
       $("report-single").classList.remove("swapping");    // 新增
       const chAccounts = ov.accounts.filter((a) => a.source === state.channel);
       renderQuotaSingle(chAccounts);
@@ -901,7 +903,7 @@ function renderZcodeSummary(data) {
   chartZcodeTrend(data.daily7 || []);
 }
 /* 7 日趋势: Token + 估算费用两条线, 固定近 7 天窗口 (数据源 daily7, 不随 range 变化) */
-function chartZcodeTrend(daily7) {
+function chartZcodeTrend(daily7, noAnim) {
   const canvas = $("zcode-trend-chart");
   const emptyEl = $("zcode-trend-empty");
   if (!canvas) return;
@@ -922,6 +924,7 @@ function chartZcodeTrend(daily7) {
     },
     options: {
       responsive: false, maintainAspectRatio: false,
+      animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
@@ -938,21 +941,27 @@ function chartZcodeTrend(daily7) {
 }
 
 /* ---------------- 统计页: DSH 本地用量区块 ---------------- */
-/* 数据源 /api/dsh/usage (TTL 缓存在后端 dsh_api 模块内部, 端点不加缓存);
-   found=false → 显示空态文案; fetch 异常 → 整块隐藏 (照 ZCode 容错);
+/* 数据源 /api/dsh/usage (后端 dsh_api 模块 TTL 缓存 + 后台刷新, 降级时端点同步扫描);
+   found=false → 显示空态文案; fetch 异常 → 保留旧内容 + toast (EVOLUTION-5 降级路径:
+   不再静默隐藏整块; 若本就无旧内容即冷启动失败, 容器维持初始 hidden 兜底);
+   loadDshUsage 不加序号守卫: 降级同步扫描期间并发请求后到胜出 (renderDsh 全量重渲幂等);
    注意: 后端返回模块缓存对象本体, 只读消费, 严禁原地修改;
    providers/models 仅总量口径: today 档保持总量数据并显示口径说明 (dshTodayTableNote) */
 let dshUsageLast = null;
 async function loadDshUsage() {
   const box = $("dsh-stats");
   if (!box) return;
+  box.classList.add("swapping");                       // 请求前加载态 (复用 .swapping)
   try {
     const data = await api("/api/dsh/usage");
-    dshUsageLast = data;
+    dshUsageLast = data;   // 存活赋值: 语言切换重渲与 #dsh-dim 档位 seg 重渲的唯一数据源, 勿丢
     renderDsh(data);
+    box.classList.remove("swapping");
   } catch (e) {
-    dshUsageLast = null;
-    box.hidden = true;  // DSH 端点不可用: 不显示错误, 容器隐藏
+    box.classList.remove("swapping");
+    // 失败保留旧内容 (不清空/隐藏): 置 dshUsageLast = null 会使保留的旧 DOM 与缓存脱钩
+    // (语言切换后新旧语言混杂), 旧静默隐藏语义已随 EVOLUTION-5 废弃
+    toast(t("loadFailed") + ": " + e);
   }
 }
 function dshRenderHeads() {
@@ -1102,7 +1111,7 @@ function renderClaudecodeSummary(data) {
   chartClaudecodeTrend(data.daily7 || []);
 }
 /* 7 日趋势: Token + 估算费用两条线, 固定近 7 天窗口 (数据源 daily7, 不随 range 变化) */
-function chartClaudecodeTrend(daily7) {
+function chartClaudecodeTrend(daily7, noAnim) {
   const canvas = $("claudecode-trend-chart");
   const emptyEl = $("claudecode-trend-empty");
   if (!canvas) return;
@@ -1123,6 +1132,7 @@ function chartClaudecodeTrend(daily7) {
     },
     options: {
       responsive: false, maintainAspectRatio: false,
+      animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
@@ -1156,7 +1166,7 @@ function renderOverview(totals, source) {
 
 /* ---------------- 首页: 今日趋势 24h ---------------- */
 let cToday = null;
-function chartToday(trend) {
+function chartToday(trend, noAnim) {
   const canvas = $("today-chart");
   if (cToday) cToday.destroy();
   const box = canvas ? canvas.parentElement : null;
@@ -1173,6 +1183,7 @@ function chartToday(trend) {
     },
     options: {
       responsive: false, maintainAspectRatio: false,
+      animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       interaction: { mode: "index", intersect: false },
       plugins: { legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } } },
       scales: {
@@ -1213,7 +1224,7 @@ function renderDetail6(totals) {
 
 /* ---------------- 统计页: 模型用量 ---------------- */
 let cModel = null;
-function chartModel(models) {
+function chartModel(models, noAnim) {
   const canvas = $("mr-chart");
   if (cModel) cModel.destroy();
   if (!models || !models.length) { cModel = null; $("mr-list").innerHTML = ""; return; }
@@ -1232,6 +1243,7 @@ function chartModel(models) {
     },
     options: {
       responsive: false, maintainAspectRatio: false, cutout: "60%",
+      animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       plugins: {
         legend: { position: "right", labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
         tooltip: { callbacks: { label: (it) => ` ${it.label}: ${fmt(it.parsed)}${total ? ` (${((it.parsed / total) * 100).toFixed(1)}%)` : ""}` } },
@@ -1248,7 +1260,7 @@ function chartModel(models) {
 
 /* ---------------- 统计页: 用量趋势 ---------------- */
 let cTrend = null;
-function chartTrend(trend) {
+function chartTrend(trend, noAnim) {
   const canvas = $("trend-chart");
   if (cTrend) cTrend.destroy();
   if (!trend || !trend.length) { cTrend = null; return; }
@@ -1263,6 +1275,7 @@ function chartTrend(trend) {
     },
     options: {
       responsive: false, maintainAspectRatio: false,
+      animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
@@ -1386,22 +1399,35 @@ async function loadRecords() {
 }
 
 /* ---------------- 模型图标 ---------------- */
-function modelIcon(m) {
+/* 模型名 -> 图标名解析 (EVOLUTION-4: modelIcon 与 refreshIcons 共用; 需全量迁移
+   muse→meta / hy 前缀 / 未知→deepseek 映射与暗色变体选择, 缺任一条会 404 破图) */
+function themedName(m, dark) {
   const s = String(m || "").toLowerCase();
   const base = s.split("-")[0];
   const map = { deepseek: "deepseek", glm: "glm", gpt: "gpt", grok: "grok", kimi: "kimi", meta: "meta", mimo: "mimo", minimax: "minimax", muse: "meta", qwen: "qwen", hy: "hy", claude: "claude" };
   // hy2/hy3 等混元系列模型统一使用 hy 图标 (首段非精确 hy 时按前缀匹配)
   let name = map[base];
   if (!name) name = base.startsWith("hy") ? "hy" : "deepseek";
-  const dark = document.documentElement.dataset.theme === "dark";
   // kimi 白 K 仅适配深色背景, 浅色主题切 color 变体; gpt/grok/mimo 相反, 深色主题切 color 变体
-  const themed = dark
+  return dark
     ? (["gpt", "grok", "mimo"].includes(name) ? `${name}-color` : name)
     : (name === "kimi" ? "kimi-color" : name);
-  return `<img src="icons/${themed}.svg" alt="${escapeHtml(m)}" title="${escapeHtml(m)}" style="width:16px;height:16px">`;
 }
+function modelIcon(m) {
+  const dark = document.documentElement.dataset.theme === "dark";
+  return `<img src="icons/${themedName(m, dark)}.svg" alt="${escapeHtml(m)}" title="${escapeHtml(m)}" style="width:16px;height:16px">`;
+}
+/* EVOLUTION-4: 切主题图标统一入口 — 统计页模型图重渲 (noAnim) + 四张表体图标原地换
+   src (不重建 DOM, 记录页滚动/分页/筛选态天然保持); 仅由 rerenderCharts 末尾调用 */
 function refreshIcons() {
-  if (!document.getElementById("page-stats").hidden) chartModel(state.data?.models);
+  if (!document.getElementById("page-stats").hidden && state.data) chartModel(state.data.models, true);
+  const dark = document.documentElement.dataset.theme === "dark";
+  for (const id of ["zcode-model-body", "dsh-model-body", "claudecode-model-body", "records-body"]) {
+    document.getElementById(id)?.querySelectorAll("img[alt]").forEach((img) => {
+      const next = `icons/${themedName(img.alt, dark)}.svg`;   // img.alt 属性经 escapeHtml 写入、DOM 读回原文
+      if (img.getAttribute("src") !== next) img.setAttribute("src", next);
+    });
+  }
 }
 
 /* ---------------- 组装 ---------------- */
@@ -1504,6 +1530,7 @@ async function loadOverview(quiet = false) {
   try {
     const data = await api("/api/accounts/overview");
     if (seq !== ovSeq) return; // 丢弃过期响应 (快速切换页面时旧请求)
+    ovAccountsCache = data.accounts;   // EVOLUTION-4: 原始 accounts (chartOvTrend 仅读 daily7), 切主题零请求重渲
     if (data.exchange_rate?.usd_cny) state.exchangeRate = data.exchange_rate.usd_cny;
     renderAccountOverview(data);
     // 已登录账号配额缓存缺失 (后台刷新中), 5s 后静默重拉一次
@@ -1606,7 +1633,7 @@ function sparklineSvg(values, color) {
 }
 
 /* 7 日费用对比: 全部账号合计为 总费用/请求/Token 三条线, 与用量趋势样式一致 */
-function chartOvTrend(accounts) {
+function chartOvTrend(accounts, noAnim) {
   const canvas = $("ov-trend-chart");
   if (!canvas) return;
   if (cOvTrendChart) { cOvTrendChart.destroy(); cOvTrendChart = null; }
@@ -1637,6 +1664,7 @@ function chartOvTrend(accounts) {
     },
     options: {
       responsive: false, maintainAspectRatio: false,
+      animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
@@ -2116,33 +2144,65 @@ function switchChannel(ch) {
 const CH_COLOR = { opencode: "var(--ch-opencode)", bai: "var(--ch-bai)", commandcode: "var(--ch-commandcode)",
   zcode: "var(--ch-zcode)", claudecode: "var(--ch-claudecode)", dsh: "var(--ch-dsh)" };   // 新R5 N18: 扩齐六渠道, 防分段同色
 
+/* EVOLUTION-4 模块级缓存: 切主题时 rerenderCharts 零网络请求重渲, 数据源为最近一次拉取结果.
+   写入点均带键校验/序号守卫 (防快速连点响应乱序覆盖), 读取点 (rerenderCharts) 再校验一次 */
+let reportDailyCache = null;    // {range, metric, data}  首页 all 堆叠/环形图 (range/metric 双键)
+let reportHourlyCache = null;   // {range, data} | null  首页 all 24h 图 (7d/30d/all 档置 null)
+let chTrendCache = null;        // {channel, range, data} 首页单渠道 24h 图 (键控 state.range, 非接口 date 二值参数)
+let ovAccountsCache = null;     // 总览页原始 data.accounts (chartOvTrend 仅读 daily7)
+
 async function loadReportAll(quiet = false) {
+  const seq = ++allSeq;                               // 快速连点档位/指标时丢弃过期响应 (对齐单渠道 chSeq, 方案4④)
+  const box = $("report-all");
+  box.classList.add("swapping");                      // 旧内容不清空 (隐式 SWR, 禁止再设计独立 SWR 缓存)
+  // EVOLUTION-4: 入口 (await 之前) 先置空缓存 — 在途期间切主题时 rerenderCharts 走
+  // no-op, 收窄 today→7d 切换在途期间旧档重渲的瞬态窗口; 数据到达后重新写入自愈
+  reportDailyCache = null;
+  reportHourlyCache = null;
   try {
-    const range = state.range;
-    const [w, rows, ov, zq] = await Promise.all([
+    const range = state.range;                          // 局部快照防在途 state 漂移 (daily URL 与缓存键都用快照)
+    const metric = state.reportMetric;
+    const [w, rows, ov, zq, daily, hourly] = await Promise.all([   // 三波并一波 (hourly 并入消除 today 档两段式弹入)
       api(`/api/report/windows`),
       api(`/api/report/channels?range=${range}`),
       api(`/api/accounts/overview`),                    // R1: 摘要条数据并入同一并发 (T9 renderQuotaBar)
       api(`/api/zcode/quota`).catch(() => null),        // 问题5: ZCode 额度并入配额条, 失败不出卡
+      api(`/api/report/daily?range=${range}&metric=${metric}`),
+      (range === "today" || range === "yesterday")      // 档位条件保留 (条件性 promise)
+        ? api(`/api/report/hourly?date=${range}`)
+        : Promise.resolve(null),
     ]);
+    if (seq !== allSeq) return;                         // 过期响应丢弃 (缓存写入在守卫后, 最新胜出)
     renderWindows(w, rows.rows.some((r) => r.estimated));
     renderQuotaBar(ov.accounts, zq);
     renderChannelTable(rows.rows);
     $("report-scope").textContent = t("scopeHint").replace("{n}", w.channel_count).replace("{m}", w.account_count);
     // 估算徽章: 仅 指标=费用 且 含估算渠道(bai/zcode/claudecode)时显示 (新R5 N24: 注释随 R6 est 集合更新)
     $("report-est").hidden = !(state.reportMetric === "cost" && rows.rows.some((r) => r.estimated));
-    const daily = await api(`/api/report/daily?range=${range}&metric=${state.reportMetric}`);
     chartReportStack(daily);
     chartReportDonut(daily);
+    // EVOLUTION-4: 缓存写入点键校验 — await 期间已切 range/metric 则丢弃, 根治
+    // 连点指标响应乱序覆盖; rerenderCharts 读侧校验退化为纯防御
+    if (range === state.range && metric === state.reportMetric) {
+      reportDailyCache = { range, metric, data: daily };
+    }
     if (range === "today" || range === "yesterday") {
       $("report-hourly").closest(".card").hidden = false;    // R2: 藏整卡, 不留空壳标题
       const hSpan = $("hourly-title").querySelector("[data-i18n]");   // 标题随档位切换 (data-i18n 同步改, 保持 applyLang 一致)
       if (hSpan) { hSpan.textContent = t(range === "yesterday" ? "yesterday" : "todayTrend"); hSpan.setAttribute("data-i18n", range === "yesterday" ? "yesterday" : "todayTrend"); }
-      chartReportHourly(await api(`/api/report/hourly?date=${range}`));
+      chartReportHourly(hourly);
+      if (range === state.range) reportHourlyCache = { range, data: hourly };   // 键校验同上
     } else {
       $("report-hourly").closest(".card").hidden = true;
+      reportHourlyCache = null;   // 7d/30d/all 档无 hourly 数据, 切主题时 rerenderCharts 跳过重渲
     }
-  } catch (e) { if (!quiet) toast(t("loadFailed") + ": " + e); }   // R1: 现有 key 为 loadFailed
+    box.classList.remove("swapping");
+  } catch (e) {                                                   // R1: 现有 key 为 loadFailed
+    if (seq === allSeq) {                                         // 错误路径回收加载态; toast 纳入 seq 守卫
+      box.classList.remove("swapping");                           //   (防被取代的旧请求迟到失败时对已显示
+      if (!quiet) toast(t("loadFailed") + ": " + e);              //    新数据的界面报错)
+    }
+  }
 }
 
 function renderQuotaBar(accounts, zdata = null) {
@@ -2177,7 +2237,7 @@ function renderQuotaBar(accounts, zdata = null) {
       main = `<div class="qb-val">${list.length}</div><div class="qb-sub">${t("accountsUnit")}</div>`;
     }
     return `<div class="qb-card">
-      <div class="qb-head"><span class="qb-dot" style="background:${chColor(ch)}"></span><span class="qb-name" style="color:${chColor(ch)}">${ch}</span></div>
+      <div class="qb-head"><span class="qb-dot" style="background:${CH_COLOR[ch] || "#4f8ef7"}"></span><span class="qb-name" style="color:${CH_COLOR[ch] || "#4f8ef7"}">${ch}</span></div>
       ${main}
       <div class="qb-foot">${foot}</div>
     </div>`;
@@ -2188,7 +2248,7 @@ function renderQuotaBar(accounts, zdata = null) {
       .filter((x) => x.label === "5h Rolling" || x.label === "Weekly")
       .map((x) => `${(QUOTA_LABEL[x.label] || (() => x.label))()} ${(Number(x.used) || 0).toFixed(0)}%`);
     cards.push(`<div class="qb-card">
-      <div class="qb-head"><span class="qb-dot" style="background:${chColor("zcode")}"></span><span class="qb-name" style="color:${chColor("zcode")}">zcode</span>${zdata.level ? `<span class="zcode-badge">${escapeHtml(zcodeLevelText(zdata.level))}</span>` : ""}</div>
+      <div class="qb-head"><span class="qb-dot" style="background:${CH_COLOR["zcode"] || "#4f8ef7"}"></span><span class="qb-name" style="color:${CH_COLOR["zcode"] || "#4f8ef7"}">zcode</span>${zdata.level ? `<span class="zcode-badge">${escapeHtml(zcodeLevelText(zdata.level))}</span>` : ""}</div>
       <div class="qb-sub">${segs.join(" · ") || t("zcodeNoData")}</div>
       <div class="qb-foot">GLM Coding Plan</div>
     </div>`);
@@ -2233,7 +2293,7 @@ function chColor(ch) {
   return v ? getComputedStyle(document.documentElement).getPropertyValue(v.replace(/var\(|\)/g, "").trim()) || "#4f8ef7" : "#4f8ef7";
 }
 
-function chartReportStack(d) {
+function chartReportStack(d, noAnim) {
   const canvas = $("report-stack");
   if (cStack) cStack.destroy();
   cStack = new Chart(canvas, {
@@ -2246,6 +2306,7 @@ function chartReportStack(d) {
     },
     options: {
       responsive: false, maintainAspectRatio: false,
+      animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       interaction: { mode: "index", intersect: false },
       plugins: { legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } } },
       scales: {
@@ -2257,7 +2318,7 @@ function chartReportStack(d) {
   cStack.resize();
 }
 
-function chartReportDonut(d) {
+function chartReportDonut(d, noAnim) {
   const canvas = $("report-donut");
   if (cDonut) cDonut.destroy();
   const chs = Object.keys(d.series);
@@ -2279,6 +2340,7 @@ function chartReportDonut(d) {
     data: { labels: chs, datasets: [{ data: totals, backgroundColor: chs.map(chColor), borderWidth: 2, borderColor: cssVar("--card") }] },
     options: {
       responsive: false, maintainAspectRatio: false, cutout: "62%",
+      animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       onClick: (_e, els) => { if (els.length) switchChannel(chs[els[0].index]); },  // 扇区->渠道 tab (spec v4)
       plugins: { legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } } },
     },
@@ -2288,7 +2350,7 @@ function chartReportDonut(d) {
 
 let cHourly = null;
 
-function chartReportHourly(d) {
+function chartReportHourly(d, noAnim) {
   const canvas = $("report-hourly");
   if (cHourly) cHourly.destroy();
   const chs = Object.keys(d.series);
@@ -2297,6 +2359,7 @@ function chartReportHourly(d) {
     data: { labels: d.labels.map((h) => `${h}`), datasets: chs.map((ch) => ({ label: ch, data: d.series[ch], backgroundColor: chColor(ch), borderRadius: 2, barPercentage: 0.9 })) },
     options: {
       responsive: false, maintainAspectRatio: false,
+      animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       interaction: { mode: "index", intersect: false },
       plugins: { legend: { display: chs.length > 1, labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } } },
       scales: {
@@ -2314,7 +2377,7 @@ function renderChannelTable(rows) {
     return;
   }
   $("report-table").innerHTML = rows.map((r) => `<tr>
-    <td style="color:${chColor(r.channel)}">${r.channel}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
+    <td style="color:${CH_COLOR[r.channel] || "#4f8ef7"}">${r.channel}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
     <td class="num">${fmtTokens(r.tokens)}</td><td class="num">${fmtTokens(r.input)}</td><td class="num">${fmtTokens(r.output)}</td>
     <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${fmtInt(r.requests)}</td><td class="num">${fmtMoney(r.cost)}</td>
     <td>${r.channel === "dsh" ? t("dataSinceToday") : (r.data_since || "—")}</td></tr>`).join("");   // R6: dsh 仅今日
@@ -2337,14 +2400,30 @@ function cssVar(name) {
   return getComputedStyle(document.body).getPropertyValue(name).trim() || "#8a94a8";
 }
 function rerenderCharts() {
-  if (!state.data) return;
-  if (!document.getElementById("page-home").hidden) chartToday(state.data.today_trend);
-  if (!document.getElementById("page-stats").hidden) {
-    chartModel(state.data.models);
-    chartTrend(state.data.trend);
-    if (zcodeSummaryLast) chartZcodeTrend(zcodeSummaryLast.daily7);  // ZCode 趋势随主题重绘
-    if (claudecodeSummaryLast) chartClaudecodeTrend(claudecodeSummaryLast.daily7);  // Claude Code 趋势随主题重绘
+  // 首页 all: 三图 (缓存键控见 loadReportAll 写入点; 读侧再比对当前 range/metric,
+  // 不匹配即 no-op — 快速连点指标响应乱序时保证三图必用当前指标数据)
+  if (!document.getElementById("page-home").hidden && !$("report-all").hidden) {
+    if (reportDailyCache && reportDailyCache.range === state.range && reportDailyCache.metric === state.reportMetric) {
+      chartReportStack(reportDailyCache.data, true);
+      chartReportDonut(reportDailyCache.data, true);
+    }
+    if (reportHourlyCache && reportHourlyCache.range === state.range) chartReportHourly(reportHourlyCache.data, true);
   }
+  // 首页单渠道: 24h 图 (用单渠道 trend 缓存; state.data 是全渠道 stats 数据、与单渠道
+  // 无关, 直接用会拿陈旧 stats 数据误重渲; chartToday 自带空值守卫不会抛错)
+  if (!document.getElementById("page-home").hidden && !$("report-single").hidden && chTrendCache
+    && chTrendCache.channel === state.channel && chTrendCache.range === state.range) {
+    chartToday(chTrendCache.data, true);
+  }
+  // 总览页 7 日趋势
+  if (!document.getElementById("page-overview").hidden && ovAccountsCache) chartOvTrend(ovAccountsCache, true);
+  // 统计页 (chartModel 移入 refreshIcons 统一处理, 避免本函数与 refreshIcons 双重销毁重建 cModel)
+  if (!document.getElementById("page-stats").hidden && state.data) {
+    chartTrend(state.data.trend, true);
+    if (zcodeSummaryLast) chartZcodeTrend(zcodeSummaryLast.daily7, true);
+    if (claudecodeSummaryLast) chartClaudecodeTrend(claudecodeSummaryLast.daily7, true);
+  }
+  refreshIcons();   // 图标变体原地换 src + chartModel 重渲 (唯一入口)
 }
 
 /* 窗口尺寸变化: 长防抖(250ms)后执行一次轻量 chart.resize()

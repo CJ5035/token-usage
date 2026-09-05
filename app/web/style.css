@@ -34,25 +34,30 @@
   --ch-zcode: #06b6d4;
   --ch-claudecode: #fb7185;     /* 原 #e11d48: 暗玫红 → 亮玫红 (问题3) */
   --ch-dsh: #64748b;
+  --up: #16a34a;                /* 涨/成功语义色 (EVOLUTION-6 新增, 值=原 .wb-s .up 硬编码, 亮色逐像素不变) */
+  --down: #dc2626;              /* 跌/失败语义色 (EVOLUTION-6 新增, 值=原 .wb-s .down/.sync-fail 硬编码, 亮色逐像素不变) */
 }
 html[data-theme="dark"] {
-  --bg: #14121a;
-  --card: #1d1a26;
-  --border: #2e2a3d;
-  --text: #e9e6f5;
-  --text1: #e9e6f5;
-  --text2: #a8a3c0;
-  --text3: #6f6a87;
+  /* EVOLUTION-6: 中性纯黑灰重定标 (灰阶无紫调), 层次 bg<sidebar<card<muted<hover<border 明度递进 */
+  --bg: #111112;
+  --card: #1a1a1c;
+  --border: #2a2a2c;
+  --text: #e8e8ea;
+  --text1: #e8e8ea;
+  --text2: #a3a3a8;
+  --text3: #8a8a90;             /* WCAG 实测: card 5.06:1 / muted 4.74:1 (>=4.5 达标) */
   --primary: #9d7cf8;
   --primary-strong: #8b6cf6;
-  --primary-soft: #272040;
-  --muted: #232030;
-  --titlebar: #1d1a26;
-  --sidebar: #181520;
-  --hover: #272040;
+  --primary-soft: #2a2440;
+  --muted: #202022;
+  --titlebar: #1a1a1c;
+  --sidebar: #151516;
+  --hover: #262628;
   --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
-  --grid: #29253a;
+  --grid: #242426;
   --danger-soft: #3d2429;
+  --up: #4ade80;                /* 按最浅承载面 muted 校准 (>=4.5): muted 9.33:1 / card 9.97:1 */
+  --down: #f87171;              /* 原亮色值 #dc2626 对 muted 仅 3.37:1 不达标, 提亮: muted 5.88:1 / card 6.28:1 */
   --ch-opencode: #6ba3ff;
   --ch-bai: #f59e0b;
   --ch-commandcode: #b79bfd;
@@ -235,7 +240,7 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
 .kpi.c-green::before { background: var(--green); } .kpi.c-green .kpi-v { color: var(--green); }
 .kpi.c-amber::before { background: var(--amber); } .kpi.c-amber .kpi-v { color: var(--amber); }
 .kpi.c-cyan::before { background: var(--cyan); } .kpi.c-cyan .kpi-v { color: var(--cyan); }
-.kpi.c-slate::before { background: #64748b; } .kpi.c-slate .kpi-v { color: #64748b; }
+.kpi.c-slate::before { background: var(--ch-dsh); } .kpi.c-slate .kpi-v { color: var(--ch-dsh); }   /* EVOLUTION-6: 硬编码 #64748b → var(--ch-dsh), 亮色同值 / dark 自动同步 #94a3b8 */
 .kpi-l { font-size: 12px; color: var(--text3); }
 .kpi-v { font-size: 23px; font-weight: 700; font-family: var(--font-mono); letter-spacing: -0.4px; margin-top: 2px; }
 .kpi-s { font-size: 11.5px; color: var(--text3); margin-top: 2px; font-variant-numeric: tabular-nums; }
@@ -296,7 +301,6 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
 .card.records .tbl td:nth-child(3) { overflow: hidden; white-space: nowrap; }
 .model-cell { display: flex; align-items: center; gap: 7px; font-weight: 500; }
 .plan-badge { font-size: 10.5px; padding: 2px 8px; border-radius: 99px; font-weight: 700; background: var(--primary-soft); color: var(--primary); letter-spacing: 0.5px; }
-.plan-badge.lite { background: #e6f7f5; color: #0d9488; }
 .pager { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 0 8px; }
 .pager-info { font-size: 12px; color: var(--text3); font-variant-numeric: tabular-nums; }
 .empty-cell { color: var(--text3); text-align: center; padding: 12px 0; }
@@ -334,6 +338,8 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
   padding: 6px 14px; font-size: 12.5px; font-weight: 500; background: var(--card);
 }
 .badge.ok { background: #e8f7ef; color: #16a34a; border-color: transparent; }
+/* EVOLUTION-6: 暗色改语义 token — 软底 #1a3325 上 var(--up)(#4ade80) WCAG 实测 7.80:1 (软徽标族口径 >=3.8:1 达标) */
+html[data-theme="dark"] .badge.ok { background: #1a3325; color: var(--up); }
 .badge.no { background: var(--danger-soft); color: var(--red); border-color: transparent; }
 /* 账号来源徽标 (BAI) */
 .src-badge { display: inline-flex; align-items: center; justify-content: center; border-radius: 99px; padding: 1px 8px; font-size: 10px; font-weight: 700; letter-spacing: .5px; background: #e0f2fb; color: #0891b2; border: 1px solid transparent; }
@@ -475,8 +481,8 @@ html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
 .wb-v { font-size: 18px; font-weight: 600; }
 .wb-v2 { font-size: 12px; color: var(--text2); }
 .wb-s { font-size: 11px; color: var(--text3); margin-top: 2px; }
-.wb-s .up { color: #16a34a; } .wb-s .down { color: #dc2626; }
-.wb-s.spike { color: #d97706; font-weight: 600; }
+.wb-s .up { color: var(--up); } .wb-s .down { color: var(--down); }   /* EVOLUTION-6: 硬编码 #16a34a/#dc2626 → 语义 token */
+.wb-s.spike { color: var(--amber); font-weight: 600; }   /* EVOLUTION-6: #d97706 → var(--amber) 同值, 亮色零视觉变化 */
 .wb-since { grid-column: 1 / -1; font-size: 11px; color: var(--text3); display: flex; align-items: center; gap: 4px; }
 .scope-hint { font-size: 11px; color: var(--text3); padding: 2px 0 6px; }
 
@@ -486,14 +492,18 @@ html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
 #quota-bar { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; padding: 12px 14px 8px; }
 .qb-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 8px; background: var(--muted); }
 .qb-head { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
-.qb-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-.qb-name { font-size: 12.5px; font-weight: 600; }
+.qb-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; transition: background .2s, color .2s; }
+.qb-name { font-size: 12.5px; font-weight: 600; transition: background .2s, color .2s; }
 .qb-bar { height: 6px; background: var(--border); border-radius: 99px; overflow: hidden; }
 .qb-bar-fill { height: 100%; border-radius: 99px; background: var(--grad-brand); }
 .qb-val { font-size: 16px; font-weight: 700; font-family: var(--font-mono); letter-spacing: -0.3px; }
 .qb-sub { font-size: 11.5px; color: var(--text3); margin-top: 6px; font-variant-numeric: tabular-nums; }
 .qb-foot { font-size: 11px; color: var(--text3); margin-top: 6px; }
-.sync-fail { color: #dc2626; }
+/* 同步失败红: 与涨跌 .down 共用 var(--down) token (EVOLUTION-6, 亮色 #dc2626 同值) */
+.sync-fail { color: var(--down); }
+/* 渠道名 td 内联 var() 渠道色随主题 .2s 过渡 (EVOLUTION-4); 限定 #report-table
+   首列, 勿用宽泛 td — 全表过渡会拖累其余单元格 */
+#report-table td:first-child { transition: background .2s, color .2s; }
 
 /* 单渠道 tab: 逐账号配额块 (T12) */
 .acct-quota { margin-bottom: 10px; }
