@@ -114,6 +114,8 @@ const I18N = {
     stackTitle: "分渠道消耗趋势", donutTitle: "渠道占比", chTableTitle: "渠道明细", channel: "渠道",
     reportEmpty: "暂无数据", segTokens: "Token",
     dataSinceToday: "仅今日", dataSince: "数据自",
+    noUsageToday: "今日暂无用量", noDataInRange: "该范围暂无数据",
+    cmpExcludesDsh: "涨跌百分比未含今日 DSH", statsScopeHint: "主区仅统计 OpenCode 渠道用量；ZCode / Claude Code / DSH 本地用量见下方独立区块（首页「今天」合计已并入今日 DSH 用量，涨跌百分比未含）",
   },
   en: {
     syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh",
@@ -224,6 +226,8 @@ const I18N = {
     stackTitle: "Usage by Channel", donutTitle: "Channel Share", chTableTitle: "Channel Breakdown", channel: "Channel",
     reportEmpty: "No data yet", segTokens: "Tokens",
     dataSinceToday: "Today only", dataSince: "Data since",
+    noUsageToday: "No usage today", noDataInRange: "No data in this range",
+    cmpExcludesDsh: "Trend % excludes today's DSH", statsScopeHint: "Main section covers OpenCode channels only; see the dedicated ZCode / Claude Code / DSH blocks below (today's homepage total includes today's DSH usage; the trend % does not)",
   },
 };
 let lang = "zh";
@@ -1171,7 +1175,13 @@ function chartToday(trend, noAnim) {
   if (cToday) cToday.destroy();
   const box = canvas ? canvas.parentElement : null;
   if (box) box.classList.remove("sk-box");  // 移除骨架遮罩
-  if (!trend || !trend.length) { cToday = null; return; }
+  if (!trend || !trend.length || !trend.some((d) => (d.input || 0) + (d.output || 0) > 0)) {   // EVOLUTION-7: 升级为无非零数据点 -> 销毁实例显示占位
+    setChartEmpty("today-chart", "today-empty", "noUsageToday");
+    cToday = null;
+    return;
+  }
+  const emptyEl = $("today-empty");
+  if (emptyEl) emptyEl.hidden = true;
   cToday = new Chart(canvas, {
     type: "bar",
     data: {
@@ -1227,7 +1237,9 @@ let cModel = null;
 function chartModel(models, noAnim) {
   const canvas = $("mr-chart");
   if (cModel) cModel.destroy();
-  if (!models || !models.length) { cModel = null; $("mr-list").innerHTML = ""; return; }
+  if (!models || !models.length) { setChartEmpty("mr-chart", "mr-empty", "noDataInRange"); cModel = null; $("mr-list").innerHTML = ""; return; }   // EVOLUTION-7: 空态占位 (判定不升级, models 非空但全 0 仍建空环为已知取舍)
+  const emptyEl = $("mr-empty");
+  if (emptyEl) emptyEl.hidden = true;
   const dim = state.modelDim;
   const getVal = (m) => (dim === "input" ? m.uncached_input_tokens : dim === "output" ? m.total_output_tokens : m.total_cost_usd);
   const fmt = dim === "cost" ? (v) => fmtMoney(v) : fmtTokens;
@@ -1263,7 +1275,13 @@ let cTrend = null;
 function chartTrend(trend, noAnim) {
   const canvas = $("trend-chart");
   if (cTrend) cTrend.destroy();
-  if (!trend || !trend.length) { cTrend = null; return; }
+  if (!trend || !trend.length || !trend.some((d) => (d.total_input_tokens || 0) + (d.total_output_tokens || 0) + (d.total_reasoning_tokens || 0) > 0)) {   // EVOLUTION-7: 统一为无非零数据点 -> 销毁实例显示占位
+    setChartEmpty("trend-chart", "trend-empty", "noDataInRange");
+    cTrend = null;
+    return;
+  }
+  const emptyEl = $("trend-empty");
+  if (emptyEl) emptyEl.hidden = true;
   cTrend = new Chart(canvas, {
     data: {
       labels: trend.map((d) => d.date.slice(5)),
@@ -1638,7 +1656,12 @@ function chartOvTrend(accounts, noAnim) {
   if (!canvas) return;
   if (cOvTrendChart) { cOvTrendChart.destroy(); cOvTrendChart = null; }
   const dated = accounts.filter((a) => (a.daily7 || []).length);
-  if (!dated.length) return;
+  if (!dated.length || !dated.some((a) => a.daily7.some((d) => (d.total_cost_usd || 0) > 0 || (d.request_count || 0) > 0 || (d.total_input_tokens || 0) + (d.total_output_tokens || 0) + (d.total_reasoning_tokens || 0) > 0))) {   // EVOLUTION-7: 统一为无非零数据点 (费用/请求/Token 任一非零即有数据)
+    setChartEmpty("ov-trend-chart", "ov-trend-empty", "noDataInRange");
+    return;
+  }
+  const emptyEl = $("ov-trend-empty");
+  if (emptyEl) emptyEl.hidden = true;
   const dateSet = new Set();
   dated.forEach((a) => a.daily7.forEach((d) => dateSet.add(d.date)));
   const labels = [...dateSet].sort();
@@ -2190,7 +2213,7 @@ async function loadReportAll(quiet = false) {
       $("report-hourly").closest(".card").hidden = false;    // R2: 藏整卡, 不留空壳标题
       const hSpan = $("hourly-title").querySelector("[data-i18n]");   // 标题随档位切换 (data-i18n 同步改, 保持 applyLang 一致)
       if (hSpan) { hSpan.textContent = t(range === "yesterday" ? "yesterday" : "todayTrend"); hSpan.setAttribute("data-i18n", range === "yesterday" ? "yesterday" : "todayTrend"); }
-      chartReportHourly(hourly);
+      chartReportHourly(hourly, undefined, range === "today" ? "noUsageToday" : "noDataInRange");
       if (range === state.range) reportHourlyCache = { range, data: hourly };   // 键校验同上
     } else {
       $("report-hourly").closest(".card").hidden = true;
@@ -2288,6 +2311,11 @@ function renderWindows(w, hasEst = false) {
 
 let cStack = null, cDonut = null;
 
+function setChartEmpty(canvasId, emptyId, key) {   // EVOLUTION-7: 空态占位统一入口; key=i18n key 字符串, t() 延迟求值
+  const emptyEl = $(emptyId);
+  if (emptyEl) { emptyEl.textContent = t(key); emptyEl.hidden = false; }
+}
+
 function chColor(ch) {
   const v = CH_COLOR[ch];
   return v ? getComputedStyle(document.documentElement).getPropertyValue(v.replace(/var\(|\)/g, "").trim()) || "#4f8ef7" : "#4f8ef7";
@@ -2296,6 +2324,13 @@ function chColor(ch) {
 function chartReportStack(d, noAnim) {
   const canvas = $("report-stack");
   if (cStack) cStack.destroy();
+  if (!d || !Object.values(d.series).some((arr) => arr.some((v) => v > 0))) {   // EVOLUTION-7: 空态 -> 销毁实例显示占位
+    cStack = null;
+    setChartEmpty("report-stack", "report-stack-empty", "noDataInRange");
+    return;
+  }
+  const emptyEl = $("report-stack-empty");
+  if (emptyEl) emptyEl.hidden = true;
   cStack = new Chart(canvas, {
     type: "bar",
     data: {
@@ -2324,6 +2359,13 @@ function chartReportDonut(d, noAnim) {
   const chs = Object.keys(d.series);
   const totals = chs.map((ch) => d.series[ch].reduce((a, b) => a + b, 0));
   const grand = totals.reduce((a, b) => a + b, 0);
+  if (grand === 0) {   // EVOLUTION-7: 空态 -> 必须在 new Chart 之前 return (centerText 为实例级插件, 不建实例即不绘制)
+    cDonut = null;
+    setChartEmpty("report-donut", "report-donut-empty", "noDataInRange");
+    return;
+  }
+  const emptyEl = $("report-donut-empty");
+  if (emptyEl) emptyEl.hidden = true;
   const centerText = { id: "centerText", afterDraw(chart) {   // 环形图中心总量 (spec v8, P0)
     const { ctx, chartArea } = chart;
     if (!chartArea) return;
@@ -2350,9 +2392,16 @@ function chartReportDonut(d, noAnim) {
 
 let cHourly = null;
 
-function chartReportHourly(d, noAnim) {
+function chartReportHourly(d, noAnim, emptyKey) {   // EVOLUTION-7: 第三参 emptyKey 由调用点按档位传入占位文案 (不影响 noAnim 位置与语义)
   const canvas = $("report-hourly");
   if (cHourly) cHourly.destroy();
+  if (!d || !Object.values(d.series).some((arr) => arr.some((v) => v > 0))) {   // 空态 -> 销毁实例显示占位
+    cHourly = null;
+    setChartEmpty("report-hourly", "report-hourly-empty", emptyKey || "noDataInRange");
+    return;
+  }
+  const emptyEl = $("report-hourly-empty");
+  if (emptyEl) emptyEl.hidden = true;
   const chs = Object.keys(d.series);
   cHourly = new Chart(canvas, {
     type: "bar",
@@ -2407,7 +2456,7 @@ function rerenderCharts() {
       chartReportStack(reportDailyCache.data, true);
       chartReportDonut(reportDailyCache.data, true);
     }
-    if (reportHourlyCache && reportHourlyCache.range === state.range) chartReportHourly(reportHourlyCache.data, true);
+    if (reportHourlyCache && reportHourlyCache.range === state.range) chartReportHourly(reportHourlyCache.data, true, reportHourlyCache.range === "today" ? "noUsageToday" : "noDataInRange");
   }
   // 首页单渠道: 24h 图 (用单渠道 trend 缓存; state.data 是全渠道 stats 数据、与单渠道
   // 无关, 直接用会拿陈旧 stats 数据误重渲; chartToday 自带空值守卫不会抛错)

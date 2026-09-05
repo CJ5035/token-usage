@@ -69,10 +69,10 @@
         <div class="card quota-bar"><div class="card-h"><h3 data-i18n="quotaBarTitle">各渠道配额</h3></div><div id="quota-bar"></div></div>
         <div class="ph-right" style="padding:8px 0"><div class="seg" id="report-metric"><button class="active" data-m="tokens" data-i18n="segTokens">Token</button><button data-m="cost" data-i18n="cost">费用</button><button data-m="requests" data-i18n="colRequests">请求</button></div></div>
         <div class="two-col">
-          <div class="card"><div class="card-h"><h3 data-i18n="stackTitle">分渠道消耗趋势</h3><span class="est-badge" id="report-est" hidden title="" data-i18n-title="estimateTip">估</span></div><div class="chart-box" style="min-height:240px"><canvas id="report-stack"></canvas></div></div>
-          <div class="card"><div class="card-h"><h3 data-i18n="donutTitle">渠道占比</h3></div><div class="chart-box" style="min-height:240px;position:relative"><canvas id="report-donut"></canvas></div></div>
+          <div class="card"><div class="card-h"><h3 data-i18n="stackTitle">分渠道消耗趋势</h3><span class="est-badge" id="report-est" hidden title="" data-i18n-title="estimateTip">估</span></div><div class="chart-box" style="min-height:240px"><canvas id="report-stack"></canvas><div class="zcode-chart-empty" id="report-stack-empty" hidden></div></div></div>
+          <div class="card"><div class="card-h"><h3 data-i18n="donutTitle">渠道占比</h3></div><div class="chart-box" style="min-height:240px;position:relative"><canvas id="report-donut"></canvas><div class="zcode-chart-empty" id="report-donut-empty" hidden></div></div></div>
         </div>
-        <div class="card"><div class="card-h"><h3 id="hourly-title"><span data-i18n="todayTrend">今日趋势</span> <span class="hint">24h</span></h3></div><div class="chart-box" style="height:250px"><canvas id="report-hourly"></canvas></div></div>
+        <div class="card"><div class="card-h"><h3 id="hourly-title"><span data-i18n="todayTrend">今日趋势</span> <span class="hint">24h</span></h3></div><div class="chart-box" style="height:250px"><canvas id="report-hourly"></canvas><div class="zcode-chart-empty" id="report-hourly-empty" hidden></div></div></div>
         <div class="card"><div class="card-h"><h3 data-i18n="chTableTitle">渠道明细</h3></div><table class="tbl"><thead><tr><th data-i18n="channel">渠道</th><th class="num" data-i18n="totalTokens">Token</th><th class="num" data-i18n="input">输入</th><th class="num" data-i18n="output">输出</th><th class="num" data-i18n="colCacheRead">缓存读</th><th class="num" data-i18n="colRequests">请求</th><th class="num" data-i18n="colCost">费用</th><th data-i18n="dataSince">数据自</th></tr></thead><tbody id="report-table"></tbody></table></div>
       </div>
       <div id="report-single" hidden>
@@ -91,7 +91,7 @@
       </div>
       <div class="card today-trend">
         <div class="card-h"><h3><span data-i18n="todayTrend">今日趋势</span> <span class="hint" data-i18n="hours24">24 小时</span></h3></div>
-        <div class="chart-box" style="height:250px"><canvas id="today-chart"></canvas></div>
+        <div class="chart-box" style="height:250px"><canvas id="today-chart"></canvas><div class="zcode-chart-empty" id="today-empty" hidden></div></div>
       </div>
       </div>
     </section>
@@ -108,13 +108,13 @@
         <div class="card model-rank">
           <div class="card-h"><h3 data-i18n="modelUsage">模型用量</h3><div class="seg" id="mr-dim"><button class="active" data-dim="input" data-i18n="input">输入</button><button data-dim="output" data-i18n="output">输出</button><button data-dim="cost" data-i18n="cost">成本</button></div></div>
           <div class="mr-body">
-            <div class="chart-box" style="min-height:200px"><canvas id="mr-chart"></canvas></div>
+            <div class="chart-box" style="min-height:200px"><canvas id="mr-chart"></canvas><div class="zcode-chart-empty" id="mr-empty" hidden></div></div>
             <div class="mr-list" id="mr-list"></div>
           </div>
         </div>
         <div class="card usage-trend">
           <div class="card-h"><h3 data-i18n="usageTrend">用量趋势</h3><span class="hint" id="trend-hint">30 天</span></div>
-          <div class="chart-box" style="min-height:240px"><canvas id="trend-chart"></canvas></div>
+          <div class="chart-box" style="min-height:240px"><canvas id="trend-chart"></canvas><div class="zcode-chart-empty" id="trend-empty" hidden></div></div>
         </div>
       </div>
       <div class="card zcode-stats" id="zcode-stats" hidden>
@@ -190,7 +190,7 @@
       <!-- 7 日费用趋势对比 (总费用/请求/Token) -->
       <div class="card ov-trend">
         <div class="card-h"><h3 data-i18n="costTrend7d">7 日费用趋势对比</h3></div>
-        <div class="chart-box" style="min-height:200px"><canvas id="ov-trend-chart"></canvas></div>
+        <div class="chart-box" style="min-height:200px"><canvas id="ov-trend-chart"></canvas><div class="zcode-chart-empty" id="ov-trend-empty" hidden></div></div>
       </div>
     </section>
 
