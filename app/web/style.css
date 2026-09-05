@@ -89,8 +89,8 @@ body { font-family: var(--font-sans); background: var(--bg); color: var(--text);
 .tb-close:hover { background: var(--danger); color: #fff; }
 
 /* pill / chip */
-.pill { border: none; background: transparent; padding: 5px 13px; border-radius: 7px; font-size: 12.5px; color: var(--text2); cursor: pointer; font-family: var(--font-sans); }
-.pill-row { display: flex; gap: 4px; background: var(--muted); padding: 3px; border-radius: 9px; }
+.pill { border: none; background: transparent; padding: 5px 13px; border-radius: 7px; font-size: 12.5px; color: var(--text2); cursor: pointer; font-family: var(--font-sans); white-space: nowrap; }
+.pill-row { display: flex; gap: 4px; background: var(--muted); padding: 3px; border-radius: 9px; flex-wrap: wrap; }
 .pill.active { background: var(--card); color: var(--primary); font-weight: 600; box-shadow: 0 1px 3px rgba(30,20,60,.12); }
 .pill.small { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 999px; height: 28px; padding: 0 12px; font-size: 12px; color: var(--text2); background: transparent; transition: all .2s; }
 .pill.small:hover { border-color: var(--primary); color: var(--text); }
@@ -191,9 +191,9 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
   100% { left: 100%; }
 }
 
-.ph { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.ph { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; }
 .ph-title { font-size: 18px; font-weight: 700; }
-.ph-right { display: flex; gap: 8px; align-items: center; }
+.ph-right { display: flex; gap: 8px; align-items: center; margin-left: auto; }
 .sub { font-size: 13px; font-weight: 400; color: var(--text3); }
 
 /* 卡片 */
@@ -289,6 +289,7 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
 .records { margin-bottom: 0; padding-bottom: 4px; }
 
 /* ---------- 表格 ---------- */
+.tbl-scroll { overflow-x: auto; }
 .tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 4px; }
 .tbl th { text-align: left; padding: 5px 14px; color: var(--text3); font-size: 11.5px; font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .tbl td { padding: 5px 14px; border-bottom: 1px solid var(--border); white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -413,6 +414,7 @@ html[data-theme="dark"] .src-badge { background: #123144; color: #67e8f9; }
 }
 @media (max-width: 1000px) {
   .two-col { grid-template-columns: 1fr; }
+  #page-stats .two-col { grid-template-columns: 1fr; }
 }
 
 /* ---------- 多用户: 顶栏切换器 + 设置页列表 ---------- */
