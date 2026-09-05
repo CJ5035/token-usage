@@ -125,7 +125,7 @@ def test_rerender_charts_hourly_passes_data_not_cache_object():
     """备注1: chartReportHourly 必须传 reportHourlyCache.data (传缓存对象会
     Object.keys(undefined) 抛错并中断 rerenderCharts 调用链)."""
     body = _extract_fn(_src(), "rerenderCharts")
-    assert "chartReportHourly(reportHourlyCache.data, true)" in body
+    assert "chartReportHourly(reportHourlyCache.data, true," in body
     assert "chartReportHourly(reportHourlyCache," not in body
 
 
