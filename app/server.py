@@ -1076,6 +1076,7 @@ def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
             "cost": payload["today"]["cost"] + dsh_win["cost"],
             "requests": payload["today"]["requests"] + dsh_win["requests"],
         }
+        payload["compare"]["includes_dsh_today"] = bool(dsh_win["tokens"] > 0)
         if channel == "dsh":
             payload = {**payload, "yesterday": dict(dsh_win), "7d": dict(dsh_win),
                        "30d": dict(dsh_win),
