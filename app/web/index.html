@@ -17,40 +17,40 @@
   </div>
   <div class="tb-right">
     <span class="sync-indicator" id="sync-indicator" hidden><span class="spinner sm"></span><span data-i18n="syncing">同步中</span></span>
-    <button class="pill small" id="tb-theme" title="切换主题">◐ <span data-i18n="themeDark">暗色</span></button>
-    <button class="pill small refresh" id="tb-refresh" title="刷新">⟳ <span data-i18n="refresh">刷新</span></button>
+    <button class="pill small" id="tb-theme" data-i18n-title="themeToggle">◐ <span data-i18n="themeDark">暗色</span></button>
+    <button class="pill small refresh" id="tb-refresh" data-i18n-title="refresh">⟳ <span data-i18n="refresh">刷新</span></button>
     <span class="chip num" id="tb-updated">—</span>
     <div class="user-switch">
       <button class="chip user-chip" id="tb-login" data-i18n-title="userSwitchTip">—</button>
-      <span class="chip num user-count" id="tb-user-count" hidden title="已登录用户数">0</span>
+      <span class="chip num user-count" id="tb-user-count" hidden data-i18n-title="userCountTip">0</span>
       <div class="user-menu" id="user-menu" hidden></div>
     </div>
     <span class="tb-sep"></span>
-    <button class="tb-btn" id="tb-min" title="Minimize"><svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg></button>
-    <button class="tb-btn tb-close" id="tb-close" title="Close"><svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg></button>
+    <button class="tb-btn" id="tb-min" data-i18n-title="minimize"><svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg></button>
+    <button class="tb-btn tb-close" id="tb-close" data-i18n-title="close"><svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg></button>
   </div>
 </header>
 
 <div class="app">
   <!-- 侧边栏 -->
   <nav class="side">
-    <button class="side-item active" data-page="home" title="Home">
+    <button class="side-item active" data-page="home" data-i18n-title="navHome">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="2"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="2"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="2"/></svg>
     </button>
-    <button class="side-item" data-page="stats" title="Stats">
+    <button class="side-item" data-page="stats" data-i18n-title="statsTitle">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5.5 20 L5.5 12.5"/><path d="M12 20 L12 5.5"/><path d="M18.5 20 L18.5 15"/><path d="M3 20 L21 20"/></svg>
     </button>
-    <button class="side-item" data-page="records" title="Records">
+    <button class="side-item" data-page="records" data-i18n-title="navRecords">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>
     </button>
     <div class="spacer"></div>
-    <button class="side-item" data-page="overview" id="side-overview" title="Accounts Overview" hidden>
+    <button class="side-item" data-page="overview" id="side-overview" data-i18n-title="navAccountsOverview" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/><path d="M16 4.5a3.2 3.2 0 0 1 0 7"/><path d="M17.5 15.2c2 .6 3.5 2.4 3.5 4.8"/></svg>
     </button>
-    <button class="side-item" data-page="settings" title="Settings">
+    <button class="side-item" data-page="settings" data-i18n-title="settingsTitle">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7 L20 7"/><circle cx="9.5" cy="7" r="2.4" fill="currentColor" stroke="none"/><path d="M4 12 L20 12"/><circle cx="15" cy="12" r="2.4" fill="currentColor" stroke="none"/><path d="M4 17 L20 17"/><circle cx="7" cy="17" r="2.4" fill="currentColor" stroke="none"/></svg>
     </button>
-    <button class="side-item" data-page="about" title="About">
+    <button class="side-item" data-page="about" data-i18n-title="aboutTitle">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.6"/><path d="M12 10.8 L12 16.6"/><circle cx="12" cy="7.6" r="0.7" fill="currentColor" stroke="none"/></svg>
     </button>
   </nav>

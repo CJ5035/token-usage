@@ -6,16 +6,16 @@ const $ = (id) => document.getElementById(id);
 /* ================= 国际化 ================= */
 const I18N = {
   zh: {
-    syncing: "同步中", themeDark: "暗色", themeLight: "亮色", refresh: "刷新",
-    homeTitle: "用量统计总览", today: "今天", d7: "近7天", d30: "近30天", all: "全部",
+    syncing: "同步中", themeDark: "暗色", themeLight: "亮色", refresh: "刷新", themeToggle: "切换主题", minimize: "最小化", close: "关闭",
+    homeTitle: "用量统计总览", navHome: "首页", today: "今天", d7: "近7天", d30: "近30天", all: "全部",
     overviewTitle: "用量概览", followRange: "数据跟随时间范围",
     todayTrend: "今日趋势", hours24: "24 小时",
     statsTitle: "用量统计", tokenBreakdown: "Token 构成",
     modelUsage: "模型用量", input: "输入", output: "输出", cost: "成本",
     usageTrend: "用量趋势", usageRecords: "使用记录", allModels: "全部模型",
-    recordsPage: "使用记录",
+    recordsPage: "使用记录", navRecords: "使用记录",
     sessionUsage: "会话用量", colSession: "会话", colKey: "Key 名称", colLastUsed: "最后使用", colRequests: "请求/Token", unassigned: "未归属",
-    accountOverview: "账户总览", costTrend7d: "7 日费用趋势对比",
+    accountOverview: "账户总览", navAccountsOverview: "账户总览", costTrend7d: "7 日费用趋势对比",
     todayTotalReq: "今日总请求", todayTotalTokens: "今日总 TOKEN", todayTotalCost: "今日总费用", todayTotalInput: "今日总输入",
     activeAccount: "当前活跃", quotaNotReady: "配额获取中…",
     overviewPanel: "账户总览面板", overviewPanelDesc: "侧边栏显示多账户总览入口，聚合展示各账户配额与用量",
@@ -69,7 +69,7 @@ const I18N = {
     confirm: "确认", cancel: "取消", ok: "确定",
     fullSyncConfirm: "将重新拉取历史记录（按同步范围），确定开始？", startSync: "开始同步",
     quit: "退出",
-    quotaFail: "配额获取失败", retryTip: "点击右上角刷新重试",
+    quotaFail: "配额获取失败", retryTip: "点击右上角刷新重试", syncFailTip: "同步失败",
     syncIntervalSet: "同步间隔已设为", syncRangeUpdated: "同步范围已更新，下次全量同步生效",
     trendHint: "30 天", totalTokenHint: "含缓存命中",
     sourceBai: "BAI", quotaPointsBalance: "余额 {n} 积分", quotaPointsExpiring: "其中 {n} 即将到期", estimateTip: "估算口径：成本为本地定价估算，非实际扣费", estimateBadge: "估算",
@@ -118,16 +118,16 @@ const I18N = {
     cmpExcludesDsh: "涨跌百分比未含今日 DSH", statsScopeHint: "主区仅统计 OpenCode 渠道用量；ZCode / Claude Code / DSH 本地用量见下方独立区块（首页「今天」合计已并入今日 DSH 用量，涨跌百分比未含）",
   },
   en: {
-    syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh",
-    homeTitle: "Usage Overview", today: "Today", d7: "7 Days", d30: "30 Days", all: "All",
+    syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh", themeToggle: "Toggle theme", minimize: "Minimize", close: "Close",
+    homeTitle: "Usage Overview", navHome: "Home", today: "Today", d7: "7 Days", d30: "30 Days", all: "All",
     overviewTitle: "Usage Overview", followRange: "Follows selected range",
     todayTrend: "Today's Trend", hours24: "24 Hours",
     statsTitle: "Usage Stats", tokenBreakdown: "Token Breakdown",
     modelUsage: "Model Usage", input: "Input", output: "Output", cost: "Cost",
     usageTrend: "Usage Trend", usageRecords: "Usage Records", allModels: "All Models",
-    recordsPage: "Records",
+    recordsPage: "Records", navRecords: "Records",
     sessionUsage: "Session Usage", colSession: "Session", colKey: "Key Name", colLastUsed: "Last Used", colRequests: "Requests/Token", unassigned: "Unassigned",
-    accountOverview: "Accounts Overview", costTrend7d: "7-Day Cost Trend",
+    accountOverview: "Accounts Overview", navAccountsOverview: "Accounts Overview", costTrend7d: "7-Day Cost Trend",
     todayTotalReq: "Today Requests", todayTotalTokens: "Today Tokens", todayTotalCost: "Today Cost", todayTotalInput: "Today Input",
     activeAccount: "Active", quotaNotReady: "Fetching quota…",
     overviewPanel: "Accounts Panel", overviewPanelDesc: "Show multi-account overview entry in sidebar",
@@ -181,7 +181,7 @@ const I18N = {
     confirm: "Confirm", cancel: "Cancel", ok: "OK",
     fullSyncConfirm: "This will re-fetch all history records (per sync range). Continue?", startSync: "Start Sync",
     quit: "Logout",
-    quotaFail: "Quota fetch failed", retryTip: "Click refresh in top bar to retry",
+    quotaFail: "Quota fetch failed", retryTip: "Click refresh in top bar to retry", syncFailTip: "Sync failed",
     syncIntervalSet: "Sync interval set to", syncRangeUpdated: "Sync range updated, takes effect on next full sync",
     trendHint: "30 days", totalTokenHint: "incl. cache hits",
     sourceBai: "BAI", quotaPointsBalance: "Balance {n} points", quotaPointsExpiring: "of which {n} expiring", estimateTip: "Estimate: cost is a local price estimate, not actual billing", estimateBadge: "Est.",
@@ -343,6 +343,7 @@ function applyLang(l) {
   document.querySelectorAll("[data-i18n]").forEach((el) => {
     el.textContent = t(el.dataset.i18n);
   });
+  syncI18nTitles();   // EVOLUTION-9: tooltip/估算徽标随语言切换
   document.querySelectorAll("#set-lang-pills .pill").forEach((b) => b.classList.toggle("active", b.dataset.v === lang));
   // 版本号: 唯一来源为后端 /api/version (app/__init__.py), 前端动态获取
   const ver = APP_VERSION ? "v" + APP_VERSION : "GoGauge";
@@ -353,7 +354,7 @@ function applyLang(l) {
   if (sv) sv.textContent = APP_VERSION ? `v${APP_VERSION}` : "—";
   // 动态内容重渲染
   if (state.data) {
-    renderAll(state.data);
+    syncTopBar(state.data);   // EVOLUTION-9: 仅刷顶栏, 隐藏容器不再写穿 (回页重载兜底)
     renderSettings();
     loadRecords().catch(() => {});
   }
@@ -368,6 +369,15 @@ function applyLang(l) {
   if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);
   if (dshUsageLast) renderDsh(dshUsageLast);
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);
+}
+
+/* EVOLUTION-9: data-i18n-title tooltip 与估算徽标随语言切换 (applyLang 内调用) */
+function syncI18nTitles() {
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+  const est = $("report-est");
+  if (est) est.textContent = t("estimateBadge");
 }
 
 /* ---------------- 弹框 / Toast ---------------- */
@@ -464,6 +474,7 @@ function applyCurrency(cur) {
   state.currency = cur;
   document.querySelectorAll("#set-currency-pills .pill").forEach((b) => b.classList.toggle("active", b.dataset.v === cur));
   try { localStorage.setItem("gousage-currency", cur); } catch (e) { /* ignore */ }
+  if (state.page === "settings") return;   // EVOLUTION-9: 设置页内切货币不重渲, 货币生效由 switchPage 回页重载兜底
   if (!state.data) return;
   rerenderCharts();
   renderOverview(state.data.totals);
@@ -1495,6 +1506,11 @@ function renderAll(data) {
     chartTrend(data.trend);
     $("trend-hint").textContent = t("trendHint");
   }
+  syncTopBar(data);   // EVOLUTION-9: 顶栏段提取 (下方), renderAll 对外行为不变
+  renderSyncBanner(data.progress);
+  renderSettingsSyncProgress(data.progress);
+}
+function syncTopBar(data) {   // EVOLUTION-9: renderAll 顶栏段逐行提取, applyLang 切语言仅刷顶栏
   $("tb-sync").textContent = data.logged_in ? `${t("lastSync")} ${fmtRelative(data.sync?.last_sync_at)} · ${fmtInt(data.sync?.total_records || 0)} ${t("records")}` : t("notLoggedIn");
   const accLabel = data.account_name || maskWs(data);
   $("tb-login").innerHTML = data.logged_in ? `<b>${t("loggedIn")}</b> · ${escapeHtml(accLabel)}` : t("notLoggedIn");
@@ -1508,8 +1524,6 @@ function renderAll(data) {
   }
   const st = data.server_time || "";
   if (st) $("tb-updated").textContent = `${t("updatedAt")} ${st.slice(0, 16).replace("T", " ")}`;
-  renderSyncBanner(data.progress);
-  renderSettingsSyncProgress(data.progress);
 }
 function maskWs(data) {
   const ws = data?.quota?.workspace_id || "";
@@ -2267,7 +2281,7 @@ function renderQuotaBar(accounts, zdata = null) {
     // 同步归并 (spec v10): 时间取最陈旧 min; 任一失败 -> 红点
     const times = list.map((a) => a.last_sync_at).filter(Boolean).sort();
     const failed = list.some((a) => a.last_sync_status && a.last_sync_status !== "ok");
-    const foot = `${list.length}${t("accountsUnit")}${times.length ? ` · ${fmtAgo(times[0])}` : ""}${failed ? ' <span class="sync-fail" title="同步失败">⚠</span>' : ""}`;
+    const foot = `${list.length}${t("accountsUnit")}${times.length ? ` · ${fmtAgo(times[0])}` : ""}${failed ? ` <span class="sync-fail" title="${t("syncFailTip")}">⚠</span>` : ""}`;
     let main;
     if (ch === "opencode") {
       // 窗口百分比不可聚合 -> 最紧张账号 max% (spec v5)
