@@ -1,8 +1,6 @@
 """report 聚合 API 测试: 渠道归一 / 自然日窗口 / 同时段环比 / 勾稽 / 空数据."""
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 from app import db
@@ -246,9 +244,16 @@ def test_report_windows_spike_and_same7_span(tmp_report_db):
                 inp=4, outp=6)], ids["opencode"])
     w = db.report_windows()
     assert w["compare"]["spike"] is True   # 今日 1000 > 7 日同时段均值 50 × 2
-    # same_7 跨度断言: 若实现错成 6 天(-6~-1), 第 7 天前的 250 tok 不计入, 均值=41.7, 仍 spike;
-    # 因此这里直接校验均值窗口的tokens总数 = 7 天 × 50 = 350 (只可经由 sp2/sp3 同时段构成)
+    # pct 断言钉住对比分子 (今日同时段 1000 vs 昨日同时段 50 -> +1900%); 7 日跨度由下方 350 钉住
     assert w["compare"]["pct"] == pytest.approx(1900.0)
+    # same_7 跨度直接断言: 近 7 个完整自然日(-7~-1, 不含今天)同时段 tokens = 7 天 × 50 = 350,
+    # 错成 6 天(-6~-1)则只算到 300. SQL 与 report_windows 的 same7_where 同口径;
+    # 本测试只种了 usage_records, 故仅查该表即等于三表合并值
+    same7 = db._win_records(
+        "substr(datetime(r.created_at,'localtime'),1,10) BETWEEN date('now','localtime','-7 days')"
+        " AND date('now','localtime','-1 day')"
+        " AND time(datetime(r.created_at,'localtime')) <= time('now','localtime')", [])
+    assert same7["tokens"] == 350
 
 
 def test_report_windows_sync_min_and_fail_priority(tmp_report_db):
@@ -258,7 +263,7 @@ def test_report_windows_sync_min_and_fail_priority(tmp_report_db):
     无行账号会命中 0 行导致断言必败."""
     a1 = db.add_account("tok-oc2", "ws-oc2")            # 同渠道第 2 个 opencode 账号
     ids = _seed_channels()
-    for aid, st in ((a1, "success"), (ids["opencode"], "success")):
+    for aid, st in ((a1, "ok"), (ids["opencode"], "ok")):
         db.update_sync_state(st, account_id=aid)         # 建行
     conn = db.get_db()
     conn.execute("UPDATE usage_sync_state SET last_sync_at=? WHERE account_id=?",
@@ -379,3 +384,31 @@ def test_server_merge_dsh(tmp_report_db, monkeypatch):
     assert any(s["channel"] == "dsh" for s in resp2["summary"])
     resp3 = server._report_channels_response("7d")
     assert not any(r["channel"] == "dsh" for r in resp3["rows"])   # 仅 range=today 注入
+
+
+def test_day_predicate_uses_expression_index(tmp_report_db):
+    """性能修复 v2 (方案4① 路线C): datetime(col) 确定性表达式索引必须命中.
+    today(等值边界) 与 7d(范围) 两档谓词都断言走 SEARCH USING INDEX."""
+    ids = _seed_channels()
+    db.insert_usage_records([_mkrec("u-ix", "2026-09-01T08:30:00Z")], ids["opencode"])
+    for range_ in ("today", "7d"):
+        where, params = db._report_range_sql(range_, "r.created_at")
+        sql = ("SELECT COUNT(*) FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
+               f" WHERE {where} AND COALESCE(a.source,'opencode') = 'opencode'")
+        plan = " | ".join(r["detail"] for r in db.get_db().execute("EXPLAIN QUERY PLAN " + sql, params).fetchall())
+        assert "USING" in plan and "INDEX" in plan, f"{range_} 谓词未命中索引: {plan}"
+
+
+def test_range_sql_local_day_semantics(tmp_report_db):
+    """边界语义: 本地今天中午(UTC 表示)的行命中 today 窗口, 前天行不命中;
+    时区换算由 _local_day_utc_start 负责, 与原 substr(datetime(col,'localtime')) 逐日等价."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    ids = _seed_channels()
+    noon_local = _dt.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
+    in_row = noon_local.astimezone(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    out_row = (noon_local - _td(days=2)).astimezone(_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    db.insert_usage_records([_mkrec("u-in", in_row), _mkrec("u-out", out_row)], ids["opencode"])
+    where, params = db._report_range_sql("today", "r.created_at")
+    sql = ("SELECT COUNT(*) FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
+           f" WHERE {where}")
+    assert db.get_db().execute(sql, params).fetchone()[0] == 1

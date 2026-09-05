@@ -62,7 +62,20 @@
 
     <!-- ============ 首页 ============ -->
     <section class="page" id="page-home">
-      <div class="ph"><h2 class="ph-title" data-i18n="homeTitle">用量统计总览</h2><div class="ph-right"><div class="pill-row" id="home-pills"><button class="pill active" data-r="today" data-i18n="today">今天</button><button class="pill" data-r="7d" data-i18n="d7">近7天</button><button class="pill" data-r="30d" data-i18n="d30">近30天</button><button class="pill" data-r="all" data-i18n="all">全部</button></div></div></div>
+      <div class="ph"><h2 class="ph-title" data-i18n="homeTitle">用量统计总览</h2><div class="ph-right"><div class="pill-row" id="channel-tabs"><button class="pill active" data-ch="all" data-i18n="channelAll">全部渠道</button></div><div class="pill-row" id="home-pills"><button class="pill active" data-r="today" data-i18n="today">今天</button><button class="pill" data-r="yesterday" data-i18n="yesterday">昨天</button><button class="pill" data-r="7d" data-i18n="d7">近7天</button><button class="pill" data-r="30d" data-i18n="d30">近30天</button><button class="pill" data-r="all" data-i18n="all">全部</button></div></div></div>
+      <div class="scope-hint" id="report-scope" hidden></div>
+      <div id="report-all" hidden>
+        <div class="windows-bar" id="windows-bar"></div>
+        <div class="card quota-bar"><div class="card-h"><h3 data-i18n="quotaBarTitle">各渠道配额</h3></div><div id="quota-bar"></div></div>
+        <div class="ph-right" style="padding:8px 0"><div class="seg" id="report-metric"><button class="active" data-m="tokens" data-i18n="segTokens">Token</button><button data-m="cost" data-i18n="cost">费用</button><button data-m="requests" data-i18n="colRequests">请求</button></div></div>
+        <div class="two-col">
+          <div class="card"><div class="card-h"><h3 data-i18n="stackTitle">分渠道消耗趋势</h3><span class="est-badge" id="report-est" hidden title="" data-i18n-title="estimateTip">估</span></div><div class="chart-box" style="min-height:240px"><canvas id="report-stack"></canvas></div></div>
+          <div class="card"><div class="card-h"><h3 data-i18n="donutTitle">渠道占比</h3></div><div class="chart-box" style="min-height:240px;position:relative"><canvas id="report-donut"></canvas></div></div>
+        </div>
+        <div class="card"><div class="card-h"><h3 id="hourly-title"><span data-i18n="todayTrend">今日趋势</span> <span class="hint">24h</span></h3></div><div class="chart-box" style="height:250px"><canvas id="report-hourly"></canvas></div></div>
+        <div class="card"><div class="card-h"><h3 data-i18n="chTableTitle">渠道明细</h3></div><table class="tbl"><thead><tr><th data-i18n="channel">渠道</th><th class="num" data-i18n="totalTokens">Token</th><th class="num" data-i18n="input">输入</th><th class="num" data-i18n="output">输出</th><th class="num" data-i18n="colCacheRead">缓存读</th><th class="num" data-i18n="colRequests">请求</th><th class="num" data-i18n="colCost">费用</th><th data-i18n="dataSince">数据自</th></tr></thead><tbody id="report-table"></tbody></table></div>
+      </div>
+      <div id="report-single" hidden>
       <div class="usage-blocks" id="usage-blocks"></div>
       <div id="zcode-quota" hidden>
         <div class="zcode-head" id="zcode-quota-head" hidden><h3 class="zcode-title" data-i18n="zcodeQuotaTitle">GLM Coding Plan · ZCode</h3><span class="zcode-badge" id="zcode-level" hidden></span></div>
@@ -79,6 +92,7 @@
       <div class="card today-trend">
         <div class="card-h"><h3><span data-i18n="todayTrend">今日趋势</span> <span class="hint" data-i18n="hours24">24 小时</span></h3></div>
         <div class="chart-box" style="height:250px"><canvas id="today-chart"></canvas></div>
+      </div>
       </div>
     </section>
 
@@ -263,6 +277,7 @@
         </ul>
         <button class="btn btn-primary btn-lg" id="btn-login" data-i18n="loginBtn">立即登录</button>
         <p class="login-note" data-i18n="loginNote">点击后将打开 OpenCode Go 官方授权页完成登录。</p>
+        <button class="btn btn-lg" id="btn-manage-data" data-i18n="manageLocalData">管理本地数据</button>
         <button class="btn btn-ghost" id="btn-quit-app" data-i18n="quitApp">退出应用</button>
       </div>
     </div>

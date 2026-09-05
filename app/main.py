@@ -337,14 +337,18 @@ class WindowApi:
     def set_login_callback(self, cb) -> None:
         self._on_open_login = cb
 
-    def open_login(self, mode: str = "relogin") -> bool:
+    def open_login(self, mode: str = "relogin", account_id: int | None = None) -> bool:
         """前端登录入口: 弹出独立登录窗口.
 
         mode: "add"=添加新用户 / "relogin"=重登当前用户 / "add_bai"=添加 BAI 账号
-        / "add_commandcode"=添加 CommandCode 账号.
+        / "add_commandcode"=添加 CommandCode 账号;
+        account_id: 定向重登目标账号 id (仅 relogin 语义使用, None=活跃账号).
         """
         if self._on_open_login:
-            self._on_open_login(mode if mode in ("add", "relogin", "add_bai", "add_commandcode") else "relogin")
+            self._on_open_login(
+                mode if mode in ("add", "relogin", "add_bai", "add_commandcode") else "relogin",
+                account_id,
+            )
         return True
 
     def minimize(self) -> bool:
@@ -466,6 +470,10 @@ def main() -> None:
     threading.Thread(target=server.zcode_import_async, daemon=True, name="gousage-zcode-import").start()
     # Claude Code 本地用量启动导入 (后台线程, 读 ~/.claude/projects 会话 JSONL 增量预热镜像表)
     threading.Thread(target=server.claude_import_async, daemon=True, name="gousage-claude-import").start()
+    # ZCode 额度缓存启动预热 (问题5): 首个 /api/zcode/quota 请求免 15s 同步首采
+    threading.Thread(target=server.zcode_quota_warmup, daemon=True, name="gousage-zcode-quota-warm").start()
+    # 汇率缓存启动预热 (请求线程已不再外呼): 后台拉一次, 失败保留兜底 7.2
+    threading.Thread(target=server._refresh_usd_cny, daemon=True, name="gousage-exchange-warm").start()
     dashboard_url = f"http://{host}:{port}/"
     watcher: dict[str, object] = {"ref": None}
     api = WindowApi()
@@ -526,14 +534,15 @@ def main() -> None:
 
     _bind_login_close_cleanup(login_win_ref["win"])
 
-    # 登录模式: open_login(mode) 记录意图(mode + account_type), on_login_success 按模式落库
-    pending_mode = {"mode": "relogin", "account_type": "opencode"}
+    # 登录模式: open_login(mode) 记录意图(mode + account_type + account_id), on_login_success 按模式落库
+    pending_mode = {"mode": "relogin", "account_type": "opencode", "account_id": None}
 
     def on_login_success(credential: str, workspace_hint: str, account_type: str) -> None:
         """登录成功: 按模式保存 → 隐藏登录窗口 → 主窗口进入面板 → 全量同步.
 
         - add: 新建账号 (同 token 自动去重为既有账号) 并切换为活跃
-        - relogin: 更新当前活跃账号凭证
+        - relogin: 定向更新目标账号凭证 (pending_mode["account_id"], None=活跃行)
+          并切换活跃到目标行 (决策="点谁登谁", switch=True 先例)
         - bai: 一律按 add 处理新建/去重 BAI 账号 (save_token 无法区分 source);
           workspace_hint = BAI userId 作 dedupe_key, source="bai"
         - commandcode: 一律按 add 处理新建/去重 CommandCode 账号;
@@ -557,8 +566,17 @@ def main() -> None:
             elif mode == "add":
                 db.add_account(credential, workspace_hint, switch=True)
             else:
-                db.save_token(credential, workspace_hint)
+                # 定向重登: 凭证落目标行 (None=活跃行, 行为不变);
+                # 同一 try 内 save_token 成功后才切活跃 (save_token 异常不切,
+                # 避免活跃指针移到凭证未更新的行). 目标行若在登录完成前被删除
+                # (UPDATE 0 行 / set_active False), 仅记录日志不阻断.
+                target_id = pending_mode.get("account_id")
+                db.save_token(credential, workspace_hint, account_id=target_id)
+                if target_id and not db.set_active_account(target_id):
+                    _mlog(f"  set_active_account ERROR: target row {target_id} missing")
             _mlog("  token saved")
+            # 新账号/新凭证已生效: 失效 overview 缓存 (Task 2 引入), 免新账号最长 3s (TTL) 不出现在面板
+            server._invalidate_overview_cache()
         except Exception as exc:  # noqa: BLE001
             _mlog(f"  save_token ERROR: {exc}")
         try:
@@ -622,11 +640,14 @@ def main() -> None:
             return ("add", "commandcode")
         return (mode if mode in ("add", "relogin") else "relogin", "opencode")
 
-    def open_login(mode: str = "relogin") -> None:
+    def open_login(mode: str = "relogin", account_id: int | None = None) -> None:
         """弹出独立登录窗口并开始监听 (欢迎页/设置页按钮). 单飞守卫: 已有登录流程时忽略."""
         sub_mode, account_type = _parse_login_mode(mode)
         pending_mode["mode"] = sub_mode
         pending_mode["account_type"] = account_type
+        # 定向目标 id 无条件覆盖 (含 None): 防上次定向 id 残留导致活跃行重登串号落错行;
+        # 单飞守卫下重复点击也走到这里, 以最后一次调用为准
+        pending_mode["account_id"] = account_id
         # 登录窗已被手动关闭 => 旧监听已失效: 先停旧线程再重建窗口.
         # (修复: 依赖"线程存活"的单飞守卫会把死窗口场景永久拦截, 导致再次点击无响应)
         if not _login_win_alive():

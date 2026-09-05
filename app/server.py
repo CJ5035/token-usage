@@ -18,6 +18,7 @@ from . import claudecode_api
 from . import commandcode_api
 from . import dsh_api
 from . import zcode_api
+from .zcode_api import QUOTA_TIMEOUT
 from .bai_api import _load_model_pricing
 from .updater import RELEASE_PAGE_URL, check_update
 from .opencode_api import (
@@ -63,13 +64,36 @@ _quota_refreshing: set[int] = set()  # 防重入: 同一账号同一时刻只允
 _exchange_cache: dict[str, Any] = {"at": 0.0, "usd_cny": 7.2}
 _EXCHANGE_TTL = 6 * 3600  # 汇率缓存 6 小时
 _DEFAULT_USD_CNY = 7.2
+_exchange_refreshing = False  # 汇率后台刷新防重入
+_overview_cache: dict[str, Any] = {"at": 0.0, "data": None}  # overview 组装缓存 (方案4②)
+_OVERVIEW_TTL = 3.0
+
+
+def _invalidate_overview_cache() -> None:
+    """账号切换/增删/改名/退出/同步完成时调用, 下次 overview 重新组装."""
+    _overview_cache["at"] = 0.0
+    _overview_cache["data"] = None
 
 
 def _fetch_usd_cny() -> float:
-    """从 open.er-api.com 获取 USD→CNY 汇率, 失败时返回上次缓存/默认值."""
+    """读取 USD→CNY 汇率缓存 (纯缓存读, 请求线程永不外呼网络).
+
+    TTL 内直返; 过期时防重入触发后台刷新, 本次仍返回旧值 (弱网冷启动
+    首屏显示兜底 7.2, 后台刷新到位后下次拉取更新).
+    """
     now = time.time()
     if now - _exchange_cache["at"] < _EXCHANGE_TTL:
         return _exchange_cache["usd_cny"]
+    _ensure_exchange_refresh_async()
+    return _exchange_cache["usd_cny"]
+
+
+def _refresh_usd_cny() -> None:
+    """从 open.er-api.com 同步拉取 USD→CNY 汇率并写缓存.
+
+    成功时更新汇率与时间戳; 失败 (网络/解析/汇率非法) 仅推进时间戳,
+    保留旧值再缓存 6h, 避免频繁重试.
+    """
     try:
         import urllib.request
         req = urllib.request.Request(
@@ -79,11 +103,30 @@ def _fetch_usd_cny() -> float:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
         rate = float(data.get("rates", {}).get("CNY") or 0)
+        now = time.time()
         if rate > 0:
             _exchange_cache.update(at=now, usd_cny=rate)
+        else:
+            _exchange_cache["at"] = now  # 非法数据视同失败: 旧值再缓存 6h
     except Exception:  # noqa: BLE001 网络失败时保留旧值
-        _exchange_cache["at"] = now
-    return _exchange_cache["usd_cny"]
+        _exchange_cache["at"] = time.time()
+
+
+def _ensure_exchange_refresh_async() -> None:
+    """汇率缓存过期时在后台线程刷新 (防重入, 照 _ensure_quota_async 惰性模式)."""
+    global _exchange_refreshing
+    if _exchange_refreshing:
+        return  # 已有刷新线程在跑
+    _exchange_refreshing = True
+
+    def worker() -> None:
+        global _exchange_refreshing
+        try:
+            _refresh_usd_cny()
+        finally:
+            _exchange_refreshing = False
+
+    threading.Thread(target=worker, daemon=True, name="gousage-exchange").start()
 
 
 def _sync_progress_snapshot() -> dict[str, Any]:
@@ -635,8 +678,10 @@ def sync_usage(mode: str = "incremental") -> dict[str, Any]:
         if partial or (mode != "incremental" and any_error):
             msg = "部分账号同步异常" if any_error else "完成, 但部分页面拉取失败"
             _set_phase("done", msg)
+            _invalidate_overview_cache()
             return {"ok": True, "partial": True, "inserted": total_inserted, "pages": pages}
         _set_phase("done", f"同步完成, 新增 {total_inserted} 条")
+        _invalidate_overview_cache()
         return {"ok": True, "inserted": total_inserted, "pages": pages}
     except Exception as exc:  # noqa: BLE001
         _set_phase("error", str(exc))
@@ -752,14 +797,16 @@ def claude_import_async() -> None:
 # HTTP 服务
 # ---------------------------------------------------------------------------
 
-_on_open_login: Optional[Callable[[str], None]] = None
+_on_open_login: Optional[Callable[[str, Optional[int]], None]] = None
 _server: Optional[ThreadingHTTPServer] = None
 
 
-def set_login_callback(callback: Callable[[str], None]) -> None:
+def set_login_callback(callback: Callable[[str, Optional[int]], None]) -> None:
     """由 main.py 注册: 前端请求登录时触发窗口跳转.
 
-    回调契约: callback(mode), mode 为 "add" (添加新用户) 或 "relogin" (重新登录当前用户).
+    回调契约: callback(mode, account_id), mode 为 "add" (添加新用户) 或
+    "relogin" (重新登录); account_id 为定向重登目标账号 id (仅 relogin 语义
+    使用, None=活跃账号).
     """
     global _on_open_login
     _on_open_login = callback
@@ -814,15 +861,40 @@ def _static_response(handler: BaseHTTPRequestHandler, rel: str) -> None:
 # 空数据首次同步获取; 过期先返回旧值再后台刷新; 失败也写占位结果
 # (fetch_quota 合同不抛异常, 错误 dict 即占位), TTL 内不重试避免前端无限重拉
 _zcode_quota_cache: dict[str, Any] = {"at": 0.0, "data": None}
-_zcode_quota_refreshing = False
+_zcode_quota_refreshing = False  # 仅"避免起多余后台刷新线程", 互斥职责归单飞锁
+# 统一单飞锁: 冷首采 (请求路径同步) 与过期后台刷新共用, 保证同一时刻仅一次外呼
+_zcode_first_fetch_lock = threading.Lock()
+# 等待者兜底超时: QUOTA_TIMEOUT(15s)+2s 余量, 需 < 前端 20s (模块常量便于测试注入)
+_ZCODE_FETCH_WAIT = QUOTA_TIMEOUT + 2
 
 # summary 请求触发增量导入的防抖: 距上次触发超过 60s 才后台导入 (请求不等待导入)
 _ZCODE_IMPORT_DEBOUNCE = 60.0
 _zcode_last_import_trigger = 0.0
 
 
+def _zcode_fetch_under_lock() -> bool:
+    """统一单飞原语: 取锁 → 复查 → 拉取 → 写缓存 (首采与过期刷新共用).
+
+    锁内复查: data 非空且未过 TTL 才直接返回 (等待期间他人刚完成拉取,
+    共享其结果); data 为空 (首采) 或已过期 (刷新) 均在锁内照常拉取,
+    避免缓存永久滞留旧值. 返回 False 表示等待锁超时, 调用方自行兜底
+    且不再拉取.
+    """
+    if not _zcode_first_fetch_lock.acquire(timeout=_ZCODE_FETCH_WAIT):
+        return False
+    try:
+        slot = _zcode_quota_cache
+        if slot["data"] is not None and time.time() - slot["at"] < QUOTA_CACHE_TTL:
+            return True  # 缓存有效: 等待期间他人已完成拉取
+        slot["data"] = zcode_api.fetch_quota()
+        slot["at"] = time.time()  # 先写 data 后写 at: 读路径不会拿新 at 配旧 data
+        return True
+    finally:
+        _zcode_first_fetch_lock.release()
+
+
 def _ensure_zcode_quota_async() -> None:
-    """后台线程刷新 ZCode 额度缓存 (照 _ensure_quota_async 防重入模式)."""
+    """后台线程刷新 ZCode 额度缓存 (防重入布尔去重排线程, 互斥归单飞锁)."""
     global _zcode_quota_refreshing
     if _zcode_quota_refreshing:
         return  # 已有刷新线程在跑
@@ -831,12 +903,17 @@ def _ensure_zcode_quota_async() -> None:
     def worker() -> None:
         global _zcode_quota_refreshing
         try:
-            _zcode_quota_cache["at"] = time.time()
-            _zcode_quota_cache["data"] = zcode_api.fetch_quota()
+            _zcode_fetch_under_lock()  # 兼职: 首采与过期刷新统一走单飞
         finally:
             _zcode_quota_refreshing = False
 
     threading.Thread(target=worker, daemon=True, name="gousage-zcode-quota").start()
+
+
+def zcode_quota_warmup() -> None:
+    """启动预热 ZCode 额度缓存 (后台线程): 免前端首个 /api/zcode/quota
+    走 _zcode_quota_payload 的同步首采等待."""
+    _ensure_zcode_quota_async()
 
 
 def _zcode_quota_payload() -> dict[str, Any]:
@@ -846,10 +923,13 @@ def _zcode_quota_payload() -> dict[str, Any]:
     if slot["data"] is not None and now - slot["at"] < QUOTA_CACHE_TTL:
         return slot["data"]  # 缓存有效
     if slot["data"] is None:
-        # 首次: 同步调用一次 (打开页面即有数据, 15s 上限), 写缓存后返回
-        slot["at"] = now
-        slot["data"] = zcode_api.fetch_quota()
-        return slot["data"]
+        # 首次: 走统一单飞同步获取 (打开页面即有数据, 15s 上限); 等待超时
+        # 则返回错误占位并入队后台刷新, 不自行再拉取. 占位文案避开
+        # CREDENTIAL_ERROR_PREFIX 前缀, 防止前端误路由到登录引导分支.
+        if _zcode_fetch_under_lock():
+            return slot["data"]
+        _ensure_zcode_quota_async()
+        return {"success": False, "error": "额度查询超时，请稍后重试"}
     _ensure_zcode_quota_async()  # 过期: 先返回现有缓存值, 后台刷新
     return slot["data"]
 
@@ -1029,6 +1109,52 @@ def _report_channels_response(range_: str) -> dict[str, Any]:
     return {"rows": rows, "summary": summary}
 
 
+def _accounts_overview_payload() -> dict[str, Any]:
+    """GET /api/accounts/overview 数据组装 (含 3s TTL 缓存, 方案4②):
+    切换渠道页签时首页并发拉本端点, 原实现逐账号 3 个全表聚合排队;
+    TTL 内直返缓存, 账号/同步状态变化由 _invalidate_overview_cache 失效."""
+    now = time.time()
+    if _overview_cache["data"] is not None and now - _overview_cache["at"] < _OVERVIEW_TTL:
+        return _overview_cache["data"]
+    # ↓↓↓ 原 1194-1230 行逻辑原样搬入 (accounts 列表组装) ↓↓↓
+    active_id = db.get_active_account_id()
+    accounts: list[dict[str, Any]] = []
+    for acc in db.list_accounts():
+        if not acc["has_token"]:
+            continue
+        aid = acc["id"]
+        _ensure_quota_async(aid)
+        slot = _quota_cache.get(aid)
+        quota = slot.get("data") if slot else None
+        sync_state = db.get_sync_state(aid)
+        accounts.append(
+            {
+                "id": aid,
+                "name": acc["name"],
+                "source": acc["source"],
+                "logged_in": True,
+                "active": aid == active_id,
+                "quota": quota,
+                "today": db.totals("today", aid),
+                "today_trend": db.today_trend(aid),
+                "daily7": db.daily_stats(7, aid),
+                "last_sync_at": sync_state.get("last_sync_at"),
+                "last_sync_status": sync_state.get("last_sync_status"),
+                "cc_summary": (db.get_cc_summary(aid) if acc["source"] == "commandcode" else None),
+            }
+        )
+    payload = {
+        "ok": True,
+        "accounts": accounts,
+        "active_id": active_id,
+        "exchange_rate": {"usd_cny": _fetch_usd_cny(), "currency": "CNY"},
+        "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    _overview_cache["at"] = time.time()
+    _overview_cache["data"] = payload
+    return payload
+
+
 def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, list[str]]) -> None:
     method = handler.command
     route = path
@@ -1168,12 +1294,32 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         db.clear_account()
         if aid:
             _quota_cache.pop(aid, None)
+        _invalidate_overview_cache()
         _json_response(handler, {"ok": True})
         return
 
     if route == "/api/relogin" and method == "POST":
+        # body 可选 {"id": <int>}: 定向重登目标账号; body 读取失败/缺失 (含空 body
+        # Content-Length=0 的欢迎页兜底) 一律按 {"id": None} 处理. id 非法/账号不存在回 400.
+        target_id: Optional[int] = None
+        try:
+            body = _read_json_body(handler)
+        except Exception:  # noqa: BLE001
+            body = {"id": None}
+        if isinstance(body, dict) and body.get("id") is not None:
+            try:
+                target_id = int(body["id"])
+            except (TypeError, ValueError):
+                _json_response(handler, {"ok": False, "error": "无效账号 id"}, 400)
+                return
+            row = db.get_db().execute(
+                "SELECT id FROM accounts WHERE id = ?", (target_id,)
+            ).fetchone()
+            if row is None:
+                _json_response(handler, {"ok": False, "error": "账号不存在"}, 400)
+                return
         if _on_open_login:
-            _on_open_login("relogin")
+            _on_open_login("relogin", target_id)
         _json_response(handler, {"ok": True})
         return
 
@@ -1191,44 +1337,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         return
 
     if route == "/api/accounts/overview" and method == "GET":
-        # 账户总览面板: 仅返回已登录账号 (退出登录即移除本地数据, 未登录账号无展示意义)
-        active_id = db.get_active_account_id()
-        accounts: list[dict[str, Any]] = []
-        for acc in db.list_accounts():
-            if not acc["has_token"]:
-                continue
-            aid = acc["id"]
-            # 过期配额后台刷新 (不阻塞响应), 本次先返回缓存值
-            _ensure_quota_async(aid)
-            slot = _quota_cache.get(aid)
-            quota = slot.get("data") if slot else None
-            sync_state = db.get_sync_state(aid)
-            accounts.append(
-                {
-                    "id": aid,
-                    "name": acc["name"],
-                    "source": acc["source"],
-                    "logged_in": True,
-                    "active": aid == active_id,
-                    "quota": quota,
-                    "today": db.totals("today", aid),
-                    "today_trend": db.today_trend(aid),
-                    "daily7": db.daily_stats(7, aid),
-                    "last_sync_at": sync_state.get("last_sync_at"),
-                    "last_sync_status": sync_state.get("last_sync_status"),
-                    "cc_summary": (db.get_cc_summary(aid) if acc["source"] == "commandcode" else None),
-                }
-            )
-        _json_response(
-            handler,
-            {
-                "ok": True,
-                "accounts": accounts,
-                "active_id": active_id,
-                "exchange_rate": {"usd_cny": _fetch_usd_cny(), "currency": "CNY"},
-                "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
-            },
-        )
+        _json_response(handler, _accounts_overview_payload())
         return
 
     if route.startswith("/api/accounts/") and method == "POST":
@@ -1256,6 +1365,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                 _json_response(handler, {"ok": False, "error": "该账号未登录"}, 400)
                 return
             db.set_active_account(aid)
+            _invalidate_overview_cache()
             _json_response(handler, {"ok": True, "active_id": aid})
             return
 
@@ -1267,6 +1377,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             if not db.rename_account(aid, str(body.get("name") or "")):
                 _json_response(handler, {"ok": False, "error": "重命名失败 (账号不存在或名称为空)"}, 400)
                 return
+            _invalidate_overview_cache()
             _json_response(handler, {"ok": True})
             return
 
@@ -1280,6 +1391,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                 _json_response(handler, {"ok": False, "error": "无效账号 id"}, 400)
                 return
             _quota_cache.pop(aid, None)  # 清理该账号的配额缓存槽
+            _invalidate_overview_cache()
             _json_response(handler, {"ok": True, "remaining": remaining})
             return
 
@@ -1353,6 +1465,31 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         range_ = query.get("range", ["7d"])[0]
         range_ = range_ if range_ in ("today", "yesterday", "7d", "30d", "all") else "7d"
         _json_response(handler, _report_channels_response(range_))
+        return
+
+    if route == "/api/report/channel-overview" and method == "GET":
+        range_ = query.get("range", ["today"])[0]
+        range_ = range_ if range_ in ("today", "yesterday", "7d", "30d", "all") else "today"
+        channel = query.get("channel", [""])[0] or "opencode"
+        if channel == "dsh":   # R6: dsh 无历史表, 仅今日口径 (键对齐 db.totals, 供 renderOverview)
+            dsh = dsh_api.get_dsh_usage()
+            t = (dsh.get("today") or {}) if dsh.get("found") else {}
+            _json_response(handler, {
+                "request_count": 0, "session_count": 0,
+                "total_input_tokens": t.get("input", 0), "uncached_input_tokens": t.get("input", 0),
+                "total_output_tokens": t.get("output", 0), "total_reasoning_tokens": t.get("reasoning", 0),
+                "cache_hit_tokens": 0, "cache_write_tokens": 0,
+                "total_cost_usd": 0.0, "hit_rate": 0.0,
+                "today_only": True})   # 新R1 N13: 前端据此在范围≠今天时提示"仅今日"
+            return
+        _json_response(handler, db.channel_totals(range_, channel))
+        return
+
+    if route == "/api/report/channel-trend" and method == "GET":
+        date_ = query.get("date", ["today"])[0]
+        date_ = date_ if date_ in ("today", "yesterday") else "today"
+        channel = query.get("channel", [""])[0] or "opencode"
+        _json_response(handler, db.channel_trend(date_, channel))   # dsh 由 db 层返回 [] (R6)
         return
 
     if route == "/api/usage/sessions" and method == "GET":

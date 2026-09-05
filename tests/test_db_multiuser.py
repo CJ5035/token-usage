@@ -249,8 +249,8 @@ def test_clear_account_scoped_to_active(tmp_db):
     b = db.add_account("tB", "ws-b")
     db.insert_usage_records([_rec("a1")], account_id=a)
     db.insert_usage_records([_rec("b1")], account_id=b)
-    db.clear_account()                                           # 清活跃账号 b
-    assert db.totals(period="all", account_id=b)["request_count"] == 0
+    db.clear_account()                                           # 仅清活跃账号 b 的凭证 (EVOLUTION-2)
+    assert db.totals(period="all", account_id=b)["request_count"] == 1    # 数据保留, 仅凭证清除
     assert db.totals(period="all", account_id=a)["request_count"] == 1
     assert next(x for x in db.list_accounts() if x["id"] == b)["has_token"] is False
     assert next(x for x in db.list_accounts() if x["id"] == a)["has_token"] is True

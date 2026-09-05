@@ -296,7 +296,7 @@ def test_cc_summary_corrupted_or_missing_returns_empty(tmp_db):
 
 
 # ---------------------------------------------------------------------------
-# delete_account / clear_account 级联清理
+# delete_account 级联清理 / clear_account 凭证语义 (EVOLUTION-2)
 # ---------------------------------------------------------------------------
 
 
@@ -331,15 +331,17 @@ def test_delete_account_clears_charts_and_cc_summary(tmp_db):
     ).fetchone()["c"] == 0
 
 
-def test_clear_account_clears_charts_and_cc_summary(tmp_db):
-    """登出同删 usage_records: charts_buckets 与 cc_summary 同属本地缓存数据, 一并清除防重登复活."""
+def test_clear_account_keeps_charts_and_cc_summary(tmp_db):
+    """登出仅清凭证 (EVOLUTION-2): usage_records/charts_buckets/cc_summary 属本地数据, 保留不清."""
     a = db.add_account("tok-a", "ws-a")                 # add_account 默认 switch=True
+    db.insert_usage_records([_usage_today()], account_id=a)
     db.upsert_charts_buckets([_bkt(bucket=_bucket_utc())], account_id=a)
     db.save_cc_summary(a, {"userId": "u-a"})
 
     db.clear_account()
 
     conn = db.get_db()
-    assert conn.execute("SELECT COUNT(*) AS c FROM charts_buckets").fetchone()["c"] == 0
-    assert db.get_cc_summary(a) == {}
+    assert conn.execute("SELECT COUNT(*) AS c FROM charts_buckets").fetchone()["c"] == 1
+    assert db.get_cc_summary(a) == {"userId": "u-a"}
+    assert db.totals(period="all", account_id=a)["request_count"] == 1
     assert next(x for x in db.list_accounts() if x["id"] == a)["has_token"] is False

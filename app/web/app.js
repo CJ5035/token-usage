@@ -27,7 +27,7 @@ const I18N = {
     settingsTitle: "设置", setAccount: "OpenCode 账户", setLoginState: "登录状态",
     setWorkspace: "工作区", setLoginMethod: "登录方式",
     loginMethodDesc: "内置浏览器 (WebView2) 打开官方授权页，自动回填",
-    relogin: "重新登录", setLogout: "退出登录", logoutDesc: "清除本地 token 与缓存数据", logout: "退出登录",
+    relogin: "重新登录", logout: "退出登录",
     setAutoSync: "自动同步", autoSync: "自动增量同步", autoSyncDesc: "按间隔拉取最新用量记录",
     syncInterval: "同步间隔", syncIntervalDesc: "多久自动同步一次",
     min1: "1 分钟", min5: "5 分钟", min15: "15 分钟", min30: "30 分钟",
@@ -52,14 +52,14 @@ const I18N = {
     welcomeFeat3: "数据仅保存在本机，安全私密",
     loginBtn: "立即登录",
     loginNote: "点击后将打开 OpenCode Go 官方授权页完成登录。",
-    quitApp: "退出应用",
+    quitApp: "退出应用", manageLocalData: "管理本地数据",
     rolling: "滚动用量", weekly: "每周用量", monthly: "每月用量",
     remaining: "剩余", used: "已用", resetsIn: "重置于",
     hitRate: "缓存命中率", hitAmount: "缓存命中量", totalTokens: "总 TOKEN 消耗",
     totalRequests: "总请求", totalCost: "总费用", sessions: "会话数",
     hit: "命中", miss: "未命中", pctOfInput: "占输入", inclCache: "含缓存命中",
     currentRange: "当前范围", avgPer: "均", perReq: "/次", dedup: "去重 sessionID",
-    noData: "暂无记录", loadFailed: "加载失败", totalN: "共", items: "条",
+    noData: "暂无记录", loadFailed: "加载失败", requestTimeout: "请求超时，请检查网络后重试", retry: "重试", totalN: "共", items: "条",
     pageOf: "第", ofPages: "页",
     loggedIn: "已登录", notLoggedIn: "未登录", connected: "已连接", notConnected: "未连接",
     lastSync: "上次同步", records: "条记录", updatedAt: "更新于",
@@ -68,22 +68,20 @@ const I18N = {
     dUnit: "天", hUnit: "小时", mUnit: "分钟",
     confirm: "确认", cancel: "取消", ok: "确定",
     fullSyncConfirm: "将重新拉取历史记录（按同步范围），确定开始？", startSync: "开始同步",
-    reloginConfirm: "将清除本地数据并打开官方授权页重新登录，确定？", goLogin: "去登录",
-    logoutConfirm: "退出将清除本地 token 与全部缓存数据，确定退出？", quit: "退出",
+    quit: "退出",
     quotaFail: "配额获取失败", retryTip: "点击右上角刷新重试",
     syncIntervalSet: "同步间隔已设为", syncRangeUpdated: "同步范围已更新，下次全量同步生效",
     trendHint: "30 天", totalTokenHint: "含缓存命中",
     sourceBai: "BAI", quotaPointsBalance: "余额 {n} 积分", quotaPointsExpiring: "其中 {n} 即将到期", estimateTip: "估算口径：成本为本地定价估算，非实际扣费", estimateBadge: "估算",
     setUsers: "用户管理", addUser: "添加用户", addUserBai: "添加 BAI 账号", addUserTip: "登录新的 OpenCode Go 账号并保存到本机",
     userSwitchTip: "切换用户", userCountTip: "已登录用户数",
-    switchTo: "切换", currentUserBadge: "当前", renameBtn: "重命名", deleteUser: "删除",
+    switchTo: "切换", currentUserBadge: "当前", renameBtn: "重命名", deleteUser: "删除", loginRow: "登录",
     renameTitle: "重命名用户", save: "保存", deleteUserTitle: "删除用户",
     deleteUserConfirm: "确定删除用户「{name}」？其本地用量数据与同步记录将一并清除，且无法恢复。",
     userDeleted: "用户已删除", userRenamed: "已重命名", switchedAccount: "已切换账号",
     noUsers: "暂无账号，点击右上角「添加用户」登录",
     setToCurrent: "设为当前", loggedOut: "已退出登录",
-    logoutUserConfirm: "将退出「{name}」并清除其本地用量数据与同步记录，确定？",
-    reloginConfirmNew: "将打开官方授权页重新登录当前账号，确定？",
+    logoutUserConfirm: "将退出「{name}」，仅清除登录凭证，本地用量数据保留。确定？",
     sourceCommandcode: "CommandCode", loginCommandcode: "登录 Command Code",
     ccSummaryTitle: "账期汇总", ccRequests: "请求", ccTokens: "Token", ccCost: "费用", ccSuccessRate: "成功率",
     ccHistoryNote: "API 仅提供最近 24 小时明细，更早历史自接入起本地积累",
@@ -110,6 +108,12 @@ const I18N = {
     claudecodeStatsMissing: "未检测到 Claude Code 本地数据（~/.claude/projects）",
     claudecodeCostHint: "费用为按量价目估算值（订阅套餐实际不按此扣费），未收录定价的模型按 0 计算",
     claudecodeKpiOutput: "输出 TOKEN",
+    channelAll: "全部渠道", yesterday: "昨天", vsSame: "vs 昨日同时段",
+    sampleInsufficient: "样本不足", dailyAvg: "日均", scopeHint: "{n} 渠道 · {m} 账号",
+    accountsUnit: "账号", quotaBarTitle: "各渠道配额",
+    stackTitle: "分渠道消耗趋势", donutTitle: "渠道占比", chTableTitle: "渠道明细", channel: "渠道",
+    reportEmpty: "暂无数据", segTokens: "Token",
+    dataSinceToday: "仅今日", dataSince: "数据自",
   },
   en: {
     syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh",
@@ -133,7 +137,7 @@ const I18N = {
     settingsTitle: "Settings", setAccount: "OpenCode Account", setLoginState: "Login Status",
     setWorkspace: "Workspace", setLoginMethod: "Login Method",
     loginMethodDesc: "Built-in browser (WebView2) opens the official auth page and auto-fills",
-    relogin: "Re-login", setLogout: "Logout", logoutDesc: "Clear local token and cached data", logout: "Logout",
+    relogin: "Re-login", logout: "Logout",
     setAutoSync: "Auto Sync", autoSync: "Auto incremental sync", autoSyncDesc: "Fetch latest usage records at interval",
     syncInterval: "Sync Interval", syncIntervalDesc: "How often to auto sync",
     min1: "1 min", min5: "5 min", min15: "15 min", min30: "30 min",
@@ -158,14 +162,14 @@ const I18N = {
     welcomeFeat3: "All data stays on your machine — private & safe",
     loginBtn: "Login Now",
     loginNote: "Clicking opens the official OpenCode Go authorization page.",
-    quitApp: "Quit App",
+    quitApp: "Quit App", manageLocalData: "Manage local data",
     rolling: "Rolling Usage", weekly: "Weekly Usage", monthly: "Monthly Usage",
     remaining: "Remaining", used: "Used", resetsIn: "Resets in",
     hitRate: "Cache Hit Rate", hitAmount: "Cache Hits", totalTokens: "Total Tokens",
     totalRequests: "Requests", totalCost: "Total Cost", sessions: "Sessions",
     hit: "hit", miss: "missed", pctOfInput: "of input", inclCache: "incl. cache hits",
     currentRange: "current range", avgPer: "avg", perReq: "/req", dedup: "dedup sessionID",
-    noData: "No records", loadFailed: "Failed to load", totalN: "Total", items: "records",
+    noData: "No records", loadFailed: "Failed to load", requestTimeout: "Request timed out. Check your network and retry.", retry: "Retry", totalN: "Total", items: "records",
     pageOf: "Page", ofPages: "of",
     loggedIn: "Logged in", notLoggedIn: "Not logged in", connected: "Connected", notConnected: "Not connected",
     lastSync: "Last sync", records: "records", updatedAt: "Updated",
@@ -174,22 +178,20 @@ const I18N = {
     dUnit: "d", hUnit: "h", mUnit: "m",
     confirm: "Confirm", cancel: "Cancel", ok: "OK",
     fullSyncConfirm: "This will re-fetch all history records (per sync range). Continue?", startSync: "Start Sync",
-    reloginConfirm: "This will clear local data and open the auth page. Continue?", goLogin: "Go Login",
-    logoutConfirm: "This will clear local token and all cached data. Continue?", quit: "Logout",
+    quit: "Logout",
     quotaFail: "Quota fetch failed", retryTip: "Click refresh in top bar to retry",
     syncIntervalSet: "Sync interval set to", syncRangeUpdated: "Sync range updated, takes effect on next full sync",
     trendHint: "30 days", totalTokenHint: "incl. cache hits",
     sourceBai: "BAI", quotaPointsBalance: "Balance {n} points", quotaPointsExpiring: "of which {n} expiring", estimateTip: "Estimate: cost is a local price estimate, not actual billing", estimateBadge: "Est.",
     setUsers: "User Management", addUser: "Add User", addUserBai: "Add BAI Account", addUserTip: "Sign in with another OpenCode Go account",
     userSwitchTip: "Switch user", userCountTip: "Logged-in users",
-    switchTo: "Switch", currentUserBadge: "Active", renameBtn: "Rename", deleteUser: "Delete",
+    switchTo: "Switch", currentUserBadge: "Active", renameBtn: "Rename", deleteUser: "Delete", loginRow: "Sign in",
     renameTitle: "Rename User", save: "Save", deleteUserTitle: "Delete User",
     deleteUserConfirm: "Delete user \"{name}\"? Their local usage data and sync history will be removed permanently.",
     userDeleted: "User deleted", userRenamed: "Renamed", switchedAccount: "Account switched",
     noUsers: "No accounts yet — click \"Add User\" to sign in",
     setToCurrent: "Make Active", loggedOut: "Signed out",
-    logoutUserConfirm: "Sign out \"{name}\" and remove their local usage data and sync history?",
-    reloginConfirmNew: "This opens the auth page to re-login the current account. Continue?",
+    logoutUserConfirm: "Sign out \"{name}\"? This only clears the credential — local usage data is kept. Continue?",
     sourceCommandcode: "CommandCode", loginCommandcode: "Add CommandCode Account",
     ccSummaryTitle: "Billing Summary", ccRequests: "Requests", ccTokens: "Tokens", ccCost: "Cost", ccSuccessRate: "Success Rate",
     ccHistoryNote: "API provides only the last 24h of details; older history accumulates locally since first sync",
@@ -216,6 +218,12 @@ const I18N = {
     claudecodeStatsMissing: "Claude Code local data not found (~/.claude/projects)",
     claudecodeCostHint: "Costs are pay-as-you-go estimates (subscriptions are not actually billed this way); models without pricing are counted as 0",
     claudecodeKpiOutput: "Output Tokens",
+    channelAll: "All Channels", yesterday: "Yesterday", vsSame: "vs yesterday same time",
+    sampleInsufficient: "Low sample", dailyAvg: "Daily avg", scopeHint: "{n} channels · {m} accounts",
+    accountsUnit: " acct", quotaBarTitle: "Channel Quotas",
+    stackTitle: "Usage by Channel", donutTitle: "Channel Share", chTableTitle: "Channel Breakdown", channel: "Channel",
+    reportEmpty: "No data yet", segTokens: "Tokens",
+    dataSinceToday: "Today only", dataSince: "Data since",
   },
 };
 let lang = "zh";
@@ -237,6 +245,8 @@ let state = {
   records: { page: 1, pageSize: 7, total: 0, model: "" },
   sessions: { page: 1, pageSize: 7, total: 0 },
   settings: { sync_interval_sec: 300, window_days: 60, auto_sync: true },
+  channel: "all",        // 首页渠道 tab; 冷启动强制 all (spec v2)
+  reportMetric: "tokens",
 };
 
 const COLOR = { input: "#4f8ef7", output: "#22c55e", reasoning: "#a78bfa", cache: "#06b6d4", cost: "#d97706" };
@@ -300,13 +310,25 @@ function escapeHtml(s) {
 
 /* ---------------- API ---------------- */
 async function api(path, opts = {}) {
-  const resp = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
-  if (!resp.ok) {
-    let msg = "HTTP " + resp.status;
-    try { const b = await resp.json(); if (b && b.error) msg = b.error; } catch (e) { /* 无 body 或非 JSON 时保持默认 */ }
-    throw new Error(msg);
+  try {
+    const resp = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      // 20s 请求超时 (EVOLUTION-3): 防后端阻塞时 fetch 无限挂起;
+      // signal 置于 ...opts 前, 调用方传 signal 可覆盖; 老内核无 AbortSignal.timeout 时降级为无超时
+      signal: (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") ? AbortSignal.timeout(20000) : undefined,
+      ...opts,
+    });
+    if (!resp.ok) {
+      let msg = "HTTP " + resp.status;
+      try { const b = await resp.json(); if (b && b.error) msg = b.error; } catch (e) { /* 无 body 或非 JSON 时保持默认 */ }
+      throw new Error(msg);
+    }
+    return resp.json();
+  } catch (e) {
+    // AbortSignal.timeout 到点 reject DOMException(name="TimeoutError"), 本地化为可读文案
+    if (e && e.name === "TimeoutError") throw new Error(t("requestTimeout"));
+    throw e;
   }
-  return resp.json();
 }
 
 /* ---------------- 语言切换 ---------------- */
@@ -333,7 +355,7 @@ function applyLang(l) {
     loadRecords().catch(() => {});
   }
   // ZCode 区块随语言即时重渲染 (复用已拉取数据, 不重发请求)
-  if (zcodeQuotaLast) renderZcodeQuota(zcodeQuotaLast);
+  if (zcodeQuotaLast && state.page === "home" && state.channel === "zcode") renderZcodeQuota(zcodeQuotaLast);
   if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);
   if (dshUsageLast) renderDsh(dshUsageLast);
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);
@@ -472,10 +494,73 @@ function renderSkeletons() {
   if (!$("stats-total-cards").innerHTML) $("stats-total-cards").innerHTML = sKpi.repeat(4);
   if (!$("stats-detail6").innerHTML) $("stats-detail6").innerHTML = `<div class="tc skeleton"><div class="sk-line w40"></div><div class="sk-line w50 lg"></div><div class="sk-line w30"></div></div>`.repeat(6);
 }
+/* 加载失败占位 (EVOLUTION-3): 写入 usage-blocks / overview-grid / stats-total-cards
+   三区——前两区为 renderSkeletons 无条件赋值, 重试可恢复; stats-total-cards 成功
+   路径 renderStatsTotal 无条件覆盖 innerHTML, 占位不影响数据渲染 (其 if(!innerHTML)
+   骨架守卫仅使重试加载期短暂显示旧占位而非骨架, 可接受), 该区为 grid 布局, 占位
+   以 grid-column:1/-1 通栏; stats-detail6 维持清空; trend 区为 canvas + sk-box
+   class 遮罩 (非 innerHTML), 移除 class 即可 */
+function renderDashboardError(e) {
+  const msg = `${escapeHtml(t("loadFailed"))}: ${escapeHtml((e && e.message) || String(e))}`;
+  const errHtml = `<div class="ub ub-error" style="grid-column:1/-1">${msg}<button class="pill" style="margin-left:8px" data-dash-retry>${escapeHtml(t("retry"))}</button></div>`;
+  $("usage-blocks").innerHTML = errHtml;
+  $("overview-grid").innerHTML = errHtml;
+  $("stats-total-cards").innerHTML = errHtml;
+  $("stats-detail6").innerHTML = "";
+  const trendBox = document.querySelector(".today-trend .chart-box");
+  if (trendBox) trendBox.classList.remove("sk-box");
+  document.querySelectorAll("[data-dash-retry]").forEach((b) => b.addEventListener("click", () => loadDashboard()));
+}
 
 /* ---------------- 数据加载 ---------------- */
 let loadSeq = 0;
+let chSeq = 0;   // 单渠道响应序号: 快速连点渠道 tab 时丢弃旧响应 (方案4④)
 async function loadDashboard(quiet = false) {
+  if (state.page === "home") {
+    renderChannelTabs();                     // 每次刷新渠道列表(账号增减/删除回退)
+    if (state.channel === "all") {
+      $("report-all").hidden = false; $("report-single").hidden = true;
+      $("report-scope").hidden = false;
+      await loadReportAll(quiet);
+      return;
+    }
+    $("report-all").hidden = true; $("report-single").hidden = false;
+    // GLM Coding Plan 额度卡只属于 zcode 渠道页签 (问题5):
+    // a) 非本页签隐藏; b) 本页签主动渲染 — loadZcodeQuota 仅统计页分支会调,
+    // 冷启动直达 zcode 页签时 zcodeQuotaLast 为 null, 必须主动拉取
+    $("zcode-quota").hidden = state.channel !== "zcode";
+    if (state.channel === "zcode") {
+      zcodeQuotaLast ? renderZcodeQuota(zcodeQuotaLast)
+                     : loadZcodeQuota().then(() => {   // 迟到响应防护: 请求期间已切走则重新隐藏
+                         if (state.channel !== "zcode") $("zcode-quota").hidden = true;
+                       });
+    }
+    $("report-scope").hidden = true;
+    // 单渠道: 消耗走 report 接口(与活跃账号无关), 配额块/账期卡走 accounts/overview 逐账号 (spec v5/v8)
+    const seq = ++chSeq;                                  // 新增: 快速切渠道时丢弃过期响应 (方案4④)
+    $("report-single").classList.add("swapping");         // 新增: 加载提示 (方案4③)
+    Promise.all([
+      api(`/api/report/channel-overview?range=${state.range}&channel=${state.channel}`),
+      api(`/api/report/channel-trend?date=${state.range === "yesterday" ? "yesterday" : "today"}&channel=${state.channel}`),
+      api(`/api/accounts/overview`),
+    ]).then(([totals, trend, ov]) => {
+      if (seq !== chSeq) return;                          // 新增: 过期响应丢弃
+      $("report-single").classList.remove("swapping");    // 新增
+      const chAccounts = ov.accounts.filter((a) => a.source === state.channel);
+      renderQuotaSingle(chAccounts);
+      const rangeHint = document.querySelector(".overview .hint");   // 新R1 N13: dsh 仅今日口径提示
+      if (rangeHint) rangeHint.textContent = totals.today_only ? t("dataSinceToday") : t("followRange");
+      renderOverview(totals, state.channel);          // 概览 6 格: channel_totals 键与 db.totals 对齐 (T5)
+      chartToday(trend);                              // 24h input/output 双系列 (spec v8)
+      const isCc = state.channel === "commandcode";
+      $("cc-summary").hidden = !isCc;
+      if (isCc) renderCcAccounts(chAccounts);         // 账期卡逐账号 (spec v5); 全部 tab 不显示
+    }).catch((e) => {
+      if (seq === chSeq) $("report-single").classList.remove("swapping");   // 新增
+      if (!quiet) toast(t("loadFailed") + ": " + e);
+    });
+    return;   // R5 补: 必须 return, 否则落入现有逻辑 renderAll 双重渲染 (与 Step 2 要求一致)
+  }
   const seq = ++loadSeq;
   if (!state.data) renderSkeletons();
   showLoading(true);
@@ -487,9 +572,32 @@ async function loadDashboard(quiet = false) {
     showLoading(false);
     loadZcodeQuota().catch(() => {});  // ZCode 额度卡: 并发拉取, 失败不阻塞 dashboard
   } catch (e) {
-    if (seq === loadSeq) showLoading(false);
+    if (seq === loadSeq) {
+      showLoading(false);
+      // 失败三态 (EVOLUTION-3): 有数据的静默刷新 (5s 配额重试/重命名后静默刷新)
+      // 维持静默不打扰正常数据; 其余 (用户主动加载 / 防御性: 静默但无数据) 渲染错误占位 + 重试
+      if (!(quiet && state.data)) renderDashboardError(e);
+    }
     if (!quiet) console.error("dashboard load failed", e);
   }
+}
+let channelTabsCache = { at: 0, data: null };   // 方案4⑤: 切渠道高频触发, 60s 内复用; 已知取舍: 60s 内账号增删后 tab 角标可能过时, 60s 后自愈
+function renderChannelTabs() {
+  if (channelTabsCache.data && Date.now() - channelTabsCache.at < 60000) {
+    renderChannelTabsFrom(channelTabsCache.data);
+    return;
+  }
+  api("/api/report/channels?range=today").then((d) => {
+    channelTabsCache = { at: Date.now(), data: d };
+    renderChannelTabsFrom(d);
+  }).catch(() => {});
+}
+function renderChannelTabsFrom(d) {
+  const tabs = [{ ch: "all", label: t("channelAll") }]
+    .concat(d.summary.map((s) => ({ ch: s.channel, label: s.channel, n: s.accounts })));
+  $("channel-tabs").innerHTML = tabs.map((x) =>
+    `<button class="pill${x.ch === state.channel ? " active" : ""}" data-ch="${x.ch}">${x.label}${x.n > 1 ? ` <small>·${x.n}</small>` : ""}</button>`).join("");
+  if (state.channel !== "all" && !d.summary.some((s) => s.channel === state.channel)) switchChannel("all"); // 账号被删回退
 }
 function showLoading(show) { $("top-loading").hidden = !show; }
 
@@ -508,8 +616,8 @@ function usdWindowHtml(w, extraCls) {
     <div class="ub-meta"><span>${fmtUsd(used)} / ${fmtUsd(total)}</span><span>${t("resetsIn")} ${fmtDur(w.reset_in_sec)}</span></div>
   </div>`;
 }
-function renderUsageBlocks(quota) {
-  const row = $("usage-blocks");
+function renderUsageBlocks(quota, box) {
+  const row = box || $("usage-blocks");
   if (!quota || !quota.success) {
     if (quota && !quota.success) {
       clearTimeout(state.quotaRetryTimer);
@@ -579,11 +687,42 @@ function renderCcSummary(data) {
   box.hidden = false;
 }
 
+/* ---------------- 首页: 单渠道 tab 渲染 (Task 12) ---------------- */
+function renderQuotaSingle(accounts) {
+  const box = $("usage-blocks");
+  if (!accounts.length) {   // 本地渠道 (zcode/claudecode/dsh) 无账号 -> 整块隐藏, 不显示占位文字 (问题6)
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  box.hidden = false;       // 复位: hidden 不随 innerHTML 更新自动恢复, 漏掉会让有账号页签配额卡消失
+  box.innerHTML = accounts.map((a) =>
+    `<div class="acct-quota"><div class="acct-name">${escapeHtml(a.name)}</div><div class="acct-quota-body" id="aq-${a.id}"></div></div>`).join("");
+  accounts.forEach((a) => renderUsageBlocks(a.quota, $(`aq-${a.id}`)));
+}
+
+function renderCcAccounts(accounts) {
+  const cc = accounts.filter((a) => a.source === "commandcode" && a.cc_summary && Object.keys(a.cc_summary).length);
+  if (!cc.length) { $("cc-summary").hidden = true; return; }
+  $("cc-grid").innerHTML = cc.map((a) => {
+    const cs = a.cc_summary;
+    const cards = [   // 新R2: 四色与现有 renderCcSummary 一致 (c-blue/violet/amber/green)
+      { cls: "c-blue", l: t("ccRequests"), v: fmtInt(cs.totalCount) },
+      { cls: "c-violet", l: t("ccTokens"), v: fmtTokens(cs.totalTokens) },
+      { cls: "c-amber", l: t("ccCost"), v: fmtUsd(cs.totalCost) },
+      { cls: "c-green", l: t("ccSuccessRate"), v: (Number(cs.successRate) || 0).toFixed(1) + "%" },
+    ];
+    return `<div class="acct-name" title="${escapeHtml(a.name)}">${escapeHtml(a.name)}</div>` + cards.map((c) =>
+      `<div class="card kpi ${c.cls}"><div class="kpi-l">${c.l}</div><div class="kpi-v">${c.v}</div></div>`).join("");
+  }).join("");
+  $("cc-summary").hidden = false;
+}
+
 /* ---------------- 首页: ZCode (GLM Coding Plan) 额度卡 ---------------- */
 /* 数据源 /api/zcode/quota (后端契约固定): fetch 抛异常 (端点不存在/网络错误)
-   时整个容器保持 hidden, 对无 ZCode 用户零打扰; 凭证缺失 (错误文案以
-   「未找到 ZCode Coding Plan 凭证」开头, 后端 CREDENTIAL_ERROR_PREFIX 契约)
-   显示登录引导框 */
+   时容器保持 hidden 且 toast 提示 (EVOLUTION-3, 统计页后台拉取失败同样 toast,
+   接受); 凭证缺失 (错误文案以「未找到 ZCode Coding Plan 凭证」开头, 后端
+   CREDENTIAL_ERROR_PREFIX 契约) 显示登录引导框 */
 let zcodeQuotaLast = null;
 async function loadZcodeQuota() {
   const box = $("zcode-quota");
@@ -594,7 +733,8 @@ async function loadZcodeQuota() {
     renderZcodeQuota(data);
   } catch (e) {
     zcodeQuotaLast = null;
-    box.hidden = true;  // ZCode 不可用: 不显示错误, 容器隐藏
+    box.hidden = true;  // ZCode 不可用: 容器隐藏, 仅 toast 提示
+    toast(t("zcodeQuotaFail"), "err");
   }
 }
 function zcodeLevelText(level) {
@@ -1000,14 +1140,14 @@ function chartClaudecodeTrend(daily7) {
 
 /* ---------------- 首页: 用量概览 6 格 ---------------- */
 function renderOverview(totals, source) {
-  const isBai = source === "bai";
+  const isEst = ["bai", "zcode", "claudecode"].includes(source);   // R6: 费用估算徽章扩展至本地渠道
   const totalTokens = totals.total_input_tokens + totals.total_output_tokens + totals.total_reasoning_tokens;
   const cards = [
     { cls: "c-green", l: t("hitRate"), v: totals.hit_rate.toFixed(1) + "%", s: `${t("hit")} ${fmtTokens(totals.cache_hit_tokens)} · ${t("miss")} ${fmtTokens(totals.uncached_input_tokens)}` },
     { cls: "c-cyan", l: t("hitAmount"), v: fmtTokens(totals.cache_hit_tokens), s: `${t("pctOfInput")} ${totals.hit_rate.toFixed(1)}%` },
     { cls: "c-blue", l: t("totalTokens"), v: fmtTokens(totalTokens), s: t("inclCache") },
     { cls: "c-slate", l: t("totalRequests"), v: fmtInt(totals.request_count), s: t("currentRange") },
-    { cls: "c-amber", l: t("totalCost") + (isBai ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: fmtMoney(totals.total_cost_usd), s: `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
+    { cls: "c-amber", l: t("totalCost") + (isEst ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: fmtMoney(totals.total_cost_usd), s: `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
     { cls: "c-violet", l: t("sessions"), v: fmtInt(totals.session_count), s: t("dedup") },
   ];
   $("overview-grid").innerHTML = cards.map((c) => `
@@ -1046,10 +1186,10 @@ function chartToday(trend) {
 
 /* ---------------- 统计页: 4 总卡 + 6 明细 ---------------- */
 function renderStatsTotal(totals, source) {
-  const isBai = source === "bai";
+  const isEst = ["bai", "zcode", "claudecode"].includes(source);   // R6: 费用估算徽章扩展至本地渠道
   const totalTokens = totals.total_input_tokens + totals.total_output_tokens + totals.total_reasoning_tokens;
   const cards = [
-    { cls: "c-amber", l: t("totalCost") + (isBai ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: fmtMoney(totals.total_cost_usd), s: `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
+    { cls: "c-amber", l: t("totalCost") + (isEst ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: fmtMoney(totals.total_cost_usd), s: `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
     { cls: "c-blue", l: t("totalRequests"), v: fmtInt(totals.request_count), s: t("currentRange") },
     { cls: "c-violet", l: t("totalTokens"), v: fmtTokens(totalTokens), s: `${t("input")} ${fmtTokens(totals.total_input_tokens)} · ${t("output")} ${fmtTokens(totals.total_output_tokens)}` },
     { cls: "c-green", l: t("hitRate"), v: totals.hit_rate.toFixed(1) + "%", s: `${t("hit")} ${fmtTokens(totals.cache_hit_tokens)} / ${t("miss")} ${fmtTokens(totals.uncached_input_tokens)}` },
@@ -1616,25 +1756,31 @@ async function fetchAccounts() {
 function renderUsersList(accounts, activeId) {
   const box = $("users-list");
   if (!box) return;
-  const users = (accounts || []).filter((a) => a.has_token);  // 未登录行不展示 (退出即移除语义)
-  if (!users.length) {
+  if (!(accounts || []).length) {
     box.innerHTML = `<div class="hint" style="padding:12px 16px">${t("noUsers")}</div>`;
     return;
   }
-  box.innerHTML = users.map((a) => {
-    const isActive = a.id === activeId;
-    const actions = isActive
+  box.innerHTML = (accounts || []).map((a) => {
+    const isActive = a.id === activeId && a.has_token;  // 活跃态只对已登录行生效
+    const actions = !a.has_token
+      ? `<button class="btn" data-act="login">${t("loginRow")}</button>
+         <button class="btn" data-act="rename">${t("renameBtn")}</button>
+         <button class="btn btn-danger" data-act="delete">${t("deleteUser")}</button>`
+      : isActive
       ? `<button class="btn" data-act="relogin">${t("relogin")}</button>
          <button class="btn" data-act="rename">${t("renameBtn")}</button>
-         <button class="btn btn-danger" data-act="logout">${t("logout")}</button>`
+         <button class="btn" data-act="logout">${t("logout")}</button>`
       : `<button class="btn" data-act="switch">${t("switchTo")}</button>
          <button class="btn" data-act="rename">${t("renameBtn")}</button>
          <button class="btn btn-danger" data-act="delete">${t("deleteUser")}</button>`;
+    const badge = !a.has_token
+      ? `<span class="badge no ur-badge">${t("notLoggedIn")}</span>`
+      : isActive ? `<span class="badge ok ur-badge">${t("currentUserBadge")}</span>` : "";
     return `
     <div class="user-row${isActive ? " active" : ""}" data-id="${a.id}">
       <div class="ur-meta">
-        <div class="ur-name">${escapeHtml(a.name)}${a.source === "bai" ? `<span class="src-badge ur-badge">${t("sourceBai")}</span>` : a.source === "commandcode" ? `<span class="src-badge ur-badge">${t("sourceCommandcode")}</span>` : ""}${isActive ? `<span class="badge ok ur-badge">${t("currentUserBadge")}</span>` : ""}</div>
-        <div class="ur-ws">${escapeHtml(a.workspace_id || "—")} · ${t("loggedIn")}</div>
+        <div class="ur-name">${escapeHtml(a.name)}${a.source === "bai" ? `<span class="src-badge ur-badge">${t("sourceBai")}</span>` : a.source === "commandcode" ? `<span class="src-badge ur-badge">${t("sourceCommandcode")}</span>` : ""}${badge}</div>
+        <div class="ur-ws">${escapeHtml(a.workspace_id || "—")}${a.has_token ? " · " + t("loggedIn") : ""}</div>
         ${a.source === "commandcode" ? `<div class="ur-note">${t("ccHistoryNote")}</div>` : ""}
       </div>
       <div class="ur-actions">${actions}</div>
@@ -1652,6 +1798,16 @@ async function onUserRowAction(id, act) {
     } catch (e) { toast(e.message || t("loadFailed"), "err"); }
     return;
   }
+  if (act === "login") {  // 未登录行的「登录」: 定向登录该账号
+    startLoginWatch();
+    const a = await pywebviewApi();
+    if (a && a.open_login) { a.open_login("relogin", id); return; }
+    try {  // 浏览器兜底
+      await api("/api/relogin", { method: "POST", body: JSON.stringify({ id }) });
+      toast(t("loginNote"));
+    } catch (e) { toast(e.message || t("loadFailed"), "err"); }
+    return;
+  }
   if (act === "relogin") {
     startLoginWatch();
     const a = await pywebviewApi();
@@ -1666,7 +1822,7 @@ async function onUserRowAction(id, act) {
     const accounts = (await api("/api/accounts").catch(() => ({ accounts: [] }))).accounts || [];
     const acc = accounts.find((x) => x.id === id);
     showModal({
-      title: t("logout"), danger: true,
+      title: t("logout"),
       message: escapeHtml(t("logoutUserConfirm").replace("{name}", acc ? acc.name : "")),
       okText: t("confirm"),
       onOk: async () => {
@@ -1921,11 +2077,247 @@ function bindEvents() {
     $("btn-login").textContent = t("loginBtn") + "…";
     await api("/api/relogin", { method: "POST" });
   });
+  $("btn-manage-data").addEventListener("click", () => {  // 不登录先看本地数据: 关遮罩 -> 设置页账号列表
+    showLoginOverlay(false);
+    switchPage("settings");
+    const list = $("users-list");
+    if (list) {
+      list.scrollIntoView({ behavior: "smooth", block: "center" });
+      list.classList.remove("users-list-flash");
+      void list.offsetWidth;  // 强制 reflow, 重复点击也能重放动画
+      list.classList.add("users-list-flash");
+      setTimeout(() => list.classList.remove("users-list-flash"), 1100);
+    }
+  });
   $("btn-quit-app").addEventListener("click", async () => {
     const a = await pywebviewApi();
     if (a) a.quit();
   });
+  // 渠道 tab (bindEvents 内追加)
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("#channel-tabs .pill");
+    if (!b) return;
+    switchChannel(b.dataset.ch);
+  });
+  $("report-metric").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    document.querySelectorAll("#report-metric button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active"); state.reportMetric = b.dataset.m; loadReportAll();
+  });
   bindTitlebar();
+}
+
+function switchChannel(ch) {
+  state.channel = ch;
+  document.querySelectorAll("#channel-tabs .pill").forEach((x) => x.classList.toggle("active", x.dataset.ch === ch));
+  loadDashboard();
+}
+
+const CH_COLOR = { opencode: "var(--ch-opencode)", bai: "var(--ch-bai)", commandcode: "var(--ch-commandcode)",
+  zcode: "var(--ch-zcode)", claudecode: "var(--ch-claudecode)", dsh: "var(--ch-dsh)" };   // 新R5 N18: 扩齐六渠道, 防分段同色
+
+async function loadReportAll(quiet = false) {
+  try {
+    const range = state.range;
+    const [w, rows, ov, zq] = await Promise.all([
+      api(`/api/report/windows`),
+      api(`/api/report/channels?range=${range}`),
+      api(`/api/accounts/overview`),                    // R1: 摘要条数据并入同一并发 (T9 renderQuotaBar)
+      api(`/api/zcode/quota`).catch(() => null),        // 问题5: ZCode 额度并入配额条, 失败不出卡
+    ]);
+    renderWindows(w, rows.rows.some((r) => r.estimated));
+    renderQuotaBar(ov.accounts, zq);
+    renderChannelTable(rows.rows);
+    $("report-scope").textContent = t("scopeHint").replace("{n}", w.channel_count).replace("{m}", w.account_count);
+    // 估算徽章: 仅 指标=费用 且 含估算渠道(bai/zcode/claudecode)时显示 (新R5 N24: 注释随 R6 est 集合更新)
+    $("report-est").hidden = !(state.reportMetric === "cost" && rows.rows.some((r) => r.estimated));
+    const daily = await api(`/api/report/daily?range=${range}&metric=${state.reportMetric}`);
+    chartReportStack(daily);
+    chartReportDonut(daily);
+    if (range === "today" || range === "yesterday") {
+      $("report-hourly").closest(".card").hidden = false;    // R2: 藏整卡, 不留空壳标题
+      const hSpan = $("hourly-title").querySelector("[data-i18n]");   // 标题随档位切换 (data-i18n 同步改, 保持 applyLang 一致)
+      if (hSpan) { hSpan.textContent = t(range === "yesterday" ? "yesterday" : "todayTrend"); hSpan.setAttribute("data-i18n", range === "yesterday" ? "yesterday" : "todayTrend"); }
+      chartReportHourly(await api(`/api/report/hourly?date=${range}`));
+    } else {
+      $("report-hourly").closest(".card").hidden = true;
+    }
+  } catch (e) { if (!quiet) toast(t("loadFailed") + ": " + e); }   // R1: 现有 key 为 loadFailed
+}
+
+function renderQuotaBar(accounts, zdata = null) {
+  const byCh = {};
+  for (const a of accounts) {
+    (byCh[a.source] = byCh[a.source] || []).push(a);
+  }
+  const cards = Object.keys(byCh).map((ch) => {
+    const list = byCh[ch];
+    // 同步归并 (spec v10): 时间取最陈旧 min; 任一失败 -> 红点
+    const times = list.map((a) => a.last_sync_at).filter(Boolean).sort();
+    const failed = list.some((a) => a.last_sync_status && a.last_sync_status !== "ok");
+    const foot = `${list.length}${t("accountsUnit")}${times.length ? ` · ${fmtAgo(times[0])}` : ""}${failed ? ' <span class="sync-fail" title="同步失败">⚠</span>' : ""}`;
+    let main;
+    if (ch === "opencode") {
+      // 窗口百分比不可聚合 -> 最紧张账号 max% (spec v5)
+      const pct = Math.max(0, ...list.map((a) => (a.quota && a.quota.windows || []).reduce((m, x) => Math.max(m, x.label === "5h Rolling" ? (x.used || 0) : 0), 0)));
+      main = `<div class="qb-bar"><div class="qb-bar-fill" style="width:${Math.min(100, pct).toFixed(1)}%"></div></div>
+        <div class="qb-sub">${t("rolling")} 5h · <b>${Math.max(0, pct).toFixed(0)}%</b></div>`;
+    } else if (ch === "bai") {
+      // 积分余额跨账号合计 (新R1)
+      const pts = list.reduce((s, a) => s + (((a.quota && a.quota.windows || [])
+        .find((x) => x.unit === "points" || x.points_balance != null) || {}).points_balance || 0), 0);
+      main = `<div class="qb-val">${t("quotaPointsBalance").replace("{n}", fmtInt(pts))}</div>`;
+    } else if (ch === "commandcode") {
+      // USD 剩余额度跨账号合计 (与 renderUsageBlocks USD 分支同字段)
+      const rem = list.reduce((s, a) => s + (((a.quota && a.quota.windows || [])
+        .filter((x) => x.unit === "USD")
+        .reduce((u, x) => u + ((Number(x.total) || 0) - (Number(x.used) || 0)), 0)) || 0), 0);
+      main = `<div class="qb-val">${fmtUsd(rem)}</div><div class="qb-sub">${t("remaining")}</div>`;
+    } else {
+      main = `<div class="qb-val">${list.length}</div><div class="qb-sub">${t("accountsUnit")}</div>`;
+    }
+    return `<div class="qb-card">
+      <div class="qb-head"><span class="qb-dot" style="background:${chColor(ch)}"></span><span class="qb-name" style="color:${chColor(ch)}">${ch}</span></div>
+      ${main}
+      <div class="qb-foot">${foot}</div>
+    </div>`;
+  });
+  if (zdata && zdata.success) {   // Task 8 接入 ZCode 额度; 本任务先支持入参
+    const wins = zdata.windows || [];
+    const segs = wins
+      .filter((x) => x.label === "5h Rolling" || x.label === "Weekly")
+      .map((x) => `${(QUOTA_LABEL[x.label] || (() => x.label))()} ${(Number(x.used) || 0).toFixed(0)}%`);
+    cards.push(`<div class="qb-card">
+      <div class="qb-head"><span class="qb-dot" style="background:${chColor("zcode")}"></span><span class="qb-name" style="color:${chColor("zcode")}">zcode</span>${zdata.level ? `<span class="zcode-badge">${escapeHtml(zcodeLevelText(zdata.level))}</span>` : ""}</div>
+      <div class="qb-sub">${segs.join(" · ") || t("zcodeNoData")}</div>
+      <div class="qb-foot">GLM Coding Plan</div>
+    </div>`);
+  }
+  $("quota-bar").innerHTML = cards.join("");
+}
+
+function fmtAgo(iso) {  // 相对时间: 简化复用 fmtDateTime + 差值分钟
+  const ms = Date.now() - new Date(iso.replace(" ", "T")).getTime();
+  const m = Math.max(0, Math.round(ms / 60000));
+  return m < 60 ? `${m}min` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
+}
+
+function renderWindows(w, hasEst = false) {
+  const cell = (key, label, sub) => `<div class="wb-cell" data-win="${key}"><div class="wb-l">${label}</div>
+    <div class="wb-v">${fmtTokens(w[key].tokens)}</div><div class="wb-v2">${fmtMoney(w[key].cost)}</div>
+    <div class="wb-s${w.compare.spike && key === "today" ? " spike" : ""}">${sub}</div></div>`;
+  const cmp = w.compare.insufficient_sample ? t("sampleInsufficient")
+    : (w.compare.pct == null ? "" : `<span class="${w.compare.pct >= 0 ? "up" : "down"}">${w.compare.pct >= 0 ? "↑" : "↓"}${Math.abs(w.compare.pct)}%</span> ${t("vsSame")}`);
+  $("windows-bar").innerHTML =
+    cell("today", t("today"), cmp) + cell("yesterday", t("yesterday"), "") +   // 新R1: 昨日格副行为空 (规格布局)
+    cell("7d", t("d7"), w["7d"].tokens ? `${t("dailyAvg")} ${fmtTokens(Math.round(w["7d"].tokens / 7))}` : "") +
+    cell("30d", t("d30"), w["30d"].tokens ? `${t("dailyAvg")} ${fmtTokens(Math.round(w["30d"].tokens / 30))}` : "");
+  // 标注行 (占满整行): 数据起点 + 费用估算徽章, 有内容才追加
+  const notes = [];
+  if (w.data_since) notes.push(`${t("dataSince")} ${w.data_since}`);
+  if (hasEst) notes.push(`<span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>`);
+  if (notes.length) $("windows-bar").insertAdjacentHTML("beforeend", `<div class="wb-since">${notes.join(" · ")}</div>`);
+  // 点击格 -> 页头 pill 联动 (spec v4/v5 单向映射)
+  document.querySelectorAll("#windows-bar .wb-cell").forEach((c) => c.addEventListener("click", () => {
+    const map = { today: "today", yesterday: "yesterday", "7d": "7d", "30d": "30d" };
+    const r = map[c.dataset.win];
+    const btn = document.querySelector(`#home-pills .pill[data-r="${r}"]`);
+    if (btn) btn.click();
+  }));
+}
+
+let cStack = null, cDonut = null;
+
+function chColor(ch) {
+  const v = CH_COLOR[ch];
+  return v ? getComputedStyle(document.documentElement).getPropertyValue(v.replace(/var\(|\)/g, "").trim()) || "#4f8ef7" : "#4f8ef7";
+}
+
+function chartReportStack(d) {
+  const canvas = $("report-stack");
+  if (cStack) cStack.destroy();
+  cStack = new Chart(canvas, {
+    type: "bar",
+    data: {
+      labels: d.labels,
+      datasets: Object.keys(d.series).map((ch) => ({
+        label: ch, data: d.series[ch], backgroundColor: chColor(ch), borderRadius: 2, barPercentage: 0.8,
+      })),
+    },
+    options: {
+      responsive: false, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } } },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 10 } },
+        y: { stacked: true, grid: { color: cssVar("--grid") }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => d.metric === "cost" ? fmtMoney(v) : d.metric === "requests" ? fmtInt(v) : fmtTokens(v) } },
+      },
+    },
+  });
+  cStack.resize();
+}
+
+function chartReportDonut(d) {
+  const canvas = $("report-donut");
+  if (cDonut) cDonut.destroy();
+  const chs = Object.keys(d.series);
+  const totals = chs.map((ch) => d.series[ch].reduce((a, b) => a + b, 0));
+  const grand = totals.reduce((a, b) => a + b, 0);
+  const centerText = { id: "centerText", afterDraw(chart) {   // 环形图中心总量 (spec v8, P0)
+    const { ctx, chartArea } = chart;
+    if (!chartArea) return;
+    ctx.save();
+    ctx.font = "600 16px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = cssVar("--text1") || "#111";
+    const v = d.metric === "cost" ? fmtMoney(grand) : d.metric === "requests" ? fmtInt(grand) : fmtTokens(grand);
+    ctx.fillText(v, (chartArea.left + chartArea.right) / 2, (chartArea.top + chartArea.bottom) / 2);
+    ctx.restore();
+  } };
+  cDonut = new Chart(canvas, {
+    type: "doughnut",
+    plugins: [centerText],
+    data: { labels: chs, datasets: [{ data: totals, backgroundColor: chs.map(chColor), borderWidth: 2, borderColor: cssVar("--card") }] },
+    options: {
+      responsive: false, maintainAspectRatio: false, cutout: "62%",
+      onClick: (_e, els) => { if (els.length) switchChannel(chs[els[0].index]); },  // 扇区->渠道 tab (spec v4)
+      plugins: { legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } } },
+    },
+  });
+  cDonut.resize();
+}
+
+let cHourly = null;
+
+function chartReportHourly(d) {
+  const canvas = $("report-hourly");
+  if (cHourly) cHourly.destroy();
+  const chs = Object.keys(d.series);
+  cHourly = new Chart(canvas, {
+    type: "bar",
+    data: { labels: d.labels.map((h) => `${h}`), datasets: chs.map((ch) => ({ label: ch, data: d.series[ch], backgroundColor: chColor(ch), borderRadius: 2, barPercentage: 0.9 })) },
+    options: {
+      responsive: false, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: chs.length > 1, labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } } },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 12 } },
+        y: { stacked: true, grid: { color: cssVar("--grid") }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtTokens(v) } },
+      },
+    },
+  });
+  cHourly.resize();
+}
+
+function renderChannelTable(rows) {
+  if (!rows.length) {
+    $("report-table").innerHTML = `<tr><td colspan="8" class="empty-cell">${t("reportEmpty")}</td></tr>`;
+    return;
+  }
+  $("report-table").innerHTML = rows.map((r) => `<tr>
+    <td style="color:${chColor(r.channel)}">${r.channel}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
+    <td class="num">${fmtTokens(r.tokens)}</td><td class="num">${fmtTokens(r.input)}</td><td class="num">${fmtTokens(r.output)}</td>
+    <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${fmtInt(r.requests)}</td><td class="num">${fmtMoney(r.cost)}</td>
+    <td>${r.channel === "dsh" ? t("dataSinceToday") : (r.data_since || "—")}</td></tr>`).join("");   // R6: dsh 仅今日
 }
 
 /* ---------------- 自动同步 ---------------- */

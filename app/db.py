@@ -13,10 +13,12 @@ import json
 import os
 import sqlite3
 import sys
-from datetime import datetime, timezone, date
+import threading
+from datetime import datetime, timedelta, timezone, date
 from typing import Any, Optional
 
 _DB: Optional[sqlite3.Connection] = None
+_DB_LOCK = threading.RLock()  # 写路径串行化: 共享单连接上的事务互斥 (EVOLUTION-1)
 _data_dir_override: Optional[str] = None
 
 
@@ -64,22 +66,30 @@ def get_db() -> sqlite3.Connection:
     global _DB
     if _DB is not None:
         return _DB
-    path = db_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    conn = sqlite3.connect(path, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA foreign_keys = ON")
-    _DB = conn
-    _init_schema(conn)
-    return conn
+    with _DB_LOCK:
+        # 双重检查: 等锁期间他线程可能已完成创建, 不得二次建连覆盖 _DB
+        if _DB is not None:
+            return _DB
+        path = db_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # 禁用语句缓存: pysqlite 每连接共享语句缓存在多线程并发下不安全
+        # (实测产生 InterfaceError/fetchone 对存在行返回 None/Row 列错乱),
+        # cached_statements=0 实测错误清零, 详见 doc/evolution-diagnosis-1.md
+        conn = sqlite3.connect(path, check_same_thread=False, cached_statements=0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA foreign_keys = ON")
+        _DB = conn
+        _init_schema(conn)
+        return conn
 
 
 def close_db() -> None:
     global _DB
-    if _DB is not None:
-        _DB.close()
-        _DB = None
+    with _DB_LOCK:
+        if _DB is not None:
+            _DB.close()
+            _DB = None
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +297,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_usage_account_time ON usage_records(account_id, created_at DESC)"
     )
 
+    # 迁移 2d: UTC 确定性表达式索引 (方案4① v2 路线C) — 报表日粒度谓词改用
+    # datetime(col) >= datetime(?) 走此索引 (原 substr(datetime(col,'localtime'))
+    # 含非确定性修饰符, SQLite 禁止建索引, 且该形式本为全表扫描).
+    # 注意: 存量库首次升级时 CREATE INDEX 需全表计算表达式, 一次性开销秒级.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_usage_acct_utc ON usage_records"
+        "(account_id, datetime(created_at))"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_usage_utc ON usage_records(datetime(created_at))"
+    )
+
     # 迁移 2b: 旧库 accounts 补充 source 列 (缺则补, 幂等; 老行默认 'opencode')
     acc_cols = {row["name"] for row in conn.execute("PRAGMA table_info(accounts)").fetchall()}
     if "source" not in acc_cols:
@@ -375,16 +397,19 @@ def get_active_account_id() -> int:
             if row["token"].strip():
                 return aid
             if logged_min:  # 活跃行未登录但有其他已登录账号 -> 让位
-                _persist_active(conn, logged_min)
+                with _DB_LOCK:
+                    _persist_active(conn, logged_min)
                 return logged_min
             return aid     # 全部未登录: 维持原选择
     if logged_min:
-        _persist_active(conn, logged_min)
+        with _DB_LOCK:
+            _persist_active(conn, logged_min)
         return logged_min
     row = conn.execute("SELECT MIN(id) AS i FROM accounts").fetchone()
     fallback = int(row["i"]) if row and row["i"] is not None else 0
     if fallback:
-        _persist_active(conn, fallback)
+        with _DB_LOCK:
+            _persist_active(conn, fallback)
     return fallback
 
 
@@ -396,12 +421,13 @@ def _resolve_account_id(account_id: Optional[int]) -> int:
 
 
 def set_active_account(account_id: int) -> bool:
-    conn = get_db()
-    row = conn.execute("SELECT id FROM accounts WHERE id = ?", (int(account_id),)).fetchone()
-    if row is None:
-        return False
-    _persist_active(conn, int(account_id))
-    return True
+    with _DB_LOCK:
+        conn = get_db()
+        row = conn.execute("SELECT id FROM accounts WHERE id = ?", (int(account_id),)).fetchone()
+        if row is None:
+            return False
+        _persist_active(conn, int(account_id))
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -454,34 +480,36 @@ def _ensure_state_row(conn: sqlite3.Connection, account_id: int) -> None:
     )
 
 
-def save_token(token: str, workspace_id: str = "Default") -> None:
-    """重新登录语义: 更新活跃账号的凭证并重置其增量游标."""
-    conn = get_db()
-    aid = get_active_account_id()
-    if not aid:
-        return
-    conn.execute(
-        """UPDATE accounts SET token = ?, workspace_id = ?, resolved_workspace_id = NULL,
-           updated_at = ? WHERE id = ?""",
-        (token.strip(), workspace_id.strip() or "Default", _now_iso(), aid),
-    )
-    _ensure_state_row(conn, aid)
-    conn.execute(
-        "UPDATE usage_sync_state SET deepest_page_fetched = -1 WHERE account_id = ?", (aid,)
-    )
-    conn.commit()
+def save_token(token: str, workspace_id: str = "Default", account_id: Optional[int] = None) -> None:
+    """重新登录语义: 更新指定/活跃账号的凭证并重置其增量游标 (account_id 定向落库, 无去重)."""
+    with _DB_LOCK:
+        conn = get_db()
+        aid = _resolve_account_id(account_id)
+        if not aid:
+            return
+        conn.execute(
+            """UPDATE accounts SET token = ?, workspace_id = ?, resolved_workspace_id = NULL,
+               updated_at = ? WHERE id = ?""",
+            (token.strip(), workspace_id.strip() or "Default", _now_iso(), aid),
+        )
+        _ensure_state_row(conn, aid)
+        conn.execute(
+            "UPDATE usage_sync_state SET deepest_page_fetched = -1 WHERE account_id = ?", (aid,)
+        )
+        conn.commit()
 
 
 def save_resolved_workspace(workspace_id: str, account_id: Optional[int] = None) -> None:
-    conn = get_db()
-    aid = _resolve_account_id(account_id)
-    if not aid:
-        return
-    conn.execute(
-        "UPDATE accounts SET resolved_workspace_id = ?, updated_at = ? WHERE id = ?",
-        (workspace_id, _now_iso(), aid),
-    )
-    conn.commit()
+    with _DB_LOCK:
+        conn = get_db()
+        aid = _resolve_account_id(account_id)
+        if not aid:
+            return
+        conn.execute(
+            "UPDATE accounts SET resolved_workspace_id = ?, updated_at = ? WHERE id = ?",
+            (workspace_id, _now_iso(), aid),
+        )
+        conn.commit()
 
 
 def get_token() -> str:
@@ -534,37 +562,107 @@ def add_account(
     workspace_id = dedupe_key`` 判同 (dedupe_key = userId; 登录流程经
     workspace_hint 形参传入时兜底取 hint), 同理不按 token 去重.
     """
-    conn = get_db()
-    token = token.strip()
-    hint = (workspace_hint or "").strip()
-    if source == "bai":
-        dedupe_key = (dedupe_key or "").strip()
-        existing = None
-        if dedupe_key:
-            existing = conn.execute(
-                "SELECT id FROM accounts WHERE source = 'bai' AND workspace_id = ?"
-                " ORDER BY id LIMIT 1",
-                (dedupe_key,),
-            ).fetchone()
-        if existing is not None:
-            aid = int(existing["id"])
-            conn.execute(
-                "UPDATE accounts SET token = ?, updated_at = ? WHERE id = ?",
-                (token, _now_iso(), aid),
+    with _DB_LOCK:
+        conn = get_db()
+        token = token.strip()
+        hint = (workspace_hint or "").strip()
+        if source == "bai":
+            dedupe_key = (dedupe_key or "").strip()
+            existing = None
+            if dedupe_key:
+                existing = conn.execute(
+                    "SELECT id FROM accounts WHERE source = 'bai' AND workspace_id = ?"
+                    " ORDER BY id LIMIT 1",
+                    (dedupe_key,),
+                ).fetchone()
+            if existing is not None:
+                aid = int(existing["id"])
+                conn.execute(
+                    "UPDATE accounts SET token = ?, updated_at = ? WHERE id = ?",
+                    (token, _now_iso(), aid),
+                )
+                if switch:
+                    _persist_active(conn, aid)
+                else:
+                    conn.commit()
+                return aid
+            # 无匹配 -> 新建 BAI 行
+            nxt = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM accounts").fetchone()["n"]
+            name = hint[:50] if hint else f"User {nxt}"
+            now = _now_iso()
+            cur = conn.execute(
+                """INSERT INTO accounts (name, workspace_id, resolved_workspace_id, token, source, created_at, updated_at)
+                   VALUES (?, ?, NULL, ?, 'bai', ?, ?)""",
+                (name, dedupe_key or hint or "Default", token, now, now),
             )
+            aid = int(cur.lastrowid or nxt)
+            _ensure_state_row(conn, aid)
             if switch:
                 _persist_active(conn, aid)
             else:
                 conn.commit()
             return aid
-        # 无匹配 -> 新建 BAI 行
+        if source == "commandcode":
+            # dedupe_key = userId; 登录流程若只把它放进 workspace_hint (照 bai 约定两者同值),
+            # 兜底取 hint, 保证只传 hint 的调用方也能正确去重
+            dedupe_key = (dedupe_key or "").strip() or hint
+            existing = None
+            if dedupe_key:
+                existing = conn.execute(
+                    "SELECT id FROM accounts WHERE source = 'commandcode' AND workspace_id = ?"
+                    " ORDER BY id LIMIT 1",
+                    (dedupe_key,),
+                ).fetchone()
+            if existing is not None:
+                aid = int(existing["id"])
+                conn.execute(
+                    "UPDATE accounts SET token = ?, updated_at = ? WHERE id = ?",
+                    (token, _now_iso(), aid),
+                )
+                if switch:
+                    _persist_active(conn, aid)
+                else:
+                    conn.commit()
+                return aid
+            # 无匹配 -> 新建 commandcode 行
+            nxt = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM accounts").fetchone()["n"]
+            name = hint[:50] if hint else f"User {nxt}"
+            now = _now_iso()
+            cur = conn.execute(
+                """INSERT INTO accounts (name, workspace_id, resolved_workspace_id, token, source, created_at, updated_at)
+                   VALUES (?, ?, NULL, ?, 'commandcode', ?, ?)""",
+                (name, dedupe_key or hint or "Default", token, now, now),
+            )
+            aid = int(cur.lastrowid or nxt)
+            _ensure_state_row(conn, aid)
+            if switch:
+                _persist_active(conn, aid)
+            else:
+                conn.commit()
+            return aid
+        # source == "opencode" (默认): 原逻辑不变, 按 TRIM(token) 去重
+        existing = conn.execute(
+            "SELECT id FROM accounts WHERE TRIM(token) = ? ORDER BY id LIMIT 1", (token,)
+        ).fetchone() if token else None
+        if existing is not None:
+            aid = int(existing["id"])
+            if hint:
+                conn.execute(
+                    "UPDATE accounts SET workspace_id = ?, updated_at = ? WHERE id = ?",
+                    (hint, _now_iso(), aid),
+                )
+            if switch:
+                _persist_active(conn, aid)
+            else:
+                conn.commit()
+            return aid
         nxt = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM accounts").fetchone()["n"]
         name = hint[:50] if hint else f"User {nxt}"
         now = _now_iso()
         cur = conn.execute(
-            """INSERT INTO accounts (name, workspace_id, resolved_workspace_id, token, source, created_at, updated_at)
-               VALUES (?, ?, NULL, ?, 'bai', ?, ?)""",
-            (name, dedupe_key or hint or "Default", token, now, now),
+            """INSERT INTO accounts (name, workspace_id, resolved_workspace_id, token, created_at, updated_at)
+               VALUES (?, ?, NULL, ?, ?, ?)""",
+            (name, hint or "Default", token, now, now),
         )
         aid = int(cur.lastrowid or nxt)
         _ensure_state_row(conn, aid)
@@ -573,135 +671,60 @@ def add_account(
         else:
             conn.commit()
         return aid
-    if source == "commandcode":
-        # dedupe_key = userId; 登录流程若只把它放进 workspace_hint (照 bai 约定两者同值),
-        # 兜底取 hint, 保证只传 hint 的调用方也能正确去重
-        dedupe_key = (dedupe_key or "").strip() or hint
-        existing = None
-        if dedupe_key:
-            existing = conn.execute(
-                "SELECT id FROM accounts WHERE source = 'commandcode' AND workspace_id = ?"
-                " ORDER BY id LIMIT 1",
-                (dedupe_key,),
-            ).fetchone()
-        if existing is not None:
-            aid = int(existing["id"])
-            conn.execute(
-                "UPDATE accounts SET token = ?, updated_at = ? WHERE id = ?",
-                (token, _now_iso(), aid),
-            )
-            if switch:
-                _persist_active(conn, aid)
-            else:
-                conn.commit()
-            return aid
-        # 无匹配 -> 新建 commandcode 行
-        nxt = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM accounts").fetchone()["n"]
-        name = hint[:50] if hint else f"User {nxt}"
-        now = _now_iso()
-        cur = conn.execute(
-            """INSERT INTO accounts (name, workspace_id, resolved_workspace_id, token, source, created_at, updated_at)
-               VALUES (?, ?, NULL, ?, 'commandcode', ?, ?)""",
-            (name, dedupe_key or hint or "Default", token, now, now),
-        )
-        aid = int(cur.lastrowid or nxt)
-        _ensure_state_row(conn, aid)
-        if switch:
-            _persist_active(conn, aid)
-        else:
-            conn.commit()
-        return aid
-    # source == "opencode" (默认): 原逻辑不变, 按 TRIM(token) 去重
-    existing = conn.execute(
-        "SELECT id FROM accounts WHERE TRIM(token) = ? ORDER BY id LIMIT 1", (token,)
-    ).fetchone() if token else None
-    if existing is not None:
-        aid = int(existing["id"])
-        if hint:
-            conn.execute(
-                "UPDATE accounts SET workspace_id = ?, updated_at = ? WHERE id = ?",
-                (hint, _now_iso(), aid),
-            )
-        if switch:
-            _persist_active(conn, aid)
-        else:
-            conn.commit()
-        return aid
-    nxt = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 AS n FROM accounts").fetchone()["n"]
-    name = hint[:50] if hint else f"User {nxt}"
-    now = _now_iso()
-    cur = conn.execute(
-        """INSERT INTO accounts (name, workspace_id, resolved_workspace_id, token, created_at, updated_at)
-           VALUES (?, ?, NULL, ?, ?, ?)""",
-        (name, hint or "Default", token, now, now),
-    )
-    aid = int(cur.lastrowid or nxt)
-    _ensure_state_row(conn, aid)
-    if switch:
-        _persist_active(conn, aid)
-    else:
-        conn.commit()
-    return aid
 
 
 def rename_account(account_id: int, name: str) -> bool:
-    name = (name or "").strip()[:50]
-    if not name:
-        return False
-    conn = get_db()
-    cur = conn.execute(
-        "UPDATE accounts SET name = ?, updated_at = ? WHERE id = ?",
-        (name, _now_iso(), int(account_id)),
-    )
-    conn.commit()
-    return cur.rowcount > 0
+    with _DB_LOCK:
+        name = (name or "").strip()[:50]
+        if not name:
+            return False
+        conn = get_db()
+        cur = conn.execute(
+            "UPDATE accounts SET name = ?, updated_at = ? WHERE id = ?",
+            (name, _now_iso(), int(account_id)),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def delete_account(account_id: int) -> int:
     """删除账号及其本地全部数据 (级联), 返回剩余账号数."""
-    conn = get_db()
-    aid = int(account_id)
-    conn.execute("DELETE FROM usage_records WHERE account_id = ?", (aid,))
-    conn.execute("DELETE FROM usage_sync_state WHERE account_id = ?", (aid,))
-    conn.execute("DELETE FROM charts_buckets WHERE account_id = ?", (aid,))
-    conn.execute("DELETE FROM accounts WHERE id = ?", (aid,))
-    clear_cc_summary(aid)
-    remaining = int(conn.execute("SELECT COUNT(*) AS c FROM accounts").fetchone()["c"])
-    active = _raw_payload(conn).get("active_account_id")
-    if active == aid:
-        nxt = conn.execute("SELECT MIN(id) AS i FROM accounts").fetchone()["i"]
-        if nxt is not None:
-            _persist_active(conn, int(nxt))
-        else:
-            data = _raw_payload(conn)
-            data.pop("active_account_id", None)
-            _write_payload(conn, data)
-            conn.commit()
-    conn.commit()
-    return remaining
+    with _DB_LOCK:
+        conn = get_db()
+        aid = int(account_id)
+        conn.execute("DELETE FROM usage_records WHERE account_id = ?", (aid,))
+        conn.execute("DELETE FROM usage_sync_state WHERE account_id = ?", (aid,))
+        conn.execute("DELETE FROM charts_buckets WHERE account_id = ?", (aid,))
+        conn.execute("DELETE FROM accounts WHERE id = ?", (aid,))
+        clear_cc_summary(aid)
+        remaining = int(conn.execute("SELECT COUNT(*) AS c FROM accounts").fetchone()["c"])
+        active = _raw_payload(conn).get("active_account_id")
+        if active == aid:
+            nxt = conn.execute("SELECT MIN(id) AS i FROM accounts").fetchone()["i"]
+            if nxt is not None:
+                _persist_active(conn, int(nxt))
+            else:
+                data = _raw_payload(conn)
+                data.pop("active_account_id", None)
+                _write_payload(conn, data)
+                conn.commit()
+        conn.commit()
+        return remaining
 
 
 def clear_account() -> None:
-    """退出登录当前活跃账号: 清除其凭证与本地缓存数据 (保留账号行便于重新登录)."""
-    conn = get_db()
-    aid = get_active_account_id()
-    if not aid:
-        return
-    conn.execute("DELETE FROM usage_records WHERE account_id = ?", (aid,))
-    conn.execute("DELETE FROM charts_buckets WHERE account_id = ?", (aid,))
-    conn.execute(
-        "UPDATE accounts SET token = '', resolved_workspace_id = NULL, updated_at = ? WHERE id = ?",
-        (_now_iso(), aid),
-    )
-    _ensure_state_row(conn, aid)
-    conn.execute(
-        "UPDATE usage_sync_state SET last_sync_status = NULL, last_sync_error = NULL,"
-        " last_inserted_count = 0, deepest_page_fetched = -1, total_records = 0,"
-        " oldest_record_at = NULL, newest_record_at = NULL WHERE account_id = ?",
-        (aid,),
-    )
-    clear_cc_summary(aid)
-    conn.commit()
+    """退出登录当前活跃账号: 仅清除凭证 (token 置空, resolved_workspace_id 复位),
+    本地用量数据与同步状态保留 (EVOLUTION-2, 退出登录去危险化)."""
+    with _DB_LOCK:
+        conn = get_db()
+        aid = get_active_account_id()
+        if not aid:
+            return
+        conn.execute(
+            "UPDATE accounts SET token = '', resolved_workspace_id = NULL, updated_at = ? WHERE id = ?",
+            (_now_iso(), aid),
+        )
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -711,52 +734,53 @@ def clear_account() -> None:
 
 def insert_usage_records(records: list[dict[str, Any]], account_id: Optional[int] = None) -> int:
     """批量写入 (归属指定/活跃账号), 按 usg_id 去重; 返回新增条数."""
-    if not records:
-        return 0
-    aid = _resolve_account_id(account_id)
-    conn = get_db()
-    synced_at = _now_iso()
-    stmt = (
-        "INSERT INTO usage_records (usg_id, created_at, model, provider, input_tokens,"
-        " output_tokens, reasoning_tokens, cache_read_tokens, cache_write_5m_tokens,"
-        " cache_write_1h_tokens, cost_raw, cost_usd, key_id, session_id, plan, synced_at, account_id)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        " ON CONFLICT(usg_id) DO UPDATE SET"
-        " input_tokens = excluded.input_tokens,"
-        " output_tokens = excluded.output_tokens,"
-        " reasoning_tokens = excluded.reasoning_tokens,"
-        " cache_read_tokens = excluded.cache_read_tokens,"
-        " cache_write_5m_tokens = excluded.cache_write_5m_tokens,"
-        " cache_write_1h_tokens = excluded.cache_write_1h_tokens,"
-        " cost_raw = excluded.cost_raw, cost_usd = excluded.cost_usd,"
-        " synced_at = excluded.synced_at"
-    )
-    inserted = 0
-    try:
-        conn.execute("BEGIN")
-        for rec in records:
-            cur = conn.execute(
-                "SELECT 1 FROM usage_records WHERE usg_id = ?", (rec["usg_id"],)
-            )
-            existed = cur.fetchone() is not None
-            conn.execute(
-                stmt,
-                (
-                    rec["usg_id"], rec["created_at"], rec["model"], rec.get("provider"),
-                    rec["input_tokens"], rec["output_tokens"], rec["reasoning_tokens"],
-                    rec["cache_read_tokens"], rec["cache_write_5m_tokens"],
-                    rec["cache_write_1h_tokens"], rec["cost_raw"], rec["cost_usd"],
-                    rec.get("key_id"), rec.get("session_id"), rec.get("plan"),
-                    synced_at, aid,
-                ),
-            )
-            if not existed:
-                inserted += 1
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    return inserted
+    with _DB_LOCK:
+        if not records:
+            return 0
+        aid = _resolve_account_id(account_id)
+        conn = get_db()
+        synced_at = _now_iso()
+        stmt = (
+            "INSERT INTO usage_records (usg_id, created_at, model, provider, input_tokens,"
+            " output_tokens, reasoning_tokens, cache_read_tokens, cache_write_5m_tokens,"
+            " cache_write_1h_tokens, cost_raw, cost_usd, key_id, session_id, plan, synced_at, account_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(usg_id) DO UPDATE SET"
+            " input_tokens = excluded.input_tokens,"
+            " output_tokens = excluded.output_tokens,"
+            " reasoning_tokens = excluded.reasoning_tokens,"
+            " cache_read_tokens = excluded.cache_read_tokens,"
+            " cache_write_5m_tokens = excluded.cache_write_5m_tokens,"
+            " cache_write_1h_tokens = excluded.cache_write_1h_tokens,"
+            " cost_raw = excluded.cost_raw, cost_usd = excluded.cost_usd,"
+            " synced_at = excluded.synced_at"
+        )
+        inserted = 0
+        try:
+            conn.execute("BEGIN")
+            for rec in records:
+                cur = conn.execute(
+                    "SELECT 1 FROM usage_records WHERE usg_id = ?", (rec["usg_id"],)
+                )
+                existed = cur.fetchone() is not None
+                conn.execute(
+                    stmt,
+                    (
+                        rec["usg_id"], rec["created_at"], rec["model"], rec.get("provider"),
+                        rec["input_tokens"], rec["output_tokens"], rec["reasoning_tokens"],
+                        rec["cache_read_tokens"], rec["cache_write_5m_tokens"],
+                        rec["cache_write_1h_tokens"], rec["cost_raw"], rec["cost_usd"],
+                        rec.get("key_id"), rec.get("session_id"), rec.get("plan"),
+                        synced_at, aid,
+                    ),
+                )
+                if not existed:
+                    inserted += 1
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return inserted
 
 
 def get_sync_state(account_id: Optional[int] = None) -> dict[str, Any]:
@@ -786,20 +810,21 @@ def update_sync_state(
     inserted: int = 0,
     account_id: Optional[int] = None,
 ) -> None:
-    aid = _resolve_account_id(account_id)
-    if not aid:
-        return
-    conn = get_db()
-    _ensure_state_row(conn, aid)
-    conn.execute(
-        """UPDATE usage_sync_state
-           SET last_sync_at = ?, last_sync_status = ?, last_sync_error = ?,
-               last_inserted_count = last_inserted_count + ?
-           WHERE account_id = ?""",
-        (_now_iso(), status, error, inserted, aid),
-    )
-    _refresh_sync_totals(conn, aid)
-    conn.commit()
+    with _DB_LOCK:
+        aid = _resolve_account_id(account_id)
+        if not aid:
+            return
+        conn = get_db()
+        _ensure_state_row(conn, aid)
+        conn.execute(
+            """UPDATE usage_sync_state
+               SET last_sync_at = ?, last_sync_status = ?, last_sync_error = ?,
+                   last_inserted_count = last_inserted_count + ?
+               WHERE account_id = ?""",
+            (_now_iso(), status, error, inserted, aid),
+        )
+        _refresh_sync_totals(conn, aid)
+        conn.commit()
 
 
 def _refresh_sync_totals(conn: sqlite3.Connection, account_id: int) -> None:
@@ -846,53 +871,54 @@ def upsert_charts_buckets(records: list[dict[str, Any]], account_id: Optional[in
     同 (account_id, model, provider, time_bucket) 冲突时整体覆盖为本次值 —
     服务端桶值是该 5 分钟窗的累计值, 重拉覆盖而非累加, 避免重复计数.
     """
-    if not records:
-        return 0
-    aid = _resolve_account_id(account_id)
-    conn = get_db()
-    synced_at = _now_iso()
-    stmt = (
-        f"INSERT INTO charts_buckets ({_CHARTS_COLS})"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        " ON CONFLICT(account_id, model, provider, time_bucket) DO UPDATE SET"
-        " requests = excluded.requests, total_cost = excluded.total_cost,"
-        " input_cost = excluded.input_cost, output_cost = excluded.output_cost,"
-        " cache_cost = excluded.cache_cost, cache_savings = excluded.cache_savings,"
-        " consumed_free_credits = excluded.consumed_free_credits,"
-        " consumed_monthly_credits = excluded.consumed_monthly_credits,"
-        " consumed_purchased_credits = excluded.consumed_purchased_credits,"
-        " tokens_in = excluded.tokens_in, tokens_out = excluded.tokens_out,"
-        " tokens_total = excluded.tokens_total,"
-        " cache_read_tokens = excluded.cache_read_tokens,"
-        " cache_creation_tokens = excluded.cache_creation_tokens,"
-        " synced_at = excluded.synced_at"
-    )
-    affected = 0
-    try:
-        conn.execute("BEGIN")
-        for rec in records:
-            cur = conn.execute(
-                stmt,
-                (
-                    aid, rec["model"], rec["provider"], rec["time_bucket"],
-                    rec.get("requests", 0), rec.get("total_cost", 0),
-                    rec.get("input_cost", 0), rec.get("output_cost", 0),
-                    rec.get("cache_cost", 0), rec.get("cache_savings", 0),
-                    rec.get("consumed_free_credits", 0),
-                    rec.get("consumed_monthly_credits", 0),
-                    rec.get("consumed_purchased_credits", 0),
-                    rec.get("tokens_in", 0), rec.get("tokens_out", 0),
-                    rec.get("tokens_total", 0), rec.get("cache_read_tokens", 0),
-                    rec.get("cache_creation_tokens", 0),
-                    rec.get("synced_at") or synced_at,
-                ),
-            )
-            affected += max(cur.rowcount, 0)
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    return affected
+    with _DB_LOCK:
+        if not records:
+            return 0
+        aid = _resolve_account_id(account_id)
+        conn = get_db()
+        synced_at = _now_iso()
+        stmt = (
+            f"INSERT INTO charts_buckets ({_CHARTS_COLS})"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(account_id, model, provider, time_bucket) DO UPDATE SET"
+            " requests = excluded.requests, total_cost = excluded.total_cost,"
+            " input_cost = excluded.input_cost, output_cost = excluded.output_cost,"
+            " cache_cost = excluded.cache_cost, cache_savings = excluded.cache_savings,"
+            " consumed_free_credits = excluded.consumed_free_credits,"
+            " consumed_monthly_credits = excluded.consumed_monthly_credits,"
+            " consumed_purchased_credits = excluded.consumed_purchased_credits,"
+            " tokens_in = excluded.tokens_in, tokens_out = excluded.tokens_out,"
+            " tokens_total = excluded.tokens_total,"
+            " cache_read_tokens = excluded.cache_read_tokens,"
+            " cache_creation_tokens = excluded.cache_creation_tokens,"
+            " synced_at = excluded.synced_at"
+        )
+        affected = 0
+        try:
+            conn.execute("BEGIN")
+            for rec in records:
+                cur = conn.execute(
+                    stmt,
+                    (
+                        aid, rec["model"], rec["provider"], rec["time_bucket"],
+                        rec.get("requests", 0), rec.get("total_cost", 0),
+                        rec.get("input_cost", 0), rec.get("output_cost", 0),
+                        rec.get("cache_cost", 0), rec.get("cache_savings", 0),
+                        rec.get("consumed_free_credits", 0),
+                        rec.get("consumed_monthly_credits", 0),
+                        rec.get("consumed_purchased_credits", 0),
+                        rec.get("tokens_in", 0), rec.get("tokens_out", 0),
+                        rec.get("tokens_total", 0), rec.get("cache_read_tokens", 0),
+                        rec.get("cache_creation_tokens", 0),
+                        rec.get("synced_at") or synced_at,
+                    ),
+                )
+                affected += max(cur.rowcount, 0)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return affected
 
 
 def _charts_totals_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -1031,19 +1057,20 @@ _DEFAULT_SETTINGS = {
 
 def prune_old_records(window_days: int | None, account_id: Optional[int] = None) -> int:
     """按同步范围裁剪过期记录, 返回删除条数. window_days=None 时不裁剪."""
-    if window_days is None:
-        return 0
-    aid = _resolve_account_id(account_id)
-    if not aid:
-        return 0
-    window_days = max(1, min(int(window_days), 3650))
-    cur = get_db().execute(
-        "DELETE FROM usage_records WHERE account_id = ?"
-        " AND datetime(created_at) < datetime('now', ?)",
-        (aid, f"-{window_days} days"),
-    )
-    get_db().commit()
-    return cur.rowcount
+    with _DB_LOCK:
+        if window_days is None:
+            return 0
+        aid = _resolve_account_id(account_id)
+        if not aid:
+            return 0
+        window_days = max(1, min(int(window_days), 3650))
+        cur = get_db().execute(
+            "DELETE FROM usage_records WHERE account_id = ?"
+            " AND datetime(created_at) < datetime('now', ?)",
+            (aid, f"-{window_days} days"),
+        )
+        get_db().commit()
+        return cur.rowcount
 
 
 def _account_filter(where: str, params: list[Any], aid: int) -> tuple[str, list[Any]]:
@@ -1189,11 +1216,12 @@ def get_key_names() -> dict[str, str]:
 
 def save_key_names(names: dict[str, str]) -> None:
     """持久化 key_id -> 显示名称 映射到 settings."""
-    conn = get_db()
-    data = _raw_payload(conn)
-    data["key_names"] = {k: v for k, v in names.items() if k and v}
-    _write_payload(conn, data)
-    conn.commit()
+    with _DB_LOCK:
+        conn = get_db()
+        data = _raw_payload(conn)
+        data["key_names"] = {k: v for k, v in names.items() if k and v}
+        _write_payload(conn, data)
+        conn.commit()
 
 
 def get_cc_summary(account_id: int) -> dict[str, Any]:
@@ -1207,60 +1235,63 @@ def get_cc_summary(account_id: int) -> dict[str, Any]:
 
 def save_cc_summary(account_id: int, summary: dict[str, Any]) -> None:
     """持久化 commandcode summary 快照到 settings payload (按 account_id 分键)."""
-    conn = get_db()
-    data = _raw_payload(conn)
-    cc = data.get("cc_summary")
-    cc = cc if isinstance(cc, dict) else {}
-    cc[str(account_id)] = summary
-    data["cc_summary"] = cc
-    _write_payload(conn, data)
-    conn.commit()
+    with _DB_LOCK:
+        conn = get_db()
+        data = _raw_payload(conn)
+        cc = data.get("cc_summary")
+        cc = cc if isinstance(cc, dict) else {}
+        cc[str(account_id)] = summary
+        data["cc_summary"] = cc
+        _write_payload(conn, data)
+        conn.commit()
 
 
 def clear_cc_summary(account_id: int) -> None:
     """从 settings payload 移除指定账号的 summary 快照 (删除/登出账号时级联清理)."""
-    conn = get_db()
-    data = _raw_payload(conn)
-    cc = data.get("cc_summary")
-    if not isinstance(cc, dict) or str(account_id) not in cc:
-        return
-    cc.pop(str(account_id))
-    data["cc_summary"] = cc
-    _write_payload(conn, data)
-    conn.commit()
+    with _DB_LOCK:
+        conn = get_db()
+        data = _raw_payload(conn)
+        cc = data.get("cc_summary")
+        if not isinstance(cc, dict) or str(account_id) not in cc:
+            return
+        cc.pop(str(account_id))
+        data["cc_summary"] = cc
+        _write_payload(conn, data)
+        conn.commit()
 
 
 def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
-    conn = get_db()
-    raw = _raw_payload(conn)
-    current = dict(_DEFAULT_SETTINGS)
-    current.update({k: v for k, v in raw.items() if k in _DEFAULT_SETTINGS})
-    for key in _DEFAULT_SETTINGS:
-        if key in payload and payload[key] is not None:
-            if key == "sync_interval_sec":
-                try:
-                    current[key] = max(30, min(int(payload[key]), 3600))
-                except (TypeError, ValueError):
-                    pass
-            elif key == "window_days":
-                val = payload[key]
-                if val is None or val == "" or str(val).lower() in ("all", "所有"):
-                    current[key] = None
-                else:
+    with _DB_LOCK:
+        conn = get_db()
+        raw = _raw_payload(conn)
+        current = dict(_DEFAULT_SETTINGS)
+        current.update({k: v for k, v in raw.items() if k in _DEFAULT_SETTINGS})
+        for key in _DEFAULT_SETTINGS:
+            if key in payload and payload[key] is not None:
+                if key == "sync_interval_sec":
                     try:
-                        current[key] = max(1, min(int(val), 3650))
+                        current[key] = max(30, min(int(payload[key]), 3600))
                     except (TypeError, ValueError):
                         pass
-            elif key in ("auto_sync", "show_accounts_panel"):
-                current[key] = bool(payload[key])
-            else:
-                current[key] = payload[key]
-    # 写回时保留非白名单键 (key_names / active_account_id 等), 避免被整体覆盖丢失
-    out = dict(raw)
-    out.update(current)
-    _write_payload(conn, out)
-    conn.commit()
-    return current
+                elif key == "window_days":
+                    val = payload[key]
+                    if val is None or val == "" or str(val).lower() in ("all", "所有"):
+                        current[key] = None
+                    else:
+                        try:
+                            current[key] = max(1, min(int(val), 3650))
+                        except (TypeError, ValueError):
+                            pass
+                elif key in ("auto_sync", "show_accounts_panel"):
+                    current[key] = bool(payload[key])
+                else:
+                    current[key] = payload[key]
+        # 写回时保留非白名单键 (key_names / active_account_id 等), 避免被整体覆盖丢失
+        out = dict(raw)
+        out.update(current)
+        _write_payload(conn, out)
+        conn.commit()
+        return current
 
 _PERIOD_CLAUSES = {
     "5h": "datetime(created_at) >= datetime('now', '-5 hours')",
@@ -1338,6 +1369,7 @@ def daily_stats(days: int = 30, account_id: Optional[int] = None) -> list[dict[s
     """每日聚合: 输入(含缓存) / 普通输入 / 推理 / 缓存命中 / 缓存写入 / 输出 / 成本 / 请求数."""
     days = max(1, min(days, 365))
     aid = _resolve_account_id(account_id)
+    start_utc = _local_day_utc_start((datetime.now().astimezone() - timedelta(days=days)).date())
     rows = get_db().execute(
         """
         SELECT substr(datetime(created_at, 'localtime'), 1, 10) AS date,
@@ -1350,12 +1382,11 @@ def daily_stats(days: int = 30, account_id: Optional[int] = None) -> list[dict[s
                SUM(cost_usd) AS total_cost_usd,
                COUNT(*) AS request_count
         FROM usage_records
-        WHERE account_id = ?
-          AND substr(datetime(created_at, 'localtime'), 1, 10) >= date('now', 'localtime', ?)
+        WHERE account_id = ? AND datetime(created_at) >= datetime(?)
         GROUP BY substr(datetime(created_at, 'localtime'), 1, 10)
         ORDER BY date ASC
         """,
-        (aid, f"-{days} days"),
+        (aid, start_utc),
     ).fetchall()
     result: list[dict[str, Any]] = []
     for r in rows:
@@ -1382,6 +1413,7 @@ def daily_stats(days: int = 30, account_id: Optional[int] = None) -> list[dict[s
 def today_trend(account_id: Optional[int] = None) -> list[dict[str, Any]]:
     """今日 24 小时趋势: 每小时 输入/输出/推理 (本地时区, 无数据补 0)."""
     aid = _resolve_account_id(account_id)
+    today = datetime.now().astimezone().date()
     rows = get_db().execute(
         """
         SELECT CAST(strftime('%H', datetime(created_at, 'localtime')) AS INTEGER) AS h,
@@ -1390,10 +1422,10 @@ def today_trend(account_id: Optional[int] = None) -> list[dict[str, Any]]:
                SUM(reasoning_tokens) AS reasoning
         FROM usage_records
         WHERE account_id = ?
-          AND substr(datetime(created_at, 'localtime'), 1, 10) = date('now', 'localtime')
+          AND datetime(created_at) >= datetime(?) AND datetime(created_at) < datetime(?)
         GROUP BY h
         """,
-        (aid,),
+        (aid, _local_day_utc_start(today), _local_day_utc_start(today + timedelta(days=1))),
     ).fetchall()
     by_hour = {int(r["h"]): r for r in rows}
     result: list[dict[str, Any]] = []
@@ -1548,17 +1580,20 @@ def import_zcode_usage(rows: list[dict[str, Any]],
             cache_write, cache_read, int(r.get("computed_total_tokens") or 0),
             r.get("duration_ms"), r.get("time_to_first_token_ms"), cost_raw, synced_at,
         ))
-    before = int(conn.execute("SELECT COUNT(*) AS c FROM zcode_usage").fetchone()["c"])
-    conn.executemany(
-        """INSERT OR IGNORE INTO zcode_usage
-           (id, started_at, session_id, provider_id, provider_name, model_id, status,
-            input_tokens, output_tokens, reasoning_tokens, cache_write_tokens,
-            cache_read_tokens, total_tokens, duration_ms, ttft_ms, cost_raw, synced_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        payload,
-    )
-    conn.commit()
-    after = int(conn.execute("SELECT COUNT(*) AS c FROM zcode_usage").fetchone()["c"])
+    # 只锁事务段: COUNT 对账 + executemany + commit 需互斥保证原子与准确,
+    # 上方 payload 构建 (含定价计算, O(行数×模型数)) 留在锁外
+    with _DB_LOCK:
+        before = int(conn.execute("SELECT COUNT(*) AS c FROM zcode_usage").fetchone()["c"])
+        conn.executemany(
+            """INSERT OR IGNORE INTO zcode_usage
+               (id, started_at, session_id, provider_id, provider_name, model_id, status,
+                input_tokens, output_tokens, reasoning_tokens, cache_write_tokens,
+                cache_read_tokens, total_tokens, duration_ms, ttft_ms, cost_raw, synced_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            payload,
+        )
+        conn.commit()
+        after = int(conn.execute("SELECT COUNT(*) AS c FROM zcode_usage").fetchone()["c"])
     return after - before
 
 
@@ -1572,11 +1607,12 @@ def get_zcode_watermark() -> int:
 
 def save_zcode_watermark(ms: int) -> None:
     """写入 ZCode 导入水位 (白名单外键, 不污染 get_settings/save_settings)."""
-    conn = get_db()
-    data = _raw_payload(conn)
-    data[_ZCODE_WATERMARK_KEY] = int(ms)
-    _write_payload(conn, data)
-    conn.commit()
+    with _DB_LOCK:
+        conn = get_db()
+        data = _raw_payload(conn)
+        data[_ZCODE_WATERMARK_KEY] = int(ms)
+        _write_payload(conn, data)
+        conn.commit()
 
 
 _ZCODE_PERIOD_CLAUSES = {
@@ -1836,30 +1872,33 @@ def import_claudecode_usage(rows: list[dict[str, Any]],
             None,  # 首插不写修订标记, 仅冲突修订时落本次导入时刻 (见下方尾参)
             synced_at, synced_at,
         ))
-    before = int(conn.execute("SELECT COUNT(*) AS c FROM claudecode_usage").fetchone()["c"])
-    conn.executemany(
-        """INSERT INTO claudecode_usage
-           (dedupe_key, session_id, project_path, model, channel, started_at,
-            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-            total_tokens, duration_ms, speed_tps, cost_raw, file_path, updated_at, synced_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(dedupe_key) DO UPDATE SET
-             started_at = excluded.started_at,
-             model = excluded.model,
-             input_tokens = excluded.input_tokens,
-             output_tokens = excluded.output_tokens,
-             cache_read_tokens = excluded.cache_read_tokens,
-             cache_write_tokens = excluded.cache_write_tokens,
-             total_tokens = excluded.total_tokens,
-             duration_ms = excluded.duration_ms,
-             speed_tps = excluded.speed_tps,
-             cost_raw = excluded.cost_raw,
-             updated_at = ?
-           WHERE excluded.total_tokens > claudecode_usage.total_tokens""",
-        payload,
-    )
-    conn.commit()
-    after = int(conn.execute("SELECT COUNT(*) AS c FROM claudecode_usage").fetchone()["c"])
+    # 只锁事务段: COUNT 对账 + executemany + commit 需互斥保证原子与准确,
+    # 上方 payload 构建 (含定价计算, O(行数×模型数)) 留在锁外
+    with _DB_LOCK:
+        before = int(conn.execute("SELECT COUNT(*) AS c FROM claudecode_usage").fetchone()["c"])
+        conn.executemany(
+            """INSERT INTO claudecode_usage
+               (dedupe_key, session_id, project_path, model, channel, started_at,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                total_tokens, duration_ms, speed_tps, cost_raw, file_path, updated_at, synced_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(dedupe_key) DO UPDATE SET
+                 started_at = excluded.started_at,
+                 model = excluded.model,
+                 input_tokens = excluded.input_tokens,
+                 output_tokens = excluded.output_tokens,
+                 cache_read_tokens = excluded.cache_read_tokens,
+                 cache_write_tokens = excluded.cache_write_tokens,
+                 total_tokens = excluded.total_tokens,
+                 duration_ms = excluded.duration_ms,
+                 speed_tps = excluded.speed_tps,
+                 cost_raw = excluded.cost_raw,
+                 updated_at = ?
+               WHERE excluded.total_tokens > claudecode_usage.total_tokens""",
+            payload,
+        )
+        conn.commit()
+        after = int(conn.execute("SELECT COUNT(*) AS c FROM claudecode_usage").fetchone()["c"])
     return after - before
 
 
@@ -1873,11 +1912,12 @@ def get_claudecode_enabled_at() -> int:
 
 def save_claudecode_enabled_at(ms: int) -> None:
     """写入集成启用时刻 (白名单外键, 不污染 get_settings/save_settings)."""
-    conn = get_db()
-    data = _raw_payload(conn)
-    data[_CC_ENABLED_AT_KEY] = int(ms)
-    _write_payload(conn, data)
-    conn.commit()
+    with _DB_LOCK:
+        conn = get_db()
+        data = _raw_payload(conn)
+        data[_CC_ENABLED_AT_KEY] = int(ms)
+        _write_payload(conn, data)
+        conn.commit()
 
 
 def get_claude_file_progress_all() -> dict[str, tuple[int, int]]:
@@ -1890,16 +1930,17 @@ def get_claude_file_progress_all() -> dict[str, tuple[int, int]]:
 
 def save_claude_file_progress(path: str, offset: int, size: int) -> None:
     """保存单个 JSONL 文件的字节偏移进度 (size 变小时由编排侧传 offset=0 重置)."""
-    conn = get_db()
-    conn.execute(
-        """INSERT INTO claude_file_progress (path, offset, size, updated_at)
-           VALUES (?, ?, ?, ?)
-           ON CONFLICT(path) DO UPDATE SET
-             offset = excluded.offset, size = excluded.size,
-             updated_at = excluded.updated_at""",
-        (path, int(offset), int(size), _now_iso()),
-    )
-    conn.commit()
+    with _DB_LOCK:
+        conn = get_db()
+        conn.execute(
+            """INSERT INTO claude_file_progress (path, offset, size, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(path) DO UPDATE SET
+                 offset = excluded.offset, size = excluded.size,
+                 updated_at = excluded.updated_at""",
+            (path, int(offset), int(size), _now_iso()),
+        )
+        conn.commit()
 
 
 _CC_PERIOD_CLAUSES = {
@@ -2076,15 +2117,38 @@ _CHANNEL_ORDER = ["opencode", "bai", "commandcode", "zcode", "claudecode", "dsh"
 _LOCAL_EST_CHANNELS = {"bai", "zcode", "claudecode"}  # 费用为估算的渠道 (spec v6 est-badge)
 
 
-def _report_range_sql(range_: str, ts_col: str) -> str:
-    day = f"substr(datetime({ts_col},'localtime'),1,10)"
+def _local_day_utc_start(d) -> str:
+    """本地日期 d 的零点对应的 UTC 时刻串 (YYYY-MM-DD HH:MM:SS).
+    naive + astimezone() 挂系统本地时区, DST/时区偏移由标准库处理,
+    与原 substr(datetime(col,'localtime'),1,10) 的本地日窗口逐日等价."""
+    return datetime.combine(d, datetime.min.time()).astimezone() \
+        .astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _range_utc_bounds(range_: str) -> Optional[tuple[str, str]]:
+    """自然日窗口的 UTC 边界 (start_inclusive, end_exclusive); all -> None."""
+    today = datetime.now().astimezone().date()
+    n = _REPORT_RANGE_DAYS.get(range_)
     if range_ == "today":
-        return f"{day} = date('now','localtime')"
-    if range_ == "yesterday":
-        return f"{day} = date('now','localtime','-1 day')"
-    if range_ in _REPORT_RANGE_DAYS:
-        return f"{day} >= date('now','localtime','-{_REPORT_RANGE_DAYS[range_]} days')"
-    return "1=1"  # all
+        start, end = today, today + timedelta(days=1)
+    elif range_ == "yesterday":
+        start, end = today - timedelta(days=1), today
+    elif n is not None:   # 7d/30d: 含今天共 N 天
+        start, end = today - timedelta(days=n), today + timedelta(days=1)
+    else:
+        return None
+    return _local_day_utc_start(start), _local_day_utc_start(end)
+
+
+def _report_range_sql(range_: str, ts_col: str) -> tuple[str, list[str]]:
+    """自然日窗口谓词 (v2 性能版): datetime(col) 确定性表达式走 idx_usage_*_utc.
+    返回 (sql 片段, 前置参数) — 谓词位于各 WHERE 首位, 调用方参数须以本参数开头."""
+    b = _range_utc_bounds(range_)
+    if b is None:
+        return "1=1", []
+    start, end = b
+    return (f"datetime({ts_col}) >= datetime(?) AND datetime({ts_col}) < datetime(?)",
+            [start, end])
 
 
 def _report_channels_expr() -> str:
@@ -2113,25 +2177,33 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
     segs: list[str] = []
     params: list[Any] = []
     if include_records:
+        range_sql, range_params = _report_range_sql(range_, "r.created_at")
         ch_where = ""
+        ch_params: list[Any] = []
         if channel:
             ch_where = f" AND {_report_channels_expr()} = ?"
-            params.append(channel)
+            ch_params.append(channel)
         segs.append(
             f"SELECT substr(datetime(r.created_at,'localtime'),1,10) AS b,"
             f" {_report_channels_expr()} AS ch, {exprs['records']} AS v"
             f" FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
-            f" WHERE {_report_range_sql(range_, 'r.created_at')}{ch_where} GROUP BY b, ch")
+            f" WHERE {range_sql}{ch_where} GROUP BY b, ch")
+        params.extend(range_params)
+        params.extend(ch_params)
     if include_zcode:
+        range_sql, range_params = _report_range_sql(range_, "z.started_at")
         segs.append(
             f"SELECT substr(datetime(z.started_at,'localtime'),1,10) AS b, 'zcode' AS ch,"
             f" {exprs['zcode']} AS v FROM zcode_usage z"
-            f" WHERE {_report_range_sql(range_, 'z.started_at')} GROUP BY b")
+            f" WHERE {range_sql} GROUP BY b")
+        params.extend(range_params)
     if include_cc:
+        range_sql, range_params = _report_range_sql(range_, "c.started_at")
         segs.append(
             f"SELECT substr(datetime(c.started_at,'localtime'),1,10) AS b, 'claudecode' AS ch,"
             f" {exprs['claudecode']} AS v FROM claudecode_usage c"
-            f" WHERE {_report_range_sql(range_, 'c.started_at')} GROUP BY b")
+            f" WHERE {range_sql} GROUP BY b")
+        params.extend(range_params)
     if not segs:
         return {"granularity": "day", "labels": [], "series": {}, "metric": metric}
     union = " UNION ALL ".join(segs)
@@ -2175,18 +2247,20 @@ def _win_records(where: str, params: list[Any]) -> dict[str, Any]:
     return {"tokens": row["tokens"] or 0, "cost": row["cost"] or 0.0, "requests": row["requests"] or 0}
 
 
-def _win_zcode(where: str) -> dict[str, Any]:
+def _win_zcode(where: str, params: list[Any]) -> dict[str, Any]:
     row = get_db().execute(
         "SELECT SUM(z.input_tokens + z.output_tokens + z.reasoning_tokens) tokens,"
-        " SUM(z.cost_raw)/1e8 cost, COUNT(*) requests FROM zcode_usage z WHERE " + where
+        " SUM(z.cost_raw)/1e8 cost, COUNT(*) requests FROM zcode_usage z WHERE " + where,
+        params,
     ).fetchone()
     return {"tokens": row["tokens"] or 0, "cost": row["cost"] or 0.0, "requests": row["requests"] or 0}
 
 
-def _win_cc(where: str) -> dict[str, Any]:
+def _win_cc(where: str, params: list[Any]) -> dict[str, Any]:
     row = get_db().execute(
         "SELECT SUM(c.input_tokens + c.output_tokens) tokens,"   # claudecode 无 reasoning 列 (R6)
-        " SUM(c.cost_raw)/1e8 cost, COUNT(*) requests FROM claudecode_usage c WHERE " + where
+        " SUM(c.cost_raw)/1e8 cost, COUNT(*) requests FROM claudecode_usage c WHERE " + where,
+        params,
     ).fetchone()
     return {"tokens": row["tokens"] or 0, "cost": row["cost"] or 0.0, "requests": row["requests"] or 0}
 
@@ -2214,27 +2288,29 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
     import datetime as _dt
 
     def records_where(range_: str, same_time: bool = False) -> tuple[str, list[Any]]:
-        w = _report_range_sql(range_, "r.created_at")
+        w, wp = _report_range_sql(range_, "r.created_at")
         if same_time:
             w += " AND datetime(r.created_at,'localtime') <= datetime('now','localtime')" \
                  if range_ == "today" else \
                  f" AND time(datetime(r.created_at,'localtime')) <= time('now','localtime')"
-        return w + ch_filter, list(ch_params)
+        return w + ch_filter, wp + list(ch_params)
 
-    def local_where(range_: str, ts: str, same_time: bool = False) -> str:
-        w = _report_range_sql(range_, ts)
+    def local_where(range_: str, ts: str, same_time: bool = False) -> tuple[str, list[Any]]:
+        w, wp = _report_range_sql(range_, ts)
         if same_time:
             w += f" AND datetime({ts},'localtime') <= datetime('now','localtime')" \
                  if range_ == "today" else \
                  f" AND time(datetime({ts},'localtime')) <= time('now','localtime')"
-        return w
+        return w, wp
 
     def window(range_: str, same_time: bool = False) -> dict[str, Any]:
         rw, rp = records_where(range_, same_time)
+        zw, zp = local_where(range_, "z.started_at", same_time)
+        cw, cp = local_where(range_, "c.started_at", same_time)
         return _win_merge(
             _win_records(rw, rp),
-            _win_zcode(local_where(range_, "z.started_at", same_time)) if not channel or channel == "zcode" else {"tokens": 0, "cost": 0.0, "requests": 0},
-            _win_cc(local_where(range_, "c.started_at", same_time)) if not channel or channel == "claudecode" else {"tokens": 0, "cost": 0.0, "requests": 0},
+            _win_zcode(zw, zp) if not channel or channel == "zcode" else {"tokens": 0, "cost": 0.0, "requests": 0},
+            _win_cc(cw, cp) if not channel or channel == "claudecode" else {"tokens": 0, "cost": 0.0, "requests": 0},
         )
 
     windows = {
@@ -2246,14 +2322,17 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
     same_y = window("yesterday", same_time=True)
     # 新R5(本循环 R1) N19 修正: same_7 不走 7d 窗口(那是含今天的滚动 7 天), 直接用
     # v7 的 BETWEEN 形式取近 7 个完整自然日(-7~-1)各日同时段
-    def same7_where(ts: str) -> str:
-        day = f"substr(datetime({ts},'localtime'),1,10)"
-        return (f"{day} BETWEEN date('now','localtime','-7 days') AND date('now','localtime','-1 day')"
-                f" AND time(datetime({ts},'localtime')) <= time('now','localtime')")
+    def same7_where(ts: str) -> tuple[str, list[Any]]:
+        today = datetime.now().astimezone().date()
+        start = _local_day_utc_start(today - timedelta(days=7))
+        end = _local_day_utc_start(today)
+        return (f"datetime({ts}) >= datetime(?) AND datetime({ts}) < datetime(?)"
+                f" AND time(datetime({ts},'localtime')) <= time('now','localtime')",
+                [start, end])
     same_7 = _win_merge(
-        _win_records(same7_where("r.created_at") + ch_filter, list(ch_params)),
-        _win_zcode(same7_where("z.started_at")) if not channel or channel == "zcode" else {"tokens": 0, "cost": 0.0, "requests": 0},
-        _win_cc(same7_where("c.started_at")) if not channel or channel == "claudecode" else {"tokens": 0, "cost": 0.0, "requests": 0},
+        (lambda w, p: _win_records(w + ch_filter, p + list(ch_params)))(*same7_where("r.created_at")),
+        _win_zcode(*same7_where("z.started_at")) if not channel or channel == "zcode" else {"tokens": 0, "cost": 0.0, "requests": 0},
+        _win_cc(*same7_where("c.started_at")) if not channel or channel == "claudecode" else {"tokens": 0, "cost": 0.0, "requests": 0},
     )
     early = _dt.datetime.now().hour < 1
     insufficient = early or same_y["requests"] < 5
@@ -2266,7 +2345,7 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
     rows = get_db().execute(
         f"SELECT a.source AS ch,"
         f" MIN(s.oldest_record_at) oldest, MIN(s.last_sync_at) last_sync,"
-        f" SUM(CASE WHEN s.last_sync_status IS NOT NULL AND s.last_sync_status != 'success' THEN 1 ELSE 0 END) fails"
+        f" SUM(CASE WHEN s.last_sync_status IS NOT NULL AND s.last_sync_status != 'ok' THEN 1 ELSE 0 END) fails"
         f" FROM accounts a LEFT JOIN usage_sync_state s ON s.account_id = a.id GROUP BY ch"
     ).fetchall()
     channels = {
@@ -2296,23 +2375,27 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
     {bai, zcode, claudecode}。"""
     exprs_t = _report_metric_exprs("tokens")
     exprs_c = _report_metric_exprs("cost")
+    range_sql, range_params = _report_range_sql(range_, "r.created_at")
     rows = get_db().execute(
         f"SELECT {_report_channels_expr()} AS ch,"
         f" {exprs_t['records']} tokens, SUM(r.input_tokens) input, SUM(r.output_tokens) output,"
         f" SUM(r.cache_read_tokens) cache_read, {_report_metric_exprs('requests')['records']} requests,"
         f" {exprs_c['records']} cost"
         f" FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
-        f" WHERE {_report_range_sql(range_, 'r.created_at')} GROUP BY ch"
+        f" WHERE {range_sql} GROUP BY ch",
+        range_params,
     ).fetchall()
     agg = {r["ch"]: dict(r) for r in rows}
     # R6: 本地渠道行 (各一次聚合, 同构 dict 并入)
     for ch, alias, table, ts in (("zcode", "z", "zcode_usage", "z.started_at"),
                                  ("claudecode", "c", "claudecode_usage", "c.started_at")):
+        range_sql, range_params = _report_range_sql(range_, ts)
         r = get_db().execute(
             f"SELECT {exprs_t[ch]} tokens, SUM({alias}.input_tokens) input,"
             f" SUM({alias}.output_tokens) output, SUM({alias}.cache_read_tokens) cache_read,"
             f" COUNT(*) requests, {exprs_c[ch]} cost"
-            f" FROM {table} {alias} WHERE {_report_range_sql(range_, ts)}"
+            f" FROM {table} {alias} WHERE {range_sql}",
+            range_params,
         ).fetchone()
         if r and ((r["tokens"] or 0) or (r["requests"] or 0)):
             agg[ch] = dict(r)
@@ -2352,30 +2435,37 @@ def list_channel_summary() -> list[dict[str, Any]]:
 
 def report_hourly(date_: str = "today", channel: Optional[str] = None) -> dict[str, Any]:
     """24h × 渠道堆叠 (R6 三表 UNION); date_: today|yesterday; dsh 无历史不参与。"""
-    day_ts = {"today": "date('now','localtime')",
-              "yesterday": "date('now','localtime','-1 day')"}[date_ if date_ in ("today", "yesterday") else "today"]
+    today = datetime.now().astimezone().date()
+    start = _local_day_utc_start(today - timedelta(days=1)) if date_ == "yesterday" else _local_day_utc_start(today)
+    end = _local_day_utc_start(today) if date_ == "yesterday" else _local_day_utc_start(today + timedelta(days=1))
+    day_pred = "datetime({ts}) >= datetime(?) AND datetime({ts}) < datetime(?)"
     segs: list[str] = []
     params: list[Any] = []
     if channel is None or channel in ("opencode", "bai", "commandcode"):
         ch_where = ""
         if channel:
             ch_where = f" AND {_report_channels_expr()} = ?"
-            params.append(channel)
         segs.append(
             f"SELECT CAST(strftime('%H', datetime(r.created_at,'localtime')) AS INTEGER) h,"
             f" {_report_channels_expr()} ch, SUM(r.input_tokens + r.output_tokens + r.reasoning_tokens) v"
             f" FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
-            f" WHERE substr(datetime(r.created_at,'localtime'),1,10) = {day_ts}{ch_where} GROUP BY h, ch")
+            f" WHERE {day_pred.format(ts='r.created_at')}{ch_where} GROUP BY h, ch")
+        if channel:
+            params.append(start); params.append(end); params.append(channel)
+        else:
+            params.extend([start, end])
     if channel is None or channel == "zcode":
         segs.append(
             f"SELECT CAST(strftime('%H', datetime(z.started_at,'localtime')) AS INTEGER) h, 'zcode' ch,"
             f" SUM(z.input_tokens + z.output_tokens + z.reasoning_tokens) v FROM zcode_usage z"
-            f" WHERE substr(datetime(z.started_at,'localtime'),1,10) = {day_ts} GROUP BY h")
+            f" WHERE {day_pred.format(ts='z.started_at')} GROUP BY h")
+        params.extend([start, end])
     if channel is None or channel == "claudecode":
         segs.append(
             f"SELECT CAST(strftime('%H', datetime(c.started_at,'localtime')) AS INTEGER) h, 'claudecode' ch,"
             f" SUM(c.input_tokens + c.output_tokens) v FROM claudecode_usage c"
-            f" WHERE substr(datetime(c.started_at,'localtime'),1,10) = {day_ts} GROUP BY h")
+            f" WHERE {day_pred.format(ts='c.started_at')} GROUP BY h")
+        params.extend([start, end])
     if not segs:
         return {"labels": list(range(24)), "series": {}}
     rows = get_db().execute(
@@ -2418,6 +2508,7 @@ def channel_totals(range_: str, channel: str) -> dict[str, Any]:
     """单渠道聚合 totals (键与 db.totals 对齐, 供 renderOverview 复用; R6 三表分派;
     dsh 由 server 层组装, 本函数不处理)。"""
     if channel == "zcode":
+        range_sql, range_params = _report_range_sql(range_, "z.started_at")
         row = get_db().execute(
             f"SELECT COUNT(*) request_count,"
             f" COUNT(DISTINCT CASE WHEN z.session_id IS NOT NULL AND z.session_id != '' THEN z.session_id END) session_count,"
@@ -2428,10 +2519,12 @@ def channel_totals(range_: str, channel: str) -> dict[str, Any]:
             f" SUM(z.cache_read_tokens) cache_hit_tokens,"
             f" SUM(z.cache_write_tokens) cache_write_tokens,"
             f" SUM(z.cost_raw)/1e8 total_cost_usd"
-            f" FROM zcode_usage z WHERE {_report_range_sql(range_, 'z.started_at')}"
+            f" FROM zcode_usage z WHERE {range_sql}",
+            range_params,
         ).fetchone()
         return _totals_from_row(row)
     if channel == "claudecode":
+        range_sql, range_params = _report_range_sql(range_, "c.started_at")
         row = get_db().execute(
             f"SELECT COUNT(*) request_count,"
             f" COUNT(DISTINCT CASE WHEN c.session_id IS NOT NULL AND c.session_id != '' THEN c.session_id END) session_count,"
@@ -2442,9 +2535,11 @@ def channel_totals(range_: str, channel: str) -> dict[str, Any]:
             f" SUM(c.cache_read_tokens) cache_hit_tokens,"
             f" SUM(c.cache_write_tokens) cache_write_tokens,"
             f" SUM(c.cost_raw)/1e8 total_cost_usd"
-            f" FROM claudecode_usage c WHERE {_report_range_sql(range_, 'c.started_at')}"
+            f" FROM claudecode_usage c WHERE {range_sql}",
+            range_params,
         ).fetchone()
         return _totals_from_row(row)
+    range_sql, range_params = _report_range_sql(range_, "r.created_at")
     row = get_db().execute(
         f"SELECT COUNT(*) request_count,"
         f" COUNT(DISTINCT CASE WHEN r.session_id IS NOT NULL AND r.session_id != '' THEN r.session_id END) session_count,"
@@ -2456,8 +2551,8 @@ def channel_totals(range_: str, channel: str) -> dict[str, Any]:
         f" SUM(r.cache_write_5m_tokens + r.cache_write_1h_tokens) cache_write_tokens,"
         f" SUM(r.cost_usd) total_cost_usd"
         f" FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
-        f" WHERE {_report_range_sql(range_, 'r.created_at')} AND {_report_channels_expr()} = ?",
-        [channel],
+        f" WHERE {range_sql} AND {_report_channels_expr()} = ?",
+        range_params + [channel],
     ).fetchone()
     return _totals_from_row(row)
 
