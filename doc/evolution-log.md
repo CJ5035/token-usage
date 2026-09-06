@@ -140,3 +140,72 @@
 1. **查看暗色预览截图**（.probe/ui-shots-v2/ 12 张）确认观感——不满意仅做 token 层色值微调后再确认一轮（plan-6 预览处置路径）；
 2. 人工甄别工作区两组未提交改动（本流水线三计划 + 外部 zcode 口径修复）后决定签入；**签入时务必 git add 三个新测试文件**（test_theme_rerender/test_dsh_background/test_dark_theme，当前 untracked，漏掉会静默丢失 41 项新回归测试）；
 3. 三个 .superpowers/sdd/20260905-evolution-plan-{4,5,6}.md/ 工作区保留至签入确认后可删（回滚锚点在内）。
+
+---
+
+## 2026-09-06 · 第三轮迭代（主题：页面显示优化·延续轮）
+
+**范围**：`doc/20260906-evolution-candidates-3.md` 前 3 名（EVOLUTION-7/8/9）；排除已签入的前两轮 6 项、同日签入的渠道色/配额通栏（f6dda34）、Codex 统计新需求。
+**扫描方式**：双路探针——静态复核（子代理逐项复核第二轮备选池 8 组）+ 截图走查 15 张（.probe/ui-shots-v3/，1280/800 × 亮/暗 × 5 页 + DOM 定量）。
+
+### 问题7（EVOLUTION-7）：空数据显示策略混乱 + 统计页口径矛盾 — ✅ 修复完成
+
+- **等级**：P2（6.5/10）→ 根因四条：①首页 all 三图无条件建图（空轴伪影刻度+环图孤 0）；②留白式空守卫（统计页两图+总览趋势图）；③统计页主区仅 usage_records 口径与同屏 ZCode/DSH/CC 区矛盾无解释；④compare.pct db 层口径与 server 并入 dsh 后 KPI 口径分裂。
+- **流程**：门禁1 三轮（R1 体验官驳回 chartOvTrend 遗漏 → R2/R3 连续全票）→ 计划 v3 → 门禁2 三轮（R1 体验官驳回 cmp 标注塞 today 格破版+染 spike 色、缺 style.css 条目 → R2/R3 连续全票）→ SDD 4 任务（T2 曾 DONE_WITH_CONCERNS：哨兵断言失配，裁定归 T4）→ 最终评审可交付。
+- **改动**（server.py +1 / app.js +63/-14 / index.html +7 / 新增 test_empty_state.py 20 项 / test_theme_rerender 哨兵跟随）：
+  - 7 图函数空守卫（统一「无非零数据点」判定），复用 .zcode-chart-empty 占位先例（setChartEmpty 统一入口）；donut centerText 空 data 跳过；hourly 空文案按档位联动（today→今日暂无用量/其余→该范围暂无数据）
+  - renderWindows 三级优先级：insufficient→样本不足；today.tokens=0→「今日暂无用量」（无箭头，可测断言锚）；否则百分比。DSH 口径标注走 wb-since 通栏行（includes_dsh_today 标注，est-badge 先例）
+  - 统计页口径 hint（.scope-hint 复用，条件显隐：主区全 0 且本地渠道有数据；位置紧贴首个全 0 卡上方）
+  - server：compare.includes_dsh_today 字段（不重算 pct，标注优先于重算——避免分子含 DSH 分母不含的单边放大）
+- **验证**：436 passed + UI 复核（统计页 hint 首屏同视野+两卡占位实拍；有数据回归 ↓88.3% 正常；includes_dsh_today=False 不标注精确行为确认）。
+- **流程要点**：诊断→计划→SDD 全程「零 Python 逻辑改动」承诺兑现（server 仅 +1 行字段）。
+
+### 问题8（EVOLUTION-8）：窄窗排版错乱三连 — ✅ 修复完成
+
+- **等级**：P2（6/10）→ 根因：Windows 125%/150% DPI（出厂默认）下 CSS 宽仅 800/667px，三处同时触发：①.pill 无 nowrap+.ph 无 wrap→页签文字竖排、标题折行；②渠道明细表 8 列 nowrap+容器无 overflow-x→「数据自」列裁死不可滚；③#page-stats .two-col ID 特异性压死 @media 1000px 断点（统计页不折叠，与首页行为分叉）。
+- **流程**：门禁1 三轮（R1 体验官驳回：右对齐机制论断错误+667px 验收字面不可达 → R2/R3 连续全票）→ 计划 v2 → 门禁2 两轮连续全票 → SDD 2 任务 → 最终评审可交付。
+- **改动**（style.css +7 行声明 / index.html +1 包裹 / 新增 test_narrow_layout.py 10 项）：
+  - .pill nowrap + .pill-row wrap + .ph wrap + .ph-right margin-left:auto（四层退化链：文字单行→pill 边界换行→组换行→右对齐保持）
+  - 渠道明细表包 .tbl-scroll（overflow-x:auto；方案 b——方案 a display:block 会破坏 records 页行高均分契约，已警示排除）
+  - @media 1000px 块内补 #page-stats .two-col 单列（同特异性源序获胜）
+- **验证**：446 passed + UI 复核（800px：pillH 74→26、titleH 54→27、pill 组贴右缘 774px；明细表「数据自」完整可见；统计页单列 708px 与 EVOLUTION-7 hint/占位共存良好）。
+- **遗留**：验收⑥暗色滚动条/⑧英文档/⑨667×453/⑩1000px+对照/⑪复用点留用户人工验收清单。
+
+### 问题9（EVOLUTION-9）：tooltip 双语泄漏 + i18n 一致性 — ✅ 修复完成
+
+- **等级**：P2（5/10 → 诊断修正后 4/10）→ 根因：①12 处 tooltip 硬编码双语泄漏（index.html 11 + app.js renderQuotaBar 1）；②data-i18n-title 全工程无处理逻辑（估算 badge tooltip 永空+徽标文本「估」硬编码）；③applyLang 无条件 renderAll(state.data) 冗余写穿（同值回写零可见损伤但误导演进）+首页动态区块不在重渲清单；④applyCurrency 同模式。
+- **流程教训（本轮最重要）**：v1 诊断犯**可达性误判**——漏掉两个关键机制（切语言运行时唯一入口在设置页 :2095；switchPage 回页必重载 :484-490），门禁1 PM/体验官双驳回并实证「数字口径突变」「需刷新页面」均不成立，损伤从 5/10 修正为 4/10，修复方向从「按上下文分派+quiet 重拉」重构为「提取 syncTopBar（删除 renderAll 调用）」——原方案按字面执行会造成顶栏语言不切换回归。R3 定性再经 PM 席第 2 轮自我纠正（同值回写零可见损伤）。**门禁的价值在本轮充分体现：三席以代码实证拦截了主 agent 的两处推断错误。**
+- **改动**（index.html 11 属性 / app.js syncI18nTitles+syncTopBar 提取+applyCurrency 早退+syncFailTip / I18N 7 新键+3 复用 / 新增 test_i18n_consistency.py 13 项）：
+  - 12 处 tooltip 全量接线（data-i18n-title 单轨制，替代「静态属性+JS 手动补偿」双轨）；估算徽标「估」→t("estimateBadge")（消除与其余 4 处徽标的「估」vs「估算」不一致）
+  - syncTopBar 从 renderAll 整段逐行平移提取；applyLang 改调之（顶栏即时换语言+同值回写不变式：值不变前缀换语言）；隐藏容器写穿自然消除
+  - applyCurrency 设置页早退（货币一致由回页重载兜底）
+- **验证**：459 passed + DOM 复核（中文态 tooltip 全量中文化；切 English 即时切换 Toggle theme/Minimize/Home/Est.；切回中文恢复）。
+
+### 本轮对系统的新认知（供后续迭代）
+
+1. **物理像素 min_size 是窄窗问题总根因**：min_size=(1000,680) 按物理像素约束，出厂 DPI 缩放下 CSS 宽仅 800/667px——窄窗是默认场景而非边缘场景。若未来再遇窄窗类问题，优先考虑 main.py 以 CSS 像素声明 min_size 一次消除整类触发面。
+2. **ID 前缀特异性压死媒体查询是复发性模式**：新增 #page-xxx 前缀 grid/flex 规则时应同步检查 @media 块是否需同特异性补齐（test_narrow_layout 的双块区分断言可作模板）。
+3. **「裁死不可达」比「显示不全」伤害更高**：表格类组件应有「可见即可达」默认防线（records 的 fixed+ellipsis 与 report 的 tbl-scroll 是同一防线两种形态）。
+4. **回页必重载（switchPage）是全局偏好的最终一致性兜底**：语言/货币类全局改动可安全采用「即时刷新可见部分（顶栏/标题/tooltip）+ 数据体回页刷」分层，勿追求全量即时重渲。
+5. **「静态 HTML 属性+JS 手动补偿」双轨制是 i18n 漂移温床**：统一 data-i18n-title 单轨声明后，新增 tooltip 一处声明即被测试契约自动覆盖。
+6. **「提取函数+逐行平移+函数域防退化锚」是低风险重构可复制范式**：行为零变化可静态证明，回归被 CI 即刻拦截。
+7. **门禁可达性纪律**：诊断损伤前必须核实「触发入口在哪、运行时是否可达、有无兜底机制」——本轮 R3/R4 误判（两席驳回）即源于纯静态推断未查运行时入口；候选评估时 DOM 快照与调用链核查应先于损伤定级。
+8. **口径分裂的低风险解法是「标注优先于重算」**：server 不重算 pct、db 不碰 dsh_api 的既有边界全部保留，用数据不变量封闭显示一致性，再辅以条件 hint 紧贴矛盾源头。
+
+### 遗留跟进项（deferred minors，全部留候补池）
+
+重点：①溢出保护缺口（.ov-acc-name/#set-datadir/DSH 两表/单渠道 .acct-name）；②.ub-meta 文案重叠（需 BAI 账号实拍）；③applyLang 保留的 loadRecords 写穿（同族备选池）；④问题8 人工验收清单（暗色滚动条/英文档/667×453/1000px+ 对照/复用点）；⑤applyCurrency 重渲块 :468-475 实质死路径（进化日志留档防误判）；⑥records 页「共 0 会话」与 DSH 415 口径矛盾；⑦空态三套写法/.wb-v 抖动/overlay 废弃；⑧两测试文件的格式敏感脆性（docstring 已声明）。
+
+### 待用户动作
+
+1. **人工签入**：本地 7 个提交（fcebc08/e0c96d2 为问题9，4c2d6bc/da7e73c 为问题8，c1cacfa/9ba1c2b/e854fc6/af05bae 为问题7——按时间顺序 c1cacfa→e0c96d2）待人工确认后 push；doc/ 下文档（candidates-3/diagnosis-7~9/plan-7~9/votes-7~9/run-state/evolution-log）不入 TFS。
+2. 人工 UI 验收清单：问题8 验收⑥⑧⑨⑩⑪（暗色滚动条/英文档/667×453/宽屏对照/复用点）；问题7/9 的 DOM 复核已覆盖主要场景。
+3. 三个 .superpowers/sdd/ 工作区（plan-7/8/9）保留至签入确认后可删。
+
+### 第三轮收尾汇总（2026-09-06）
+
+- **处理完成**：候选 3/3 全部闭环（EVOLUTION-7 P2 6.5、EVOLUTION-8 P2 6、EVOLUTION-9 P2 4），零放弃零终止。
+- **门禁成本**：门禁1 共 8 轮×3 席（7:3 轮、8:3 轮、9:3 轮），门禁2 共 7 轮×3 席（7:3 轮、8:2 轮、9:2 轮）；SDD 任务评审 8 席次+最终评审 3 席；诊断/计划修订全部一轮改到位。
+- **验证状态**：统一验证门最终 **459 passed / 0 failed** + node --check 通过（基线 446→459，+13 项回归测试；两轮合计新增 43 项测试断言）。
+- **代码变更**：本地 7 个提交未 push（问题7 四提交、问题8 两提交、问题9 两提交——共 8 提交含 T 拆分，详见 git log）；doc/ 文档 14 篇新增。
+- **备选池更新**：见上文遗留跟进项与 `doc/20260906-evolution-candidates-3.md` 备选池。
