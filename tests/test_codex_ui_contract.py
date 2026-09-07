@@ -23,3 +23,13 @@ def test_codex_stats_nodes():
                 "codex-model-body", "codex-trend-chart", "codex-missing", "codex-error"}
     assert expected <= p.ids
     assert "codexStatsTitle" in p.keys
+
+
+def test_home_has_range_totals_and_codex_color():
+    p = Nodes()
+    p.feed((ROOT / "app/web/index.html").read_text(encoding="utf-8"))
+    assert {"report-range-kpis", "channel-tabs", "report-table"} <= p.ids
+    js = (ROOT / "app/web/app.js").read_text(encoding="utf-8")
+    css = (ROOT / "app/web/style.css").read_text(encoding="utf-8")
+    assert 'codex: "var(--ch-codex)"' in js
+    assert "--ch-codex:" in css

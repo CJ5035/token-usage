@@ -66,10 +66,11 @@
       <div class="scope-hint" id="report-scope" hidden></div>
       <div id="report-all" hidden>
         <div class="windows-bar" id="windows-bar"></div>
+        <div class="kpi-row" id="report-range-kpis"></div>
         <div class="card quota-bar"><div class="card-h"><h3 data-i18n="quotaBarTitle">各渠道配额</h3></div><div id="quota-bar"></div></div>
         <div class="ph-right" style="padding:8px 0"><div class="seg" id="report-metric"><button class="active" data-m="tokens" data-i18n="segTokens">Token</button><button data-m="cost" data-i18n="cost">费用</button><button data-m="requests" data-i18n="colRequests">请求</button></div></div>
         <div class="two-col">
-          <div class="card"><div class="card-h"><h3 data-i18n="stackTitle">分渠道消耗趋势</h3><span class="est-badge" id="report-est" hidden title="" data-i18n-title="estimateTip">估</span></div><div class="chart-box" style="min-height:240px"><canvas id="report-stack"></canvas><div class="zcode-chart-empty" id="report-stack-empty" hidden></div></div></div>
+          <div class="card"><div class="card-h"><h3 data-i18n="stackTitle">分渠道消耗趋势</h3><span class="hint" id="report-cost-hint" data-i18n="codexCostUnavailable" hidden></span><span class="est-badge" id="report-est" hidden title="" data-i18n-title="estimateTip">估</span></div><div class="chart-box" style="min-height:240px"><canvas id="report-stack"></canvas><div class="zcode-chart-empty" id="report-stack-empty" hidden></div></div></div>
           <div class="card"><div class="card-h"><h3 data-i18n="donutTitle">渠道占比</h3></div><div class="chart-box" style="min-height:240px;position:relative"><canvas id="report-donut"></canvas><div class="zcode-chart-empty" id="report-donut-empty" hidden></div></div></div>
         </div>
         <div class="card"><div class="card-h"><h3 id="hourly-title"><span data-i18n="todayTrend">今日趋势</span> <span class="hint">24h</span></h3></div><div class="chart-box" style="height:250px"><canvas id="report-hourly"></canvas><div class="zcode-chart-empty" id="report-hourly-empty" hidden></div></div></div>

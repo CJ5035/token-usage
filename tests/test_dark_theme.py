@@ -43,8 +43,8 @@ _DARK_EXPECTED = {
     "--primary-soft": "#2a2440",
 }
 
-# :root 不可变锚允许的新增 token 白名单 (本次唯一允许的两条新声明)
-_ROOT_ADDED_ALLOWED = {"--up", "--down"}
+# :root 不可变锚允许的新增 token 白名单 (--up/--down: EVOLUTION-6; --ch-codex: T5 Codex 渠道色)
+_ROOT_ADDED_ALLOWED = {"--up", "--down", "--ch-codex"}
 
 
 # ---------------------------------------------------------------------------
@@ -139,12 +139,12 @@ def test_dark_tokens_fixed_in_plan_are_frozen():
 
 
 def test_dark_untouched_tokens_unchanged_from_head():
-    """dark 块保留项程序化保证: 除 13 项换值与新增 --up/--down 外, 其余 token
-    (--primary/--primary-strong/--shadow/--danger-soft/--ch-* 6 项) 与 HEAD 一致."""
+    """dark 块保留项程序化保证: 除 13 项换值与新增 --up/--down/--ch-codex 外, 其余
+    token (--primary/--primary-strong/--shadow/--danger-soft/--ch-* 其余项) 与 HEAD 一致."""
     head = _dark_vars(_head_css())
     cur = _dark_vars(_css())
     changed = set(_DARK_EXPECTED) | {"--up", "--down"}
-    assert set(cur) - set(head) <= {"--up", "--down"}
+    assert set(cur) - set(head) <= {"--up", "--down", "--ch-codex"}   # --ch-codex: T5 Codex 渠道色新增声明
     for token, value in head.items():
         if token in changed:
             continue
@@ -177,7 +177,7 @@ def test_root_up_down_values_equal_original_hardcodes():
 
 def test_root_tokens_unchanged_from_head():
     """亮色 :root 既有声明零改动: 与 git show HEAD 基准逐项对比,
-    仅允许新增 --up/--down 两条白名单声明."""
+    仅允许白名单声明新增 (--up/--down: EVOLUTION-6; --ch-codex: T5)."""
     head = _root_vars(_head_css())
     cur = _root_vars(_css())
     assert set(cur) - set(head) <= _ROOT_ADDED_ALLOWED, (

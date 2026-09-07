@@ -296,6 +296,11 @@ function fmtUsd(v) {
   if (v > 0) return "$" + v.toFixed(4);
   return "$0";
 }
+/* 费用 NULL ≠ 0 (Codex 费用恒未知, 后端契约): NULL 显示 — 而非 fmtMoney 的 $0;
+   旧 fmtMoney 全局行为不改, 仅明确费用可能未知的位置改用本函数 */
+function fmtOptionalMoney(value) {
+  return value == null ? "\u2014" : fmtMoney(value);
+}
 function fmtDur(sec) {
   sec = Math.max(0, Number(sec) || 0);
   const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
@@ -634,9 +639,9 @@ function renderChannelTabs() {
 }
 function renderChannelTabsFrom(d) {
   const tabs = [{ ch: "all", label: t("channelAll") }]
-    .concat(d.summary.map((s) => ({ ch: s.channel, label: s.channel, n: s.accounts })));
+    .concat(d.summary.map((s) => ({ ch: s.channel, label: CH_LABEL[s.channel] || s.channel, n: s.accounts })));
   $("channel-tabs").innerHTML = tabs.map((x) =>
-    `<button class="pill${x.ch === state.channel ? " active" : ""}" data-ch="${x.ch}">${x.label}${x.n > 1 ? ` <small>·${x.n}</small>` : ""}</button>`).join("");
+    `<button class="pill${x.ch === state.channel ? " active" : ""}" data-ch="${x.ch}">${escapeHtml(x.label)}${x.n > 1 ? ` <small>·${x.n}</small>` : ""}</button>`).join("");
   if (state.channel !== "all" && !d.summary.some((s) => s.channel === state.channel)) switchChannel("all"); // 账号被删回退
 }
 function showLoading(show) { $("top-loading").hidden = !show; }
@@ -1358,13 +1363,18 @@ function refreshCodexVisible() {
 /* ---------------- 首页: 用量概览 6 格 ---------------- */
 function renderOverview(totals, source) {
   const isEst = ["bai", "zcode", "claudecode"].includes(source);   // R6: 费用估算徽章扩展至本地渠道
-  const totalTokens = totals.total_input_tokens + totals.total_output_tokens + totals.total_reasoning_tokens;
+  /* T5 codex: 后端提供显式 total_tokens (缓存读/reasoning 是子项不二次相加),
+     优先采用; 其余渠道无该键走原 input+output+reasoning 和式 (行为不变) */
+  const totalTokens = totals.total_tokens != null ? totals.total_tokens
+    : totals.total_input_tokens + totals.total_output_tokens + totals.total_reasoning_tokens;
   const cards = [
     { cls: "c-green", l: t("hitRate"), v: totals.hit_rate.toFixed(1) + "%", s: `${t("hit")} ${fmtTokens(totals.cache_hit_tokens)} · ${t("miss")} ${fmtTokens(totals.uncached_input_tokens)}` },
     { cls: "c-cyan", l: t("hitAmount"), v: fmtTokens(totals.cache_hit_tokens), s: `${t("pctOfInput")} ${totals.hit_rate.toFixed(1)}%` },
-    { cls: "c-blue", l: t("totalTokens"), v: fmtTokens(totalTokens), s: t("inclCache") },
+    { cls: "c-blue", l: t("totalTokens"), v: fmtTokens(totalTokens), s: totals.total_tokens != null
+      ? `${t("input")} ${fmtTokens(totals.total_input_tokens)} · ${t("output")} ${fmtTokens(totals.total_output_tokens)}`   // 拆分展示: 输入含缓存读、输出含 reasoning, 不再次相加
+      : t("inclCache") },
     { cls: "c-slate", l: t("totalRequests"), v: fmtInt(totals.request_count), s: t("currentRange") },
-    { cls: "c-amber", l: t("totalCost") + (isEst ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: fmtMoney(totals.total_cost_usd), s: `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
+    { cls: "c-amber", l: t("totalCost") + (isEst ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: fmtOptionalMoney(totals.total_cost_usd), s: totals.total_cost_usd == null ? t("codexCostUnavailable") : `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
     { cls: "c-violet", l: t("sessions"), v: fmtInt(totals.session_count), s: t("dedup") },
   ];
   $("overview-grid").innerHTML = cards.map((c) => `
@@ -2400,7 +2410,10 @@ function switchChannel(ch) {
 }
 
 const CH_COLOR = { opencode: "var(--ch-opencode)", bai: "var(--ch-bai)", commandcode: "var(--ch-commandcode)",
-  zcode: "var(--ch-zcode)", claudecode: "var(--ch-claudecode)", dsh: "var(--ch-dsh)" };   // 新R5 N18: 扩齐六渠道, 防分段同色
+  zcode: "var(--ch-zcode)", claudecode: "var(--ch-claudecode)", dsh: "var(--ch-dsh)", codex: "var(--ch-codex)" };   // 新R5 N18: 扩齐六渠道, 防分段同色 (T5 加 codex)
+/* 渠道显示名 (T5): 仅 codex 用品牌大小写, 已有渠道名保持原字符串; tabs/明细表/
+   图表 legend 显示用, tabs data-ch 与 donut onClick 仍用原始渠道键 */
+const CH_LABEL = { codex: "Codex" };
 
 /* EVOLUTION-4 模块级缓存: 切主题时 rerenderCharts 零网络请求重渲, 数据源为最近一次拉取结果.
    写入点均带键校验/序号守卫 (防快速连点响应乱序覆盖), 读取点 (rerenderCharts) 再校验一次 */
@@ -2420,7 +2433,7 @@ async function loadReportAll(quiet = false) {
   try {
     const range = state.range;                          // 局部快照防在途 state 漂移 (daily URL 与缓存键都用快照)
     const metric = state.reportMetric;
-    const [w, rows, ov, zq, daily, hourly] = await Promise.all([   // 三波并一波 (hourly 并入消除 today 档两段式弹入)
+    const [w, rows, ov, zq, daily, hourly, all] = await Promise.all([   // 三波并一波 (hourly 并入消除 today 档两段式弹入)
       api(`/api/report/windows`),
       api(`/api/report/channels?range=${range}`),
       api(`/api/accounts/overview`),                    // R1: 摘要条数据并入同一并发 (T9 renderQuotaBar)
@@ -2429,9 +2442,16 @@ async function loadReportAll(quiet = false) {
       (range === "today" || range === "yesterday")      // 档位条件保留 (条件性 promise)
         ? api(`/api/report/hourly?date=${range}`)
         : Promise.resolve(null),
+      api("/api/dashboard?scope=all&range=" + encodeURIComponent(range)),   // T5: 同范围 report_totals → 范围 KPI 条 (响应仅给 renderReportTotals, 不碰 state.data/不 renderAll)
     ]);
     if (seq !== allSeq) return;                         // 过期响应丢弃 (缓存写入在守卫后, 最新胜出)
     renderWindows(w, rows.rows.some((r) => r.estimated));
+    renderReportTotals(all.totals);
+    const costHint = $("report-cost-hint");             // T5: metric=cost 且含费用未知渠道 (Codex) → 费用不完整状态提示; 空已知集由图表空态兜底
+    if (costHint) {
+      const incomplete = metric === "cost" && Array.isArray(daily.unavailable_channels) && daily.unavailable_channels.length > 0;
+      costHint.hidden = !incomplete;
+    }
     renderQuotaBar(ov.accounts, zq);
     renderChannelTable(rows.rows);
     $("report-scope").textContent = t("scopeHint").replace("{n}", w.channel_count).replace("{m}", w.account_count);
@@ -2522,7 +2542,7 @@ function fmtAgo(iso) {  // 相对时间: 简化复用 fmtDateTime + 差值分钟
 
 function renderWindows(w, hasEst = false) {
   const cell = (key, label, sub) => `<div class="wb-cell" data-win="${key}"><div class="wb-l">${label}</div>
-    <div class="wb-v">${fmtTokens(w[key].tokens)}</div><div class="wb-v2">${fmtMoney(w[key].cost)}</div>
+    <div class="wb-v">${fmtTokens(w[key].tokens)}</div><div class="wb-v2">${fmtOptionalMoney(w[key].cost)}</div>
     <div class="wb-s${w.compare.spike && key === "today" ? " spike" : ""}">${sub}</div></div>`;
   const cmp = w.compare.insufficient_sample ? t("sampleInsufficient")
     : (w.today && w.today.tokens === 0 ? t("noUsageToday")   // EVOLUTION-7: 今日零用量不渲染涨跌箭头 (无昨日基线时避免荒谬涨跌)
@@ -2544,6 +2564,25 @@ function renderWindows(w, hasEst = false) {
     const btn = document.querySelector(`#home-pills .pill[data-r="${r}"]`);
     if (btn) btn.click();
   }));
+}
+
+/* 范围 KPI 条 (T5): 当前 range 的全渠道 report_totals (scope=all), 通用 KPI 条
+   非独立 Codex 卡; 费用 NULL → —; title 聚合费用不完整/请求近似说明 */
+function renderReportTotals(totals) {
+  const reqMark = totals.request_count_exact === false ? "~" : "";
+  $("report-range-kpis").innerHTML = [
+    [t("totalTokens"), fmtTokens(totals.total_tokens)],
+    [t("input"), fmtTokens(totals.total_input_tokens)],
+    [t("output"), fmtTokens(totals.total_output_tokens)],
+    [t("totalRequests"), reqMark + fmtInt(totals.request_count)],
+    [t("totalCost"), fmtOptionalMoney(totals.total_cost_usd)]
+  ].map(([label,value]) => '<div class="kpi"><div class="kpi-l">' +
+    escapeHtml(label) + '</div><div class="kpi-v">' +
+    escapeHtml(value) + '</div></div>').join("");
+  $("report-range-kpis").title = [
+    totals.cost_partial ? t("codexCostUnavailable") : "",
+    reqMark ? t("codexApproxRequests") : ""
+  ].filter(Boolean).join(" · ");
 }
 
 let cStack = null, cDonut = null;
@@ -2573,7 +2612,7 @@ function chartReportStack(d, noAnim) {
     data: {
       labels: d.labels,
       datasets: Object.keys(d.series).map((ch) => ({
-        label: ch, data: d.series[ch], backgroundColor: chColor(ch), borderRadius: 2, barPercentage: 0.8,
+        label: CH_LABEL[ch] || ch, data: d.series[ch], backgroundColor: chColor(ch), borderRadius: 2, barPercentage: 0.8,
       })),
     },
     options: {
@@ -2616,7 +2655,7 @@ function chartReportDonut(d, noAnim) {
   cDonut = new Chart(canvas, {
     type: "doughnut",
     plugins: [centerText],
-    data: { labels: chs, datasets: [{ data: totals, backgroundColor: chs.map(chColor), borderWidth: 2, borderColor: cssVar("--card") }] },
+    data: { labels: chs.map((ch) => CH_LABEL[ch] || ch), datasets: [{ data: totals, backgroundColor: chs.map(chColor), borderWidth: 2, borderColor: cssVar("--card") }] },   // T5: 显示名映射; onClick 仍用原始 chs 键切 tab
     options: {
       responsive: false, maintainAspectRatio: false, cutout: "62%",
       animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
@@ -2642,7 +2681,7 @@ function chartReportHourly(d, noAnim, emptyKey) {   // EVOLUTION-7: 第三参 em
   const chs = Object.keys(d.series);
   cHourly = new Chart(canvas, {
     type: "bar",
-    data: { labels: d.labels.map((h) => `${h}`), datasets: chs.map((ch) => ({ label: ch, data: d.series[ch], backgroundColor: chColor(ch), borderRadius: 2, barPercentage: 0.9 })) },
+    data: { labels: d.labels.map((h) => `${h}`), datasets: chs.map((ch) => ({ label: CH_LABEL[ch] || ch, data: d.series[ch], backgroundColor: chColor(ch), borderRadius: 2, barPercentage: 0.9 })) },
     options: {
       responsive: false, maintainAspectRatio: false,
       animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
@@ -2663,10 +2702,10 @@ function renderChannelTable(rows) {
     return;
   }
   $("report-table").innerHTML = rows.map((r) => `<tr>
-    <td style="color:${CH_COLOR[r.channel] || "#4f8ef7"}">${r.channel}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
+    <td style="color:${CH_COLOR[r.channel] || "#4f8ef7"}">${escapeHtml(CH_LABEL[r.channel] || r.channel)}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
     <td class="num">${fmtTokens(r.tokens)}</td><td class="num">${fmtTokens(r.input)}</td><td class="num">${fmtTokens(r.output)}</td>
-    <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${fmtInt(r.requests)}</td><td class="num">${fmtMoney(r.cost)}</td>
-    <td>${r.channel === "dsh" ? t("dataSinceToday") : (r.data_since || "—")}</td></tr>`).join("");   // R6: dsh 仅今日
+    <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${fmtInt(r.requests)}</td><td class="num">${fmtOptionalMoney(r.cost)}</td>
+    <td>${r.channel === "dsh" ? t("dataSinceToday") : (r.data_since || "—")}</td></tr>`).join("");   // R6: dsh 仅今日; T5: 渠道名显示名映射+转义, 费用 NULL → —
 }
 
 /* ---------------- 自动同步 ---------------- */

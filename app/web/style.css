@@ -34,6 +34,7 @@
   --ch-zcode: #6366f1;          /* 原 #06b6d4 青 → 翡翠绿 → 靛蓝 (用户指定) */
   --ch-claudecode: #fb7185;     /* 原 #e11d48: 暗玫红 → 亮玫红 (问题3) */
   --ch-dsh: #64748b;
+  --ch-codex: #0f766e;          /* T5: Codex 渠道色 (亮) */
   --up: #16a34a;                /* 涨/成功语义色 (EVOLUTION-6 新增, 值=原 .wb-s .up 硬编码, 亮色逐像素不变) */
   --down: #dc2626;              /* 跌/失败语义色 (EVOLUTION-6 新增, 值=原 .wb-s .down/.sync-fail 硬编码, 亮色逐像素不变) */
 }
@@ -64,6 +65,7 @@ html[data-theme="dark"] {
   --ch-zcode: #818cf8;
   --ch-claudecode: #fb7185;
   --ch-dsh: #94a3b8;
+  --ch-codex: #2dd4bf;          /* T5: Codex 渠道色 (暗) */
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; overflow: hidden; }
@@ -507,6 +509,14 @@ html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
 .wb-s.spike { color: var(--amber); font-weight: 600; }   /* EVOLUTION-6: #d97706 → var(--amber) 同值, 亮色零视觉变化 */
 .wb-since { grid-column: 1 / -1; font-size: 11px; color: var(--text3); display: flex; align-items: center; gap: 4px; }
 .scope-hint { font-size: 11px; color: var(--text3); padding: 2px 0 6px; }
+
+/* 范围 KPI 条 (T5): 当前 range 全渠道 report_totals, 通用 KPI 条非独立 Codex 卡;
+   复用 .kpi-l/.kpi-v, 子项 muted 底同 .tc 风格; 5 列窄窗 3 列换行 */
+#report-range-kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+#report-range-kpis .kpi { background: var(--muted); border-radius: 10px; }
+@media (max-width: 1200px) {
+  #report-range-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 
 /* 配额摘要条: 渠道小卡组 (问题2, 替代原文本行+字符进度条).
    选择器必须用 #quota-bar — 外层 card 的 class 恰好也是 quota-bar
