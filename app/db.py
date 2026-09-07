@@ -15,7 +15,11 @@ import sqlite3
 import sys
 import threading
 from datetime import datetime, timedelta, timezone, date
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # 仅类型注解引用采集层数据契约; codex_api 不 import db, 无运行时依赖
+    from .codex_api import FileBatch, FileProgress
 
 _DB: Optional[sqlite3.Connection] = None
 _DB_LOCK = threading.RLock()  # 写路径串行化: 共享单连接上的事务互斥 (EVOLUTION-1)
@@ -102,6 +106,17 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
     ).fetchone()
     return row is not None
+
+
+def _ensure_table_columns(conn: sqlite3.Connection, table: str,
+                          columns: dict[str, str]) -> None:
+    """旧形状镜像表按 PRAGMA 补缺失列 (先检查再 ALTER, 幂等; 表不存在时跳过,
+    由 CREATE TABLE 带全列创建)。ALTER ADD COLUMN 只追加, 存量行取 DEFAULT/NULL,
+    重复执行无数据损失。"""
+    cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for col, ddl in columns.items():
+        if cols and col not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
 _SS_TAIL = """
@@ -346,6 +361,110 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             DROP TABLE usage_sync_state_legacy;
             """
         )
+    conn.commit()
+
+    # 迁移 4: Codex 本地用量镜像 (DDL 逐字见实施简报 T2 Step 3)。
+    # codex_usage: 行主键 codex:{session_id}:{event_seq|response_id}, 双 UNIQUE
+    #   对应 token_count (session,event_seq) 与 token_usage_record
+    #   (session,response_id) 两种事件模式的幂等键; cost_available 由本层写死 0,
+    #   synced_at 由本层写入时填充。
+    # codex_file_progress: rollout 文件续读游标 (offset/指纹/事件模式/序号等)。
+    # codex_import_state: 单行 (id=1) 导入运行状态, warning_count 累计。
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS codex_usage (
+         id TEXT PRIMARY KEY, session_id TEXT NOT NULL, event_seq INTEGER,
+         event_mode TEXT NOT NULL, response_id TEXT,
+         started_at TEXT NOT NULL, model TEXT NOT NULL DEFAULT '',
+         provider_id TEXT NOT NULL DEFAULT 'codex',
+         input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+         cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+         reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+         total_tokens INTEGER NOT NULL DEFAULT 0, duration_ms REAL, speed_tps REAL,
+         speed_source TEXT, request_count_exact INTEGER NOT NULL DEFAULT 0,
+         cost_available INTEGER NOT NULL DEFAULT 0, cost_raw INTEGER, file_path TEXT,
+         model_revision_at INTEGER NOT NULL DEFAULT 0, synced_at TEXT NOT NULL,
+         UNIQUE(session_id,event_mode,event_seq), UNIQUE(session_id,event_mode,response_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_codex_usage_time ON codex_usage(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_codex_usage_utc ON codex_usage(datetime(started_at));
+        CREATE INDEX IF NOT EXISTS idx_codex_usage_model ON codex_usage(model);
+        CREATE INDEX IF NOT EXISTS idx_codex_usage_provider ON codex_usage(provider_id);
+        CREATE TABLE IF NOT EXISTS codex_file_progress (
+         path TEXT PRIMARY KEY, offset INTEGER NOT NULL DEFAULT 0,
+         file_size INTEGER NOT NULL DEFAULT 0, mtime_ns INTEGER NOT NULL DEFAULT 0,
+         content_fingerprint TEXT NOT NULL DEFAULT '', event_mode TEXT NOT NULL DEFAULT '',
+         last_model TEXT, model_revision INTEGER NOT NULL DEFAULT 0,
+         has_turn_context INTEGER NOT NULL DEFAULT 0, last_event_seq INTEGER NOT NULL DEFAULT 0,
+         last_token_usage_fingerprint TEXT,
+         parser_version INTEGER NOT NULL DEFAULT 0,
+         updated_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS codex_import_state (
+         id INTEGER PRIMARY KEY CHECK (id = 1),
+         running INTEGER NOT NULL DEFAULT 0,
+         last_import_at TEXT,
+         last_success_at TEXT,
+         last_error TEXT,
+         warning_count INTEGER NOT NULL DEFAULT 0,
+         scanned_directory TEXT,
+         revision INTEGER NOT NULL DEFAULT 0,
+         updated_at TEXT
+        );
+        INSERT INTO codex_import_state (id, updated_at)
+        VALUES (1, CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO NOTHING;
+        """
+    )
+    # 旧形状镜像表按 PRAGMA 补新增列 (幂等; 新库列已齐, 循环空转)
+    _ensure_table_columns(conn, "codex_usage", {
+        "session_id": "session_id TEXT NOT NULL DEFAULT ''",
+        "event_seq": "event_seq INTEGER",
+        "event_mode": "event_mode TEXT NOT NULL DEFAULT ''",
+        "response_id": "response_id TEXT",
+        "started_at": "started_at TEXT NOT NULL DEFAULT ''",
+        "model": "model TEXT NOT NULL DEFAULT ''",
+        "provider_id": "provider_id TEXT NOT NULL DEFAULT 'codex'",
+        "input_tokens": "input_tokens INTEGER NOT NULL DEFAULT 0",
+        "output_tokens": "output_tokens INTEGER NOT NULL DEFAULT 0",
+        "cache_read_tokens": "cache_read_tokens INTEGER NOT NULL DEFAULT 0",
+        "cache_write_tokens": "cache_write_tokens INTEGER NOT NULL DEFAULT 0",
+        "reasoning_tokens": "reasoning_tokens INTEGER NOT NULL DEFAULT 0",
+        "total_tokens": "total_tokens INTEGER NOT NULL DEFAULT 0",
+        "duration_ms": "duration_ms REAL",
+        "speed_tps": "speed_tps REAL",
+        "speed_source": "speed_source TEXT",
+        "request_count_exact": "request_count_exact INTEGER NOT NULL DEFAULT 0",
+        "cost_available": "cost_available INTEGER NOT NULL DEFAULT 0",
+        "cost_raw": "cost_raw INTEGER",
+        "file_path": "file_path TEXT",
+        "model_revision_at": "model_revision_at INTEGER NOT NULL DEFAULT 0",
+        "synced_at": "synced_at TEXT NOT NULL DEFAULT ''",
+    })
+    _ensure_table_columns(conn, "codex_file_progress", {
+        "offset": "offset INTEGER NOT NULL DEFAULT 0",
+        "file_size": "file_size INTEGER NOT NULL DEFAULT 0",
+        "mtime_ns": "mtime_ns INTEGER NOT NULL DEFAULT 0",
+        "content_fingerprint": "content_fingerprint TEXT NOT NULL DEFAULT ''",
+        "event_mode": "event_mode TEXT NOT NULL DEFAULT ''",
+        "last_model": "last_model TEXT",
+        "model_revision": "model_revision INTEGER NOT NULL DEFAULT 0",
+        "has_turn_context": "has_turn_context INTEGER NOT NULL DEFAULT 0",
+        "last_event_seq": "last_event_seq INTEGER NOT NULL DEFAULT 0",
+        "last_token_usage_fingerprint": "last_token_usage_fingerprint TEXT",
+        "parser_version": "parser_version INTEGER NOT NULL DEFAULT 0",
+        "updated_at": "updated_at TEXT",
+    })
+    _ensure_table_columns(conn, "codex_import_state", {
+        "running": "running INTEGER NOT NULL DEFAULT 0",
+        "last_import_at": "last_import_at TEXT",
+        "last_success_at": "last_success_at TEXT",
+        "last_error": "last_error TEXT",
+        "warning_count": "warning_count INTEGER NOT NULL DEFAULT 0",
+        "scanned_directory": "scanned_directory TEXT",
+        "revision": "revision INTEGER NOT NULL DEFAULT 0",
+        "updated_at": "updated_at TEXT",
+    })
     conn.commit()
 
 
@@ -2638,3 +2757,566 @@ def channel_trend(date_: str = "today", channel: str = "opencode") -> list[dict[
     m = {r["h"]: r for r in rows}
     return [{"hour": h, "input": (m[h]["i"] or 0) if h in m else 0,
              "output": (m[h]["o"] or 0) if h in m else 0} for h in range(24)]
+
+
+# ---------------------------------------------------------------------------
+# Codex 本地用量镜像 (数据来源: codex_api 只读采集 ~/.codex/sessions rollout
+# JSONL → 导入 codex_usage 镜像表并聚合; 采集侧绝不写入本机目录)
+# 事务纪律: commit_codex_batch 是生产编排唯一写入口, 一层事务内顺序
+# records → progress → import_state (warnings 累计); _codex_write_rows 不自行
+# 提交, 供 import_codex_usage / commit_codex_batch 共用。解析在锁外, 写事务
+# 短暂持锁。冲突语义见 CodexUsageConflict。
+# 口径: cost_available 列由本层写死 0 (Codex 费用恒 NULL, 不以 0 代替),
+# synced_at 由本层写入时填充当前 UTC ISO; 聚合总量 SUM(total_tokens), 缓存
+# 读/写与 reasoning 是子项不二次相加。
+# ---------------------------------------------------------------------------
+
+
+class CodexUsageConflict(Exception):
+    """同一文件版本内相同 key 被改成另一条请求 (时间或 token 变化, 且既非
+    token_count 幂等重放、又非 token_usage_record 正常修订): 不兼容冲突,
+    回滚该批次并上报, 不覆盖历史、也不推进 offset。"""
+
+
+def _codex_dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """批次内按 key 收敛: 同 (session_id, event_mode, response_id/event_seq)
+    保留文件顺序中最后一条完整 usage (更新字段语义, 不累加)。
+
+    T1 相邻去重只看前一行, 非相邻重复会在同批次产出同 id 两行; 此处先在
+    Python 侧收敛, 后写覆盖前写, 避免违反 UNIQUE/PK 约束。
+    """
+    merged: dict[tuple, dict[str, Any]] = {}
+    for r in rows:
+        mode = r.get("event_mode")
+        if mode == "token_usage_record":
+            key = (r.get("session_id"), mode, r.get("response_id"))
+        else:
+            key = (r.get("session_id"), mode, r.get("event_seq"))
+        merged[key] = r  # 后写覆盖 → 末条胜出 (保持首次出现顺序)
+    return list(merged.values())
+
+
+def _codex_usage_content(r: Any) -> tuple:
+    """冲突判定指纹: started_at + 六项 token。仅当同 key 的这七项被改成
+    另一条请求才算不兼容冲突; 模型/速度/修订号差异走补齐或修订语义。"""
+    return (r["started_at"], int(r["input_tokens"] or 0), int(r["output_tokens"] or 0),
+            int(r["cache_read_tokens"] or 0), int(r["cache_write_tokens"] or 0),
+            int(r["reasoning_tokens"] or 0), int(r["total_tokens"] or 0))
+
+
+def _codex_row_values(r: dict[str, Any], synced_at: str) -> list[Any]:
+    """UsageRow dict → INSERT 值序 (列序见 _codex_write_rows)。"""
+    return [
+        r.get("id"), r.get("session_id"), r.get("event_seq"), r.get("event_mode"),
+        r.get("response_id"), r.get("started_at"), r.get("model") or "",
+        r.get("provider_id") or "codex",
+        int(r.get("input_tokens") or 0), int(r.get("output_tokens") or 0),
+        int(r.get("cache_read_tokens") or 0), int(r.get("cache_write_tokens") or 0),
+        int(r.get("reasoning_tokens") or 0), int(r.get("total_tokens") or 0),
+        r.get("duration_ms"), r.get("speed_tps"), r.get("speed_source"),
+        1 if r.get("request_count_exact") else 0,
+        0,  # cost_available 固定 0 (false), 不依赖采集器传入
+        r.get("cost_raw"), r.get("file_path"),
+        int(r.get("model_revision_at") or 0), synced_at,
+    ]
+
+
+def _codex_next_revision_at(conn: sqlite3.Connection) -> int:
+    """补空模型时的修订时刻: max(当前 epoch ms, 库内最大 model_revision_at + 1)。"""
+    mx = conn.execute(
+        "SELECT MAX(model_revision_at) AS m FROM codex_usage").fetchone()["m"]
+    return max(int(datetime.now().timestamp() * 1000), int(mx or 0) + 1)
+
+
+def _codex_write_rows(conn: sqlite3.Connection, rows: list[dict[str, Any]],
+                      synced_at: str) -> int:
+    """事务内幂等写入 codex_usage (不 BEGIN/COMMIT, 由调用方控制事务), 返回新增行数。
+
+    幂等与冲突语义:
+    - token_count 同 (session_id,event_seq) 重放: 时间与 token 相同 → 幂等跳过,
+      仅补空模型 (附 model_revision_at) 或此前缺失的速度; 不同 → 冲突。
+    - token_usage_record 同 (session_id,response_id): 正常事件修订, 整体更新
+      usage 字段为文件顺序末条完整值 (更新但不累加), 不视为冲突。
+    - 主键相同但事件模式不同: 冲突 (模式切换应走重建分支)。
+    """
+    inserted = 0
+    for r in _codex_dedupe_rows(rows):
+        existing = conn.execute(
+            "SELECT event_mode, started_at, model, speed_tps,"
+            " input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,"
+            " reasoning_tokens, total_tokens FROM codex_usage WHERE id = ?",
+            (r.get("id"),),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """INSERT INTO codex_usage
+                   (id, session_id, event_seq, event_mode, response_id, started_at,
+                    model, provider_id, input_tokens, output_tokens, cache_read_tokens,
+                    cache_write_tokens, reasoning_tokens, total_tokens, duration_ms,
+                    speed_tps, speed_source, request_count_exact, cost_available,
+                    cost_raw, file_path, model_revision_at, synced_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                _codex_row_values(r, synced_at),
+            )
+            inserted += 1
+            continue
+        if (existing["event_mode"] or "") != (r.get("event_mode") or ""):
+            raise CodexUsageConflict(
+                f"同 key 事件模式变化: id={r.get('id')} "
+                f"{existing['event_mode']!r} -> {r.get('event_mode')!r}")
+        if r.get("event_mode") == "token_usage_record":
+            # 正常事件修订: 保留最后一条完整 usage, 更新字段但不累加
+            conn.execute(
+                """UPDATE codex_usage SET
+                     started_at = ?, model = ?, input_tokens = ?, output_tokens = ?,
+                     cache_read_tokens = ?, cache_write_tokens = ?,
+                     reasoning_tokens = ?, total_tokens = ?, duration_ms = ?,
+                     speed_tps = ?, speed_source = ?, model_revision_at = ?,
+                     cost_raw = ?, synced_at = ?
+                   WHERE id = ?""",
+                (r.get("started_at"), r.get("model") or "",
+                 int(r.get("input_tokens") or 0), int(r.get("output_tokens") or 0),
+                 int(r.get("cache_read_tokens") or 0),
+                 int(r.get("cache_write_tokens") or 0),
+                 int(r.get("reasoning_tokens") or 0), int(r.get("total_tokens") or 0),
+                 r.get("duration_ms"), r.get("speed_tps"), r.get("speed_source"),
+                 int(r.get("model_revision_at") or 0), r.get("cost_raw"),
+                 synced_at, r.get("id")),
+            )
+            continue
+        # token_count 重放: 内容相同 → 幂等 (仅补齐), 不同 → 冲突
+        if _codex_usage_content(r) != _codex_usage_content(existing):
+            raise CodexUsageConflict(
+                f"同 key 记录被改成另一条请求: id={r.get('id')} "
+                f"{_codex_usage_content(existing)} != {_codex_usage_content(r)}")
+        updates: list[str] = []
+        params: list[Any] = []
+        new_model = r.get("model") or ""
+        if new_model and not (existing["model"] or ""):
+            updates += ["model = ?", "model_revision_at = ?"]
+            params += [new_model, _codex_next_revision_at(conn)]
+        if r.get("speed_tps") is not None and existing["speed_tps"] is None:
+            updates += ["speed_tps = ?", "speed_source = ?"]
+            params += [r.get("speed_tps"), r.get("speed_source")]
+        if updates:
+            updates.append("synced_at = ?")
+            params += [synced_at, r.get("id")]
+            conn.execute(
+                f"UPDATE codex_usage SET {', '.join(updates)} WHERE id = ?", params)
+    return inserted
+
+
+def import_codex_usage(rows: list[dict[str, Any]]) -> int:
+    """把 codex_api 的增量行事务内幂等写入 codex_usage, 返回新增行数。
+
+    行 dict 键契约见 codex_api.UsageRow (键名逐字); cost_available 由本层固定
+    写 0, synced_at 由本层填当前 UTC ISO, 调用方无需提供。幂等/冲突语义见
+    _codex_write_rows。重复导入已存在行返回 0, 不重复增加。
+    """
+    if not rows:
+        return 0
+    conn = get_db()
+    synced_at = _now_iso()
+    with _DB_LOCK:
+        try:
+            inserted = _codex_write_rows(conn, rows, synced_at)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return inserted
+
+
+def _codex_is_rebuild(stored: Optional[sqlite3.Row],
+                      progress: dict[str, Any]) -> bool:
+    """依据已存游标与本批进度判定 T1 是否已判定重建 (新文件版本): 解析器版本
+    变化 / 截断 (文件变短) / 同大小前缀指纹变化 / 事件模式切换。stored 为空
+    (首扫) 不算重建。命中则在写入前删除该文件旧记录, 从头重建, 不走冲突分支。
+    """
+    if stored is None:
+        return False
+    stored_size = int(stored["file_size"] or 0)
+    batch_size = int(progress.get("file_size") or 0)
+    if (int(progress.get("parser_version") or 0)
+            != int(stored["parser_version"] or 0)):
+        return True
+    if batch_size < stored_size:
+        return True
+    stored_mode = stored["event_mode"] or ""
+    batch_mode = progress.get("event_mode") or ""
+    if stored_mode and batch_mode and stored_mode != batch_mode:
+        return True
+    if (batch_size == stored_size
+            and (progress.get("content_fingerprint") or "")
+            != (stored["content_fingerprint"] or "")):
+        return True
+    return False
+
+
+def _codex_upsert_progress(conn: sqlite3.Connection, path: str,
+                           progress: dict[str, Any]) -> None:
+    """单文件续读游标 upsert (不提交, 属外层批次事务)。"""
+    conn.execute(
+        """INSERT INTO codex_file_progress
+           (path, offset, file_size, mtime_ns, content_fingerprint, event_mode,
+            last_model, model_revision, has_turn_context, last_event_seq,
+            last_token_usage_fingerprint, parser_version, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(path) DO UPDATE SET
+             offset = excluded.offset, file_size = excluded.file_size,
+             mtime_ns = excluded.mtime_ns,
+             content_fingerprint = excluded.content_fingerprint,
+             event_mode = excluded.event_mode, last_model = excluded.last_model,
+             model_revision = excluded.model_revision,
+             has_turn_context = excluded.has_turn_context,
+             last_event_seq = excluded.last_event_seq,
+             last_token_usage_fingerprint = excluded.last_token_usage_fingerprint,
+             parser_version = excluded.parser_version,
+             updated_at = excluded.updated_at""",
+        (path, int(progress.get("offset") or 0), int(progress.get("file_size") or 0),
+         int(progress.get("mtime_ns") or 0), progress.get("content_fingerprint") or "",
+         progress.get("event_mode") or "", progress.get("last_model"),
+         int(progress.get("model_revision") or 0),
+         1 if progress.get("has_turn_context") else 0,
+         int(progress.get("last_event_seq") or 0),
+         progress.get("last_token_usage_fingerprint"),
+         int(progress.get("parser_version") or 0), progress.get("updated_at")),
+    )
+
+
+def _codex_record_import_failure(conn: sqlite3.Connection, exc: Exception) -> None:
+    """失败时在独立事务中原子更新导入状态 (last_error), 不掩盖原始异常。"""
+    try:
+        conn.execute(
+            "UPDATE codex_import_state SET last_error = ?, last_import_at = ?,"
+            " updated_at = ? WHERE id = 1",
+            (str(exc), _now_iso(), _now_iso()),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+
+
+def commit_codex_batch(batch: "FileBatch") -> int:
+    """生产编排唯一写入口: 记录 → 进度 → 导入状态 (warnings 累计) 同一事务。
+
+    返回新增记录行数。T1 已判定重建 (文件指纹/截断/模式变化, 见
+    _codex_is_rebuild) 时, 在同一事务内先删除该文件旧记录再从头重建;
+    任一步失败 (含 CodexUsageConflict) 回滚整个批次 — 记录与进度都不落库,
+    offset 不推进 — 然后在独立事务中记录 last_error 并原样抛出异常。
+    """
+    conn = get_db()
+    path = batch.get("path") or ""
+    rows = batch.get("rows") or []
+    progress = batch.get("progress") or {}
+    warnings = batch.get("warnings") or []
+    synced_at = _now_iso()
+    inserted = 0
+    with _DB_LOCK:
+        try:
+            stored = conn.execute(
+                "SELECT parser_version, file_size, event_mode, content_fingerprint"
+                " FROM codex_file_progress WHERE path = ?", (path,)
+            ).fetchone()
+            if _codex_is_rebuild(stored, progress):
+                # 新文件版本: 同一事务删除该文件旧记录并从头重建 (只删本文件,
+                # 源文件删除/丢失不触发其他文件的历史镜像清理)
+                conn.execute("DELETE FROM codex_usage WHERE file_path = ?", (path,))
+            inserted = _codex_write_rows(conn, rows, synced_at)
+            _codex_upsert_progress(conn, path, progress)
+            conn.execute(
+                """UPDATE codex_import_state SET
+                     last_import_at = ?, last_success_at = ?, last_error = NULL,
+                     warning_count = COALESCE(warning_count, 0) + ?, updated_at = ?
+                   WHERE id = 1""",
+                (synced_at, synced_at, len(warnings), _now_iso()),
+            )
+            conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            _codex_record_import_failure(conn, exc)
+            raise
+    return inserted
+
+
+def get_codex_file_progress_all() -> dict[str, "FileProgress"]:
+    """载入全部 rollout 续读游标: path → FileProgress, 一次读出供采集编排
+    判定增量 (信任已存事件模式/指纹, 变化即从头重建)。"""
+    rows = get_db().execute("SELECT * FROM codex_file_progress").fetchall()
+    return {
+        r["path"]: {
+            "offset": int(r["offset"] or 0),
+            "file_size": int(r["file_size"] or 0),
+            "mtime_ns": int(r["mtime_ns"] or 0),
+            "content_fingerprint": r["content_fingerprint"] or "",
+            "event_mode": r["event_mode"] or "",
+            "last_model": r["last_model"],
+            "model_revision": int(r["model_revision"] or 0),
+            "has_turn_context": bool(r["has_turn_context"]),
+            "last_event_seq": int(r["last_event_seq"] or 0),
+            "last_token_usage_fingerprint": r["last_token_usage_fingerprint"],
+            "parser_version": int(r["parser_version"] or 0),
+            "updated_at": r["updated_at"],
+        }
+        for r in rows
+    }
+
+
+_CODEX_STATE_FIELDS = ("running", "last_import_at", "last_success_at", "last_error",
+                       "warning_count", "scanned_directory", "revision")
+
+
+def get_codex_import_state() -> dict[str, Any]:
+    """读取单行 (id=1) 导入运行状态; 行缺失 (理论不可达) 时回退默认值。"""
+    row = get_db().execute(
+        "SELECT * FROM codex_import_state WHERE id = 1").fetchone()
+    if row is None:
+        return {
+            "running": 0, "last_import_at": None, "last_success_at": None,
+            "last_error": None, "warning_count": 0, "scanned_directory": None,
+            "revision": 0, "updated_at": None,
+        }
+    return {key: row[key] for key in (*_CODEX_STATE_FIELDS, "updated_at")}
+
+
+def update_codex_import_state(**fields: Any) -> None:
+    """原子更新导入状态字段 (白名单校验, updated_at 自动填充)。"""
+    unknown = set(fields) - set(_CODEX_STATE_FIELDS)
+    if unknown:
+        raise ValueError(f"未知导入状态字段: {sorted(unknown)}")
+    if not fields:
+        return
+    assignments = ", ".join(f"{name} = ?" for name in fields)
+    params = [*fields.values(), _now_iso()]
+    with _DB_LOCK:
+        conn = get_db()
+        conn.execute(
+            f"UPDATE codex_import_state SET {assignments}, updated_at = ? WHERE id = 1",
+            params,
+        )
+        conn.commit()
+
+
+# 公共聚合列 (简报固定 SELECT 原文, 供 totals/渠道/模型/会话分组复用):
+# 未命中输入 = SUM(MAX(input-cache_read,0)); 费用恒 NULL; 速度 AVG/MAX/COUNT
+# (无样本时 NULL/NULL/0)。总量口径 SUM(total_tokens), 缓存读/写与 reasoning
+# 是子项不二次相加。
+_CODEX_AGG_COLS = """
+ COUNT(*) AS request_count, COUNT(DISTINCT session_id) AS session_count,
+ COALESCE(SUM(total_tokens),0) AS total_tokens,
+ COALESCE(SUM(input_tokens),0) AS total_input_tokens,
+ COALESCE(SUM(MAX(input_tokens-cache_read_tokens,0)),0) AS uncached_input_tokens,
+ COALESCE(SUM(output_tokens),0) AS total_output_tokens,
+ COALESCE(SUM(reasoning_tokens),0) AS total_reasoning_tokens,
+ COALESCE(SUM(cache_read_tokens),0) AS cache_hit_tokens,
+ COALESCE(SUM(cache_write_tokens),0) AS cache_write_tokens,
+ AVG(speed_tps) AS avg_tps, MAX(speed_tps) AS max_tps,
+ COUNT(speed_tps) AS speed_samples, NULL AS total_cost_usd"""
+
+
+def _codex_hit_rate(cache_hit: int, total_input: int) -> float:
+    """命中率派生键: cache_hit/input*100, 空输入为 0。"""
+    return round(cache_hit / total_input * 100, 2) if total_input > 0 else 0.0
+
+
+def _codex_totals_dict(row: sqlite3.Row) -> dict[str, Any]:
+    """聚合行 → 固定键清单 dict (17 键, totals/channel/model/session 复用同一
+    构造路径; NULL 速度保持 None, 费用恒 None/速度来源聚合恒 None/可用性恒 False)。"""
+    avg_tps = row["avg_tps"]
+    max_tps = row["max_tps"]
+    total_input = int(row["total_input_tokens"] or 0)
+    cache_hit = int(row["cache_hit_tokens"] or 0)
+    return {
+        "request_count": int(row["request_count"] or 0),
+        "session_count": int(row["session_count"] or 0),
+        "total_tokens": int(row["total_tokens"] or 0),
+        "total_input_tokens": total_input,
+        "uncached_input_tokens": int(row["uncached_input_tokens"] or 0),
+        "total_output_tokens": int(row["total_output_tokens"] or 0),
+        "total_reasoning_tokens": int(row["total_reasoning_tokens"] or 0),
+        "cache_hit_tokens": cache_hit,
+        "cache_write_tokens": int(row["cache_write_tokens"] or 0),
+        "avg_tps": round(float(avg_tps), 2) if avg_tps is not None else None,
+        "max_tps": round(float(max_tps), 2) if max_tps is not None else None,
+        "speed_samples": int(row["speed_samples"] or 0),
+        "speed_source": None,    # 聚合口径不携带单条速度来源, 恒 None
+        "total_cost_usd": None,  # Codex 费用恒 NULL, 不以 0 代替
+        "cost_usd": None,
+        "cost_available": False,  # 库列写死 0 (false)
+        "hit_rate": _codex_hit_rate(cache_hit, total_input),
+    }
+
+
+def codex_totals(period: str = "30d") -> dict[str, Any]:
+    """Codex 用量总览: 口径按简报固定 SELECT (含 SUM(MAX(input-cache_read,0))
+    未命中输入); period 统一自然日窗口 _report_range_sql。"""
+    where, params = _report_range_sql(period, "started_at")
+    row = get_db().execute(
+        f"SELECT {_CODEX_AGG_COLS} FROM codex_usage WHERE {where}", params
+    ).fetchone()
+    return _codex_totals_dict(row)
+
+
+def codex_daily(days: int = 7) -> list[dict[str, Any]]:
+    """Codex 每日聚合 (本地自然日归组), 补足近 N 个自然日 (含今天) 的 0。"""
+    days = max(1, min(int(days), 365))
+    today = datetime.now().astimezone().date()
+    start = _local_day_utc_start(today - timedelta(days=days - 1))
+    end = _local_day_utc_start(today + timedelta(days=1))
+    day_expr = "substr(datetime(started_at, 'localtime'), 1, 10)"
+    rows = get_db().execute(
+        f"""SELECT {day_expr} AS date, {_CODEX_AGG_COLS}
+            FROM codex_usage
+            WHERE datetime(started_at) >= datetime(?)
+              AND datetime(started_at) < datetime(?)
+            GROUP BY {day_expr}""",
+        (start, end),
+    ).fetchall()
+    by_date = {r["date"]: r for r in rows}
+    daily: list[dict[str, Any]] = []
+    for i in range(days):
+        d = (today - timedelta(days=days - 1 - i)).isoformat()
+        r = by_date.get(d)
+        if r is None:
+            daily.append({"date": d, "request_count": 0, "session_count": 0,
+                          "total_tokens": 0, "total_input_tokens": 0,
+                          "uncached_input_tokens": 0, "total_output_tokens": 0,
+                          "total_reasoning_tokens": 0, "cache_hit_tokens": 0,
+                          "cache_write_tokens": 0, "avg_tps": None, "max_tps": None,
+                          "speed_samples": 0, "speed_source": None,
+                          "total_cost_usd": None, "cost_usd": None,
+                          "cost_available": False, "hit_rate": 0.0})
+        else:
+            daily.append({"date": d, **_codex_totals_dict(r)})
+    return daily
+
+
+def codex_channel_stats(period: str = "30d") -> list[dict[str, Any]]:
+    """按渠道 (provider_id) 聚合; 当前固定只有 codex 一行, 字段保留 provider_id。"""
+    where, params = _report_range_sql(period, "started_at")
+    rows = get_db().execute(
+        f"""SELECT provider_id, {_CODEX_AGG_COLS} FROM codex_usage WHERE {where}
+            GROUP BY provider_id
+            ORDER BY SUM(total_tokens) DESC, provider_id ASC""",
+        params,
+    ).fetchall()
+    return [{"provider_id": r["provider_id"], **_codex_totals_dict(r)} for r in rows]
+
+
+def codex_model_stats(period: str = "30d") -> list[dict[str, Any]]:
+    """按渠道+模型 (model/provider_id) 聚合, 行字段同 codex_channel_stats 另含 model。"""
+    where, params = _report_range_sql(period, "started_at")
+    rows = get_db().execute(
+        f"""SELECT provider_id, model, {_CODEX_AGG_COLS} FROM codex_usage WHERE {where}
+            GROUP BY provider_id, model
+            ORDER BY SUM(total_tokens) DESC, model ASC""",
+        params,
+    ).fetchall()
+    return [{"provider_id": r["provider_id"], "model": r["model"],
+             **_codex_totals_dict(r)} for r in rows]
+
+
+def codex_records_page(page: int = 1, page_size: int = 20,
+                       model: Optional[str] = None,
+                       period: Optional[str] = None) -> tuple[list[dict[str, Any]], int]:
+    """Codex 明细分页 (存储层 per-source 查询, 统一来源路由在交付二 T6 接线)。
+
+    返回 (records, total)。记录字段: source="codex"、source_record_id=id、
+    started_at、provider_id; account_id/key_id/key_name/plan 均 NULL;
+    cache_write_tokens/total_tokens/duration_ms/speed_tps/speed_source 保留
+    记录值 (可 NULL); cost_usd 恒 NULL、cost_available 恒 False (库列写死 0)。
+    file_path 仅诊断, 不向列表输出对话内容。稳定排序
+    started_at DESC, source ASC, source_record_id ASC, LIMIT/OFFSET 在 SQL 最后。
+    """
+    page = max(1, page)
+    page_size = max(1, min(page_size, 100))
+    where, params = _report_range_sql(period or "all", "started_at")
+    model_filter = ""
+    if model:
+        model_filter = " AND model = ?"
+        params = params + [model]
+    sql_where = f"WHERE {where}{model_filter}"
+    conn = get_db()
+    total = int(conn.execute(
+        f"SELECT COUNT(*) AS c FROM codex_usage {sql_where}", params).fetchone()["c"])
+    rows = conn.execute(
+        f"""SELECT *, 'codex' AS source, id AS source_record_id
+            FROM codex_usage {sql_where}
+            ORDER BY started_at DESC, source ASC, source_record_id ASC
+            LIMIT ? OFFSET ?""",
+        params + [page_size, (page - 1) * page_size],
+    ).fetchall()
+    records = [
+        {
+            "source": "codex",
+            "source_record_id": r["source_record_id"],
+            "session_id": r["session_id"],
+            "started_at": r["started_at"],
+            "model": r["model"],
+            "provider_id": r["provider_id"],
+            "account_id": None,
+            "key_id": None,
+            "key_name": None,
+            "plan": None,
+            "input_tokens": int(r["input_tokens"] or 0),
+            "output_tokens": int(r["output_tokens"] or 0),
+            "reasoning_tokens": int(r["reasoning_tokens"] or 0),
+            "cache_read_tokens": int(r["cache_read_tokens"] or 0),
+            "cache_write_tokens": int(r["cache_write_tokens"] or 0),
+            "total_tokens": int(r["total_tokens"] or 0),
+            "duration_ms": r["duration_ms"],
+            "speed_tps": r["speed_tps"],
+            "speed_source": r["speed_source"],
+            "cost_usd": None,
+            "cost_available": False,
+            "file_path": r["file_path"],
+        }
+        for r in rows
+    ]
+    return records, total
+
+
+def codex_session_stats_page(page: int = 1, page_size: int = 10,
+                             period: Optional[str] = None
+                             ) -> tuple[list[dict[str, Any]], int]:
+    """Codex 会话分页 (先 GROUP BY session_id 分组, 再对组计数并分页)。
+
+    组时间戳取 MAX(started_at), 稳定排序 started_at DESC, source ASC,
+    source_record_id (=session_id) ASC, LIMIT/OFFSET 在 SQL 最后。
+    """
+    page = max(1, page)
+    page_size = max(1, min(page_size, 50))
+    where, params = _report_range_sql(period or "all", "started_at")
+    conn = get_db()
+    total = int(conn.execute(
+        f"SELECT COUNT(DISTINCT session_id) AS c FROM codex_usage WHERE {where}",
+        params,
+    ).fetchone()["c"])
+    rows = conn.execute(
+        f"""SELECT session_id, session_id AS source_record_id, 'codex' AS source,
+                   MAX(started_at) AS started_at, {_CODEX_AGG_COLS}
+            FROM codex_usage WHERE {where}
+            GROUP BY session_id
+            ORDER BY started_at DESC, source ASC, source_record_id ASC
+            LIMIT ? OFFSET ?""",
+        params + [page_size, (page - 1) * page_size],
+    ).fetchall()
+    records = [
+        {
+            "source": "codex",
+            "source_record_id": r["source_record_id"],
+            "session_id": r["session_id"],
+            "started_at": r["started_at"],
+            # 与 totals/channel/model 同一构造路径, 固定 17 键集一致
+            **_codex_totals_dict(r),
+        }
+        for r in rows
+    ]
+    return records, total
+
+
+def codex_last_import_at() -> Optional[str]:
+    """最近一次 Codex 导入时刻 (MAX(synced_at) UTC ISO); 空表 → None。"""
+    row = get_db().execute(
+        "SELECT MAX(synced_at) AS last_at FROM codex_usage").fetchone()
+    return row["last_at"]
