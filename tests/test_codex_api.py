@@ -386,13 +386,46 @@ def test_mode_switch_in_appended_bytes_rebuilds(monkeypatch, tmp_path):
     batches = codex_api.import_incremental(progress, force=True)
     assert len(batches) == 1
     b = batches[0]
-    # 模式切换触发从头重建: 两种事件的行都重新产出
+    # 模式切换触发从头重建; 文件级唯一模式: 重建批次只含 record 行
+    # (token_count 事件被预扫描判定忽略, 不与 record 双计, 需求 §二/§六/§八)
     assert [(row["event_mode"], row["total_tokens"]) for row in b["rows"]] == [
-        ("token_count", 130), ("token_usage_record", 150)]
-    assert b["rows"][1]["response_id"] == "resp-9"
-    assert b["rows"][1]["request_count_exact"] is True
+        ("token_usage_record", 150)]
+    assert b["rows"][0]["response_id"] == "resp-9"
+    assert b["rows"][0]["request_count_exact"] is True
     assert b["progress"]["event_mode"] == "token_usage_record"
     assert b["progress"]["offset"] == p.stat().st_size
+
+
+def test_mixed_file_first_scan_uses_record_mode_only(tmp_path):
+    # 需求 §二/§六/§八 文件级唯一模式: 混合文件首扫只按 record 模式产出,
+    # token_count 事件不产行也不推进序号 (不得两种模式同时计入)
+    p = rollout(tmp_path, 25)
+    write_lines(p, [ctx(), event(30), record(40, response_id="resp-1"), event(50)])
+    result = codex_api.parse_session_file(p, fresh_progress())
+    assert result["event_mode"] == "token_usage_record"
+    assert [(row["event_mode"], row["response_id"], row["total_tokens"])
+            for row in result["rows"]] == [("token_usage_record", "resp-1", 140)]
+    assert result["last_event_seq"] == 0
+    assert result["last_token_usage_fingerprint"] is not None
+
+
+def test_record_mode_fast_path_ignores_appended_token_count(tmp_path):
+    # 快速路径信任持久化 event_mode: record 模式下追加 token_count 字节
+    # 不产行、序号不推进, offset 照常推进 (需求 §二/§六/§八)
+    p = rollout(tmp_path, 26)
+    write_lines(p, [record(30, response_id="resp-1")])
+    result = codex_api.parse_session_file(p, fresh_progress())
+    assert result["event_mode"] == "token_usage_record"
+    cont = fresh_progress(offset=result["offset"], file_size=result["offset"],
+                          event_mode=result["event_mode"],
+                          last_event_seq=result["last_event_seq"],
+                          last_token_usage_fingerprint=result["last_token_usage_fingerprint"])
+    append_lines(p, [event(40)])
+    newer = codex_api.parse_session_file(p, cont, snapshot=p.read_bytes())
+    assert newer["rows"] == []
+    assert newer["last_event_seq"] == cont["last_event_seq"]
+    assert newer["event_mode"] == "token_usage_record"
+    assert newer["offset"] == p.stat().st_size
 
 
 def test_import_throttled_without_force(monkeypatch):

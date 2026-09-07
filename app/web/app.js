@@ -1289,7 +1289,7 @@ function renderCodexSummary(data) {
     kpi("c-green", t("input"), fmtTokens(agg.total_input_tokens || 0)),
     kpi("c-slate", t("output"), fmtTokens(agg.total_output_tokens || 0)),
     kpi("c-cyan", t("zcodeAvgTps"), codexSpeedCell(agg.avg_tps)),
-    kpi("c-amber", t("zcodeEstCost"), codexCostCell()),
+    kpi("c-amber", t("colCost"), codexCostCell()),  // 中性"费用"键: Codex 费用未知, 不得标为估算
   ];
   kpis.innerHTML = cards(data.totals || {}).join("");     // 总量行 ← totals
   todayKpis.innerHTML = cards(data.today || {}).join(""); // 今日行 ← today

@@ -274,20 +274,18 @@ def prefix_fingerprint(snapshot: bytes, size: int) -> str:
     return sha256_prefix(snapshot, size)
 
 
-def detected_mode_in_new_bytes(snapshot: bytes, known: FileProgress) -> str:
-    """快速路径的模式判定: 信任已知模式, 只在追加字节中检出模式切换.
+def _has_valid_record(data: bytes, start: int = 0) -> bool:
+    """从 start 起逐行找第一个有效 token_usage_record (找到即停).
 
-    追加字节中出现有效 token_usage_record (payload 携带 response_id 与 usage)
-    → 返回 "token_usage_record" (调用方据此判定 token_count →
-    token_usage_record 切换并从头重建); 否则维持 known["event_mode"].
+    有效 = payload 携带非空 response_id 与 usage dict; 只消费完整行
+    (末尾半行不算), 与主解析同一 JSON 行解析口径.
     """
-    offset = known.get("offset", 0)
-    pos = offset
+    pos = start
     while True:
-        nl = snapshot.find(b"\n", pos)
+        nl = data.find(b"\n", pos)
         if nl == -1:
             break
-        raw = snapshot[pos:nl]
+        raw = data[pos:nl]
         pos = nl + 1
         try:
             rec = json.loads(raw.decode("utf-8", errors="replace"))
@@ -301,8 +299,31 @@ def detected_mode_in_new_bytes(snapshot: bytes, known: FileProgress) -> str:
         response_id = payload.get("response_id")
         if (isinstance(response_id, str) and response_id
                 and isinstance(payload.get("usage"), dict)):
-            return "token_usage_record"
+            return True
+    return False
+
+
+def detected_mode_in_new_bytes(snapshot: bytes, known: FileProgress) -> str:
+    """快速路径的模式判定: 信任已知模式, 只在追加字节中检出模式切换.
+
+    追加字节中出现有效 token_usage_record (payload 携带 response_id 与 usage)
+    → 返回 "token_usage_record" (调用方据此判定 token_count →
+    token_usage_record 切换并从头重建); 否则维持 known["event_mode"].
+    """
+    if _has_valid_record(snapshot, known.get("offset", 0)):
+        return "token_usage_record"
     return known.get("event_mode") or ""
+
+
+def _detect_file_mode(data: bytes) -> str:
+    """首扫/重建的文件级唯一模式判定 (需求 §二/§六/§八).
+
+    文件中存在任一有效 token_usage_record 行 → 整文件只用该模式;
+    否则 token_count 模式. 两种事件并存时不得同时计入.
+    """
+    if _has_valid_record(data):
+        return "token_usage_record"
+    return "token_count"
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +348,12 @@ def parse_session_file(
     每条有效 token_count 事件递增 (含因相邻五元组重复而跳过入库的事件),
     无效事件不递增; token_usage_record 行不占用序号 (event_seq 为 None).
     首个模型到达时回填本批次先前空模型行, 后续模型切换仅影响其后记录.
+
+    事件模式 (需求 §二/§六/§八, 文件级唯一): 从文件头解析 (progress 为
+    None/初始, 即首扫与重建) 时先预扫描判定唯一模式 (存在任一有效
+    token_usage_record → 整文件 record 模式, 否则 token_count 模式), 只按
+    该模式产出行; 快速路径续读信任持久化 event_mode. 非当前模式的用量
+    事件直接忽略 (不产行、不推进序号与指纹).
     """
     progress = progress or {}
     offset = int(progress.get("offset") or 0)
@@ -353,6 +380,11 @@ def parse_session_file(
     else:
         data = snapshot
         file_start = 0
+
+    # 文件级唯一模式: 首扫/重建 (offset==0, 从文件头解析) 先预扫描判定;
+    # 快速路径续读信任持久化 event_mode
+    if offset == 0:
+        mode = _detect_file_mode(data)
 
     def warn(rel_pos: int, message: str) -> None:
         warnings.append(f"{path.name}@{file_start + rel_pos}: {message}")
@@ -405,6 +437,8 @@ def parse_session_file(
             row_mode = "token_usage_record"
         else:
             return  # response_item/session_meta 等行型与用量无关
+        if mode and row_mode != mode:
+            return  # 文件级唯一模式: 另一模式的用量事件直接忽略 (不产行/不推进序号)
         ts = _parse_ts(rec.get("timestamp"))
         if ts is None:
             warn(rel_pos, "缺失或非法时间戳")
@@ -423,7 +457,7 @@ def parse_session_file(
         duration_ms, speed, speed_source = _speed_fields(rec, usage["output_tokens"])
         if row_mode == "token_count":
             if not mode:
-                mode = "token_count"  # 首轮/重建由文件头判定并持久化
+                mode = "token_count"  # 快速路径空模式兜底; 首扫/重建已由预扫描判定
             seq += 1  # 相邻五元组重复跳过入库, 但序号照常递增
             new_fp = _token_count_fp(usage)
             duplicated = fp is not None and fp == new_fp
