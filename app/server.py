@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__, db
 from . import bai_api
 from . import claudecode_api
+from . import codex_api
 from . import commandcode_api
 from . import dsh_api
 from . import zcode_api
@@ -675,6 +676,14 @@ def sync_usage(mode: str = "incremental") -> dict[str, Any]:
         with _cc_import_lock:
             _sync_claude_local()
 
+        # Codex 本地用量增量导入 (同 zcode/cc piggyback): 非阻塞拿 _codex_import_lock
+        # (锁顺序恒定 _sync_lock → 本锁), 已有导入在跑则跳过; 兜底吞异常,
+        # Codex 导入失败不阻塞远程来源同步结果
+        try:
+            _run_codex_import_once()
+        except Exception:  # noqa: BLE001
+            pass
+
         if partial or (mode != "incremental" and any_error):
             msg = "部分账号同步异常" if any_error else "完成, 但部分页面拉取失败"
             _set_phase("done", msg)
@@ -792,6 +801,102 @@ def claude_import_async() -> None:
             _sync_claude_local()
 
     threading.Thread(target=worker, daemon=True, name="gousage-claude-import").start()
+
+
+# ---------------------------------------------------------------------------
+# Codex 本地用量导入编排 (进度快照 → 采集 → 逐批提交; 独立于远程账号登录)
+# ---------------------------------------------------------------------------
+
+_codex_import_lock = threading.Lock()  # 防 codex 导入自身重入 (锁顺序恒定 _sync_lock → 本锁)
+_CODEX_IMPORT_DEBOUNCE = 60.0  # 读取端点触发导入的防抖窗口 (秒)
+_codex_last_import_trigger = 0.0
+
+
+def _utc_now_iso() -> str:
+    """当前 UTC 时刻 ISO 串 (导入状态时间戳; 与 db._now_iso 同格式)."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _sync_codex_local(force: bool = False) -> int:
+    """读进度快照 → 采集增量 → 逐批提交; 返回新增行数, 异常不外抛.
+
+    锁: 调用方负责拿 ``_codex_import_lock`` (本函数自身不碰任何锁, 也严禁
+    内部 acquire ``_sync_lock`` — threading.Lock 不可重入).
+    状态语义 (需求 §4 codex_import_state): 无变化的成功扫描也推进
+    last_import_at, 仅数据变化 (inserted>0) 加 revision; 采集/单批失败记
+    last_error 并保持旧数据 (坏批次已回滚); 只有"无告警的完整成功"才清空
+    last_error — 可跳过告警保留既有错误计数与文案, 不以成功写入部分数据
+    覆盖告警 (commit_codex_batch 成功批会把 last_error 清空, 此处统一按
+    本轮结果恢复).
+    """
+    try:
+        progress = db.get_codex_file_progress_all()
+        batches = codex_api.import_incremental(progress, force=force)
+    except Exception as exc:  # noqa: BLE001 采集编排失败: 记错误, 保持旧数据
+        try:
+            db.update_codex_import_state(last_import_at=_utc_now_iso(), last_error=str(exc))
+        except Exception:  # noqa: BLE001 状态写入失败不掩盖原始错误
+            pass
+        return 0
+    prev = db.get_codex_import_state()
+    prev_error = prev.get("last_error")
+    inserted = 0
+    problems: list[str] = []   # 采集/提交硬错误 (该批已回滚, db 层已记 last_error)
+    warnings_total = 0
+    for batch in batches:
+        warnings_total += len(batch.get("warnings") or [])
+        progress = batch.get("progress") or {}
+        if not progress.get("updated_at"):
+            # 游标缺 updated_at (夹具/旧采集器): 落库前补当前时刻, 保证可观测
+            batch = {**batch, "progress": {**progress, "updated_at": _utc_now_iso()}}
+        try:
+            inserted += db.commit_codex_batch(batch)
+        except Exception as exc:  # noqa: BLE001 单批失败不阻塞其余批次
+            problems.append(str(exc))
+    problems.extend(codex_api.last_scan_errors)
+    now = _utc_now_iso()
+    if problems:
+        last_error: Optional[str] = problems[0]
+    elif warnings_total:
+        last_error = prev_error     # 可跳过告警: 保留既有错误, 不用部分成功覆盖
+    else:
+        last_error = None           # 无告警的完整成功: 清空
+    fields: dict[str, Any] = {
+        "running": 0, "last_import_at": now, "last_error": last_error,
+        "revision": int(prev.get("revision") or 0) + (1 if inserted else 0),
+    }
+    if not problems:
+        fields["last_success_at"] = now
+    try:
+        db.update_codex_import_state(**fields)
+    except Exception:  # noqa: BLE001 状态收尾失败不影响导入结果
+        pass
+    return inserted
+
+
+def _run_codex_import_once(force: bool = False) -> None:
+    """单飞执行一次 Codex 本地导入: 非阻塞拿 _codex_import_lock, running 状态
+    全程置位; 拿不到锁说明已有导入在跑, 直接跳过 (不等待扫描). 不反向获取
+    远程 sync 锁 (锁顺序恒定 _sync_lock → 本锁)."""
+    if not _codex_import_lock.acquire(blocking=False):
+        return
+    try:
+        try:
+            db.update_codex_import_state(running=1)
+            _sync_codex_local(force=force)
+        finally:
+            db.update_codex_import_state(running=0)
+    finally:
+        _codex_import_lock.release()
+
+
+def codex_import_async(force: bool = False) -> None:
+    """启动独立后台线程执行一次 Codex 本地导入 (单飞).
+
+    与 zcode/claude_import_async 相反: 本函数自身起线程, main 启动区在
+    start_server 后直接调用一次即可, 不再外套 Thread."""
+    threading.Thread(target=_run_codex_import_once, args=(force,),
+                     daemon=True, name="gousage-codex-import").start()
 
 
 # ---------------------------------------------------------------------------
@@ -1058,24 +1163,107 @@ def _claudecode_summary_payload(range_param: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Codex 端点数据组装 (GET /api/codex/summary 与状态块; 独立于远程账号登录)
+# ---------------------------------------------------------------------------
+
+# summary/dashboard scope=all 合法范围白名单 (需求 §4); 非法值回落端点默认
+_RANGE_WHITELIST = ("today", "yesterday", "7d", "30d", "all")
+
+
+def _maybe_trigger_codex_import() -> None:
+    """读取端点按需增量: 距上次触发超过 60s 才后台导入 (请求不等待导入).
+
+    首次请求先返回空数据, 导入完成后前端按 revision 变化刷新 (切换 range 会
+    重拉自然补上). 仅 Codex/all 查询触发; 专属其他渠道不扫 ~/.codex.
+    """
+    global _codex_last_import_trigger
+    now = time.time()
+    if now - _codex_last_import_trigger <= _CODEX_IMPORT_DEBOUNCE:
+        return
+    _codex_last_import_trigger = now
+    codex_import_async()
+
+
+def _codex_state_snapshot() -> dict[str, Any]:
+    """/api/state.codex 与 dashboard scope=all 共用的 Codex 状态块 (T7 消费):
+    只读导入状态与镜像表, 不等待扫描。last_import_at 优先取镜像表最新
+    synced_at (有数据即可观测), 无数据时回落导入状态表的最近扫描时刻。"""
+    state = db.get_codex_import_state()
+    return {
+        "source_found": codex_api.sessions_dir().is_dir(),
+        "has_data": db.codex_last_import_at() is not None,
+        "running": bool(state.get("running")),
+        "revision": int(state.get("revision") or 0),
+        "last_import_at": db.codex_last_import_at() or state.get("last_import_at"),
+        "error": state.get("last_error"),
+    }
+
+
+def _codex_summary_payload(range_param: str) -> dict[str, Any]:
+    """GET /api/codex/summary 数据组装 (固定数据契约, 需求 §4 CodexSummary).
+
+    非法 range 回落 30d 默认, 不把非法 query 拼 SQL; DB 锁内一次读出聚合与
+    导入状态, 保证同批 snapshot 一致; 未登录仍可用。Codex 费用恒 NULL:
+    cost_available 恒 false, 范围内有数据时 cost_unavailable_channels=["codex"]、
+    cost_partial=true; request_count_exact 按范围内贡献记录的事件模式
+    (含 token_count 兼容模式记录即 false, 范围为空 false)。
+    """
+    if range_param not in _RANGE_WHITELIST:
+        range_param = "30d"
+    with db._DB_LOCK:  # 一致 snapshot: 聚合与状态同锁读出 (RLock 可重入)
+        win = db._win_codex(*db._report_range_sql(range_param, "started_at"))
+        state = db.get_codex_import_state()
+        data_at = db.codex_last_import_at()
+        has_data = data_at is not None   # 严格按镜像表判定, 不用扫描时刻代替
+        source_found = codex_api.sessions_dir().is_dir()
+        payload = {
+            "range": range_param,
+            "db_found": source_found or has_data,
+            "source_found": source_found,
+            "has_data": has_data,
+            "request_count_exact": win["request_count_exact"],
+            "cost_available": False,
+            "cost_partial": win["cost_partial"],
+            "cost_unavailable_channels": ["codex"] if win["requests"] > 0 else [],
+            "totals": db.codex_totals(range_param),
+            "today": db.codex_totals("today"),
+            "channels": db.codex_channel_stats(range_param),
+            "models": db.codex_model_stats(range_param),
+            "daily": db.codex_daily(7),
+            "last_import_at": data_at or state["last_import_at"],
+            "import_error": state["last_error"],
+            "importing": bool(state["running"]),
+            "revision": int(state["revision"] or 0),
+        }
+    payload["daily7"] = payload["daily"]  # 兼容别名 (zcode/claudecode summary 先例)
+    return payload
+
+
+# ---------------------------------------------------------------------------
 # Report 聚合端点数据组装 (GET /api/report/*)
 # ---------------------------------------------------------------------------
 
 def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
-    """GET /api/report/windows 数据组装 (R6): db 三表 + dsh 今日并入。"""
+    """GET /api/report/windows 数据组装 (R6): db 四表 + dsh 今日并入。
+
+    DSH 无历史表, 仅贡献 today 的 tokens (requests/cost 不虚报); 合并走
+    db._win_merge 保持窗口行 11 键形状 (NULL 不是 0 语义不被 DSH 并入破坏)。"""
     payload = db.report_windows(channel)
     # 新R3 N17: 仅在可能用到 dsh 数据时才触发扫描 (账号渠道请求不扫 ~/.dsh)
     dsh_found = dsh_api.get_dsh_usage().get("found") if channel in (None, "dsh") else False
     if channel in (None, "dsh") and dsh_found:
         dsh = dsh_api.get_dsh_usage()
         t = dsh.get("today") or {}
-        dsh_win = {"tokens": (t.get("input") or 0) + (t.get("output") or 0) + (t.get("reasoning") or 0),
-                   "cost": 0.0, "requests": 0}
-        payload["today"] = {
-            "tokens": payload["today"]["tokens"] + dsh_win["tokens"],
-            "cost": payload["today"]["cost"] + dsh_win["cost"],
-            "requests": payload["today"]["requests"] + dsh_win["requests"],
-        }
+        dsh_in = t.get("input") or 0
+        dsh_out = t.get("output") or 0
+        dsh_rea = t.get("reasoning") or 0
+        dsh_win = {"tokens": dsh_in + dsh_out + dsh_rea,
+                   "input_tokens": dsh_in, "output_tokens": dsh_out,
+                   "cache_read_tokens": t.get("cache") or 0, "cache_write_tokens": 0,
+                   "reasoning_tokens": dsh_rea, "requests": 0,
+                   "cost": 0.0, "cost_available": False, "cost_partial": False,
+                   "request_count_exact": False}
+        payload["today"] = db._win_merge(payload["today"], dsh_win)
         payload["compare"]["includes_dsh_today"] = bool(dsh_win["tokens"] > 0)
         if channel == "dsh":
             payload = {**payload, "yesterday": dict(dsh_win), "7d": dict(dsh_win),
@@ -1087,7 +1275,7 @@ def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
     # 新R2 N14: channel_count 语义 = 当前请求可见的渠道数
     if channel:                          # 单渠道请求: 可见渠道 = 该渠道自身 (dsh 需 found)
         payload["channel_count"] = 1 if (channel != "dsh" or dsh_found) else 0
-    else:                                # 全部渠道: 五渠道 + dsh(若 found)
+    else:                                # 全部渠道: 渠道 tab (含 codex 若有数据) + dsh(若 found)
         payload["channel_count"] = len(summary) + (1 if dsh_found else 0)
     payload["account_count"] = sum(x["accounts"] for x in summary
                                    if x["channel"] in ("opencode", "bai", "commandcode"))
@@ -1095,7 +1283,8 @@ def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
 
 
 def _report_channels_response(range_: str) -> dict[str, Any]:
-    """GET /api/report/channels 数据组装 (R6): db 五渠道行 + dsh 今日行 (仅 range=today)。"""
+    """GET /api/report/channels 数据组装 (R6): db 渠道行 (含 codex) + dsh 今日行
+    (仅 range=today); 渠道行固定字段与 db.report_channels 对齐。"""
     rows = db.report_channels(range_)
     summary = db.list_channel_summary()
     if range_ == "today":
@@ -1105,10 +1294,54 @@ def _report_channels_response(range_: str) -> dict[str, Any]:
             rows = rows + [{"channel": "dsh", "tokens": (t.get("input") or 0) + (t.get("output") or 0)
                             + (t.get("reasoning") or 0),
                             "input": t.get("input") or 0, "output": t.get("output") or 0,
-                            "cache_read": t.get("cache") or 0, "requests": 0, "cost": 0.0,
+                            "cache_read": t.get("cache") or 0, "cache_write": 0,
+                            "reasoning": t.get("reasoning") or 0, "requests": 0, "cost": 0.0,
+                            "cost_available": False, "cost_partial": False,
+                            "request_count_exact": False,
                             "data_since": None, "estimated": False}]
             summary = summary + [{"channel": "dsh", "accounts": 0}]
     return {"rows": rows, "summary": summary}
+
+
+def _totals_merge_dsh_today(totals: dict[str, Any], dsh_today: dict[str, Any]) -> dict[str, Any]:
+    """DSH 仅贡献 today (无历史表): tokens=input+output+reasoning, requests/cost
+    不虚报 (与 _report_windows_response 口径对齐)。"""
+    d_in = dsh_today.get("input") or 0
+    d_out = dsh_today.get("output") or 0
+    d_rea = dsh_today.get("reasoning") or 0
+    out = dict(totals)
+    out["total_tokens"] = (totals["total_tokens"] or 0) + d_in + d_out + d_rea
+    out["total_input_tokens"] = (totals["total_input_tokens"] or 0) + d_in
+    out["total_output_tokens"] = (totals["total_output_tokens"] or 0) + d_out
+    out["cache_hit_tokens"] = (totals["cache_hit_tokens"] or 0) + (dsh_today.get("cache") or 0)
+    return out
+
+
+def _dashboard_all_payload(range_param: str) -> dict[str, Any]:
+    """GET /api/dashboard?scope=all 数据组装 (显式全渠道分支, 需求 §5 公共报表).
+
+    totals=report_totals(range)、today=report_totals(today), 全渠道聚合含
+    Codex; DSH 仅 range=today 并入 (无历史小时/日数据, 不谎称)。不伪装成
+    active account: 无 account/quota 键, 前端据此走公共报表分支。"""
+    if range_param not in _RANGE_WHITELIST:
+        range_param = "today"
+    totals = db.report_totals(range_param)
+    today = db.report_totals("today")
+    if range_param == "today":
+        dsh = dsh_api.get_dsh_usage()
+        if dsh.get("found"):
+            t = dsh.get("today") or {}
+            totals = _totals_merge_dsh_today(totals, t)
+            today = _totals_merge_dsh_today(today, t)
+    return {
+        "scope": "all",
+        "range": range_param,
+        "totals": totals,
+        "today": today,
+        "exchange_rate": {"usd_cny": _fetch_usd_cny(), "currency": "CNY"},
+        "codex": _codex_state_snapshot(),
+        "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
 
 def _accounts_overview_payload() -> dict[str, Any]:
@@ -1191,6 +1424,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                 "sync": sync,
                 "progress": _sync_progress_snapshot(),
                 "datadir": db.data_dir(),
+                "codex": _codex_state_snapshot(),   # T7 登录遮罩分离消费
             },
         )
         return
@@ -1213,6 +1447,12 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         return
 
     if route == "/api/dashboard" and method == "GET":
+        # 显式全渠道分支 (scope=all): 聚合含 Codex, 独立于 active account;
+        # 按 Codex/all 规则触发后台增量导入 (防抖, 请求不等待扫描)
+        if (query.get("scope", [""])[0] or "") == "all":
+            _maybe_trigger_codex_import()
+            _json_response(handler, _dashboard_all_payload(query.get("range", ["today"])[0]))
+            return
         # 时间范围: today / 7d / 30d / all
         range_param = query.get("range", ["today"])[0]
         if range_param == "today":
@@ -1250,6 +1490,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         _json_response(
             handler,
             {
+                "scope": "account",   # 原六个账号聚合键保持原义, 供统计页主区/旧客户
                 "logged_in": bool(token),
                 "account": account,
                 "account_name": account.get("name", ""),
@@ -1261,6 +1502,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                 "progress": _sync_progress_snapshot(),
                 "range": range_param,
                 "exchange_rate": {"usd_cny": _fetch_usd_cny(), "currency": "CNY"},
+                "codex": _codex_state_snapshot(),
                 "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
             },
         )
@@ -1282,6 +1524,14 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         _maybe_trigger_claude_import()
         range_param = query.get("range", ["30d"])[0]
         _json_response(handler, _claudecode_summary_payload(range_param))
+        return
+
+    if route == "/api/codex/summary" and method == "GET":
+        # 进入端点先按需触发增量导入 (防抖 60s, 后台线程, 请求不等待导入);
+        # Codex 汇总独立于远程账号登录, 未登录仍可用
+        _maybe_trigger_codex_import()
+        range_param = query.get("range", ["30d"])[0]
+        _json_response(handler, _codex_summary_payload(range_param))
         return
 
     if route == "/api/dsh/usage" and method == "GET":
@@ -1450,6 +1700,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
 
     if route == "/api/report/windows" and method == "GET":
         channel = query.get("channel", [""])[0] or None
+        if channel in (None, "codex"):   # 全渠道/Codex 请求才触发 Codex 扫描 (防抖)
+            _maybe_trigger_codex_import()
         _json_response(handler, _report_windows_response(channel))
         return
 
@@ -1459,6 +1711,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         metric = query.get("metric", ["tokens"])[0]
         metric = metric if metric in ("tokens", "cost", "requests") else "tokens"
         channel = query.get("channel", [""])[0] or None
+        if channel in (None, "codex"):
+            _maybe_trigger_codex_import()
         _json_response(handler, db.report_daily(range_, channel, metric))
         return
 
@@ -1466,12 +1720,15 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         date_ = query.get("date", ["today"])[0]
         date_ = date_ if date_ in ("today", "yesterday") else "today"
         channel = query.get("channel", [""])[0] or None
+        if channel in (None, "codex"):
+            _maybe_trigger_codex_import()
         _json_response(handler, db.report_hourly(date_, channel))
         return
 
     if route == "/api/report/channels" and method == "GET":
         range_ = query.get("range", ["7d"])[0]
         range_ = range_ if range_ in ("today", "yesterday", "7d", "30d", "all") else "7d"
+        _maybe_trigger_codex_import()   # 全渠道明细必然含 codex
         _json_response(handler, _report_channels_response(range_))
         return
 
@@ -1479,6 +1736,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         range_ = query.get("range", ["today"])[0]
         range_ = range_ if range_ in ("today", "yesterday", "7d", "30d", "all") else "today"
         channel = query.get("channel", [""])[0] or "opencode"
+        if channel == "codex":
+            _maybe_trigger_codex_import()
         if channel == "dsh":   # R6: dsh 无历史表, 仅今日口径 (键对齐 db.totals, 供 renderOverview)
             dsh = dsh_api.get_dsh_usage()
             t = (dsh.get("today") or {}) if dsh.get("found") else {}
@@ -1497,6 +1756,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         date_ = query.get("date", ["today"])[0]
         date_ = date_ if date_ in ("today", "yesterday") else "today"
         channel = query.get("channel", [""])[0] or "opencode"
+        if channel == "codex":
+            _maybe_trigger_codex_import()
         _json_response(handler, db.channel_trend(date_, channel))   # dsh 由 db 层返回 [] (R6)
         return
 

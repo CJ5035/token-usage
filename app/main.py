@@ -471,6 +471,9 @@ def main() -> None:
     threading.Thread(target=server.zcode_import_async, daemon=True, name="gousage-zcode-import").start()
     # Claude Code 本地用量启动导入 (后台线程, 读 ~/.claude/projects 会话 JSONL 增量预热镜像表)
     threading.Thread(target=server.claude_import_async, daemon=True, name="gousage-claude-import").start()
+    # Codex 本地用量启动导入 (读 ~/.codex/sessions rollout 增量预热镜像表;
+    # 函数自身起后台线程, 直接调用一次, 不外套 Thread)
+    server.codex_import_async()
     # ZCode 额度缓存启动预热 (问题5): 首个 /api/zcode/quota 请求免 15s 同步首采
     threading.Thread(target=server.zcode_quota_warmup, daemon=True, name="gousage-zcode-quota-warm").start()
     # DSH 用量启动预热 (EVOLUTION-5): 触发一次后台预热扫描 (get_dsh_usage 冷启动

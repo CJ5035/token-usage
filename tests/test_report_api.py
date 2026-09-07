@@ -416,6 +416,27 @@ def test_range_sql_local_day_semantics(tmp_report_db):
     assert db.get_db().execute(sql, params).fetchone()[0] == 1
 
 
+def test_report_codex_delta(tmp_report_db, codex_row, local_iso):
+    """Codex 接入后: 渠道行/窗口/日序列/24 桶/单渠道聚合/趋势增量一致, 费用 NULL
+    不以 0 代替 (费用序列省略 codex 并标 unavailable_channels)."""
+    ids = _seed_channels()
+    db.insert_usage_records([_mkrec("r1", local_iso(), inp=10, outp=20)], ids["opencode"])
+    before = db.report_windows()["today"]["tokens"]
+    db.import_codex_usage([codex_row()])
+    channels = {r["channel"]: r for r in db.report_channels("today")}
+    assert channels["codex"]["tokens"] == 130
+    assert channels["codex"]["cost"] is None
+    assert db.report_windows()["today"]["tokens"] - before == 130
+    assert sum(db.report_daily("today", "codex")["series"]["codex"]) == 130
+    hourly = db.report_hourly("today", "codex")
+    assert len(hourly["buckets"]) == 24
+    assert sum(b["total_tokens"] for b in hourly["buckets"]) == 130
+    assert db.channel_totals("today", "codex")["total_tokens"] == 130
+    assert sum(r["total_tokens"] for r in db.channel_trend("today", "codex")) == 130
+    costs = db.report_daily("today", "codex", "cost")
+    assert costs["series"] == {} and costs["unavailable_channels"] == ["codex"]
+
+
 def test_local_mirror_predicate_uses_expression_index(tmp_report_db):
     """EVOLUTION-5 §2: zcode/cc 镜像表同款 UTC 表达式索引必须命中.
     用 _report_range_sql 生成与生产逐字一致的谓词 (防手写测试 SQL 与生产漂移),

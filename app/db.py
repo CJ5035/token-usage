@@ -2332,24 +2332,35 @@ def _report_channels_expr() -> str:
 
 
 def _report_metric_exprs(metric: str) -> dict[str, str]:
-    """各表聚合表达式 (R6): tokens/cost/requests; cost 统一 USD。"""
+    """各表聚合表达式 (R6): tokens/cost/requests; cost 统一 USD。
+    Codex 费用恒未知 → cost 无表达式 (费用序列省略 codex 并标 unavailable_channels)。"""
     if metric == "cost":
         return {"records": "SUM(r.cost_usd)", "zcode": "SUM(z.cost_raw)/1e8",
                 "claudecode": "SUM(c.cost_raw)/1e8"}
     if metric == "requests":
-        return {"records": "COUNT(*)", "zcode": "COUNT(*)", "claudecode": "COUNT(*)"}
+        return {"records": "COUNT(*)", "zcode": "COUNT(*)", "claudecode": "COUNT(*)",
+                "codex": "COUNT(*)"}
     return {"records": "SUM(r.input_tokens + r.output_tokens + r.reasoning_tokens)",
             "zcode": "SUM(z.input_tokens + z.output_tokens + z.reasoning_tokens)",
-            "claudecode": "SUM(c.input_tokens + c.output_tokens)"}
+            "claudecode": "SUM(c.input_tokens + c.output_tokens)",
+            "codex": "SUM(x.total_tokens)"}
+
+
+def _daily_unavailable_channels(metric: str, channel: Optional[str]) -> list[str]:
+    """费用序列的不可用渠道: Codex 费用恒未知, 请求费用序列时省略其 series。"""
+    return ["codex"] if metric == "cost" and channel in (None, "codex") else []
 
 
 def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str = "tokens") -> dict[str, Any]:
     """按自然日 × 渠道堆叠序列 (R6: usage_records + zcode_usage + claudecode_usage
-    三表 UNION); range=all 时粒度自适应 (>60 天按周 / >180 天按月)."""
+    + codex_usage 四表 UNION); range=all 时粒度自适应 (>60 天按周 / >180 天按月)。
+    Codex 费用未知: metric=cost 省略 codex series 并追加 unavailable_channels。"""
     exprs = _report_metric_exprs(metric)
+    unavailable = _daily_unavailable_channels(metric, channel)
     include_records = channel is None or channel in ("opencode", "bai", "commandcode")
     include_zcode = channel is None or channel == "zcode"
     include_cc = channel is None or channel == "claudecode"
+    include_codex = metric != "cost" and (channel is None or channel == "codex")
     segs: list[str] = []
     params: list[Any] = []
     if include_records:
@@ -2380,15 +2391,24 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
             f" {exprs['claudecode']} AS v FROM claudecode_usage c"
             f" WHERE {range_sql} GROUP BY b")
         params.extend(range_params)
+    if include_codex:
+        range_sql, range_params = _report_range_sql(range_, "x.started_at")
+        segs.append(
+            f"SELECT substr(datetime(x.started_at,'localtime'),1,10) AS b, 'codex' AS ch,"
+            f" {exprs['codex']} AS v FROM codex_usage x"
+            f" WHERE {range_sql} GROUP BY b")
+        params.extend(range_params)
     if not segs:
-        return {"granularity": "day", "labels": [], "series": {}, "metric": metric}
+        return {"granularity": "day", "labels": [], "series": {}, "metric": metric,
+                "unavailable_channels": unavailable}
     union = " UNION ALL ".join(segs)
-    # 粒度自适应: 三表最大跨度
+    # 粒度自适应: 四表最大跨度
     span = get_db().execute(
         "SELECT MAX(lo) lo, MAX(hi) hi FROM ("
         " SELECT MIN(substr(datetime(created_at,'localtime'),1,10)) lo, MAX(substr(datetime(created_at,'localtime'),1,10)) hi FROM usage_records"
         " UNION ALL SELECT MIN(substr(datetime(started_at,'localtime'),1,10)), MAX(substr(datetime(started_at,'localtime'),1,10)) FROM zcode_usage"
-        " UNION ALL SELECT MIN(substr(datetime(started_at,'localtime'),1,10)), MAX(substr(datetime(started_at,'localtime'),1,10)) FROM claudecode_usage)"
+        " UNION ALL SELECT MIN(substr(datetime(started_at,'localtime'),1,10)), MAX(substr(datetime(started_at,'localtime'),1,10)) FROM claudecode_usage"
+        " UNION ALL SELECT MIN(substr(datetime(started_at,'localtime'),1,10)), MAX(substr(datetime(started_at,'localtime'),1,10)) FROM codex_usage)"
     ).fetchone()
     granularity = "day"
     if range_ == "all" and span["lo"] and span["hi"]:
@@ -2410,49 +2430,149 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
         series.setdefault(r["ch"], {})[r["b2"]] = r["v"]
     return {"granularity": granularity, "labels": labels,
             "series": {ch: [s.get(b, 0) for b in labels] for ch, s in series.items()},
-            "metric": metric}
+            "metric": metric,
+            "unavailable_channels": unavailable}
+
+
+# 窗口行固定 11 键 (需求 §6): tokens/input/output/cache_read/cache_write/reasoning/
+# requests/cost/cost_available/cost_partial/request_count_exact; 各来源行先补齐
+# 本表新增字段再进入 _win_merge。_WIN_ZERO 为"该来源不参与"的占位行。
+_WIN_ZERO = {"tokens": 0, "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
+             "cache_write_tokens": 0, "reasoning_tokens": 0, "requests": 0,
+             "cost": 0.0, "cost_available": False, "cost_partial": False,
+             "request_count_exact": False}
 
 
 def _win_records(where: str, params: list[Any]) -> dict[str, Any]:
     row = get_db().execute(
         "SELECT SUM(r.input_tokens + r.output_tokens + r.reasoning_tokens) tokens,"
+        " SUM(r.input_tokens) input_tokens, SUM(r.output_tokens) output_tokens,"
+        " SUM(r.cache_read_tokens) cache_read_tokens,"
+        " SUM(r.cache_write_5m_tokens + r.cache_write_1h_tokens) cache_write_tokens,"
+        " SUM(r.reasoning_tokens) reasoning_tokens,"
         " SUM(r.cost_usd) cost, COUNT(*) requests"
         " FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id WHERE " + where,
         params,
     ).fetchone()
-    return {"tokens": row["tokens"] or 0, "cost": row["cost"] or 0.0, "requests": row["requests"] or 0}
+    requests = row["requests"] or 0
+    return {"tokens": row["tokens"] or 0,
+            "input_tokens": row["input_tokens"] or 0,
+            "output_tokens": row["output_tokens"] or 0,
+            "cache_read_tokens": row["cache_read_tokens"] or 0,
+            "cache_write_tokens": row["cache_write_tokens"] or 0,
+            "reasoning_tokens": row["reasoning_tokens"] or 0,
+            "requests": requests,
+            "cost": row["cost"] or 0.0,
+            "cost_available": requests > 0,   # 账号渠道费用已知 (BAI 为估算)
+            "cost_partial": False,
+            "request_count_exact": requests > 0}   # COUNT(*) 精确
 
 
 def _win_zcode(where: str, params: list[Any]) -> dict[str, Any]:
     row = get_db().execute(
         "SELECT SUM(z.input_tokens + z.output_tokens + z.reasoning_tokens) tokens,"
+        " SUM(z.input_tokens) input_tokens, SUM(z.output_tokens) output_tokens,"
+        " SUM(z.cache_read_tokens) cache_read_tokens,"
+        " SUM(z.cache_write_tokens) cache_write_tokens,"
+        " SUM(z.reasoning_tokens) reasoning_tokens,"
         " SUM(z.cost_raw)/1e8 cost, COUNT(*) requests FROM zcode_usage z WHERE " + where,
         params,
     ).fetchone()
-    return {"tokens": row["tokens"] or 0, "cost": row["cost"] or 0.0, "requests": row["requests"] or 0}
+    requests = row["requests"] or 0
+    return {"tokens": row["tokens"] or 0,
+            "input_tokens": row["input_tokens"] or 0,
+            "output_tokens": row["output_tokens"] or 0,
+            "cache_read_tokens": row["cache_read_tokens"] or 0,
+            "cache_write_tokens": row["cache_write_tokens"] or 0,
+            "reasoning_tokens": row["reasoning_tokens"] or 0,
+            "requests": requests,
+            "cost": row["cost"] or 0.0,
+            "cost_available": requests > 0,   # 估算费用但数值已知
+            "cost_partial": False,
+            "request_count_exact": requests > 0}
 
 
 def _win_cc(where: str, params: list[Any]) -> dict[str, Any]:
     row = get_db().execute(
         "SELECT SUM(c.input_tokens + c.output_tokens) tokens,"   # claudecode 无 reasoning 列 (R6)
+        " SUM(c.input_tokens) input_tokens, SUM(c.output_tokens) output_tokens,"
+        " SUM(c.cache_read_tokens) cache_read_tokens,"
+        " SUM(c.cache_write_tokens) cache_write_tokens,"
+        " 0 reasoning_tokens,"
         " SUM(c.cost_raw)/1e8 cost, COUNT(*) requests FROM claudecode_usage c WHERE " + where,
         params,
     ).fetchone()
-    return {"tokens": row["tokens"] or 0, "cost": row["cost"] or 0.0, "requests": row["requests"] or 0}
+    requests = row["requests"] or 0
+    return {"tokens": row["tokens"] or 0,
+            "input_tokens": row["input_tokens"] or 0,
+            "output_tokens": row["output_tokens"] or 0,
+            "cache_read_tokens": row["cache_read_tokens"] or 0,
+            "cache_write_tokens": row["cache_write_tokens"] or 0,
+            "reasoning_tokens": row["reasoning_tokens"] or 0,
+            "requests": requests,
+            "cost": row["cost"] or 0.0,
+            "cost_available": requests > 0,
+            "cost_partial": False,
+            "request_count_exact": requests > 0}
+
+
+def _win_codex(where: str, params: list[Any]) -> dict[str, Any]:
+    """codex_usage 窗口行 (需求 §6): 计数用有效用量 count, total 用 SUM(total_tokens)。
+
+    NULL 不是 0: 有数据费用未知 → cost=None (不以 0 代替) 并标 cost_partial;
+    空窗口 cost=0.0。request_count_exact 按事件模式: 含 token_count 兼容模式
+    记录即 false, 范围为空 false。表无别名, 谓词用 _report_range_sql(range_, 'started_at')。
+    """
+    row = get_db().execute(
+        "SELECT SUM(total_tokens) tokens, SUM(input_tokens) input_tokens,"
+        " SUM(output_tokens) output_tokens, SUM(cache_read_tokens) cache_read_tokens,"
+        " SUM(cache_write_tokens) cache_write_tokens, SUM(reasoning_tokens) reasoning_tokens,"
+        " COUNT(*) requests,"
+        " CASE WHEN COUNT(*) > 0 AND MIN(request_count_exact) = 1 THEN 1 ELSE 0 END exact"
+        " FROM codex_usage WHERE " + where,
+        params,
+    ).fetchone()
+    requests = row["requests"] or 0
+    return {"tokens": row["tokens"] or 0,
+            "input_tokens": row["input_tokens"] or 0,
+            "output_tokens": row["output_tokens"] or 0,
+            "cache_read_tokens": row["cache_read_tokens"] or 0,
+            "cache_write_tokens": row["cache_write_tokens"] or 0,
+            "reasoning_tokens": row["reasoning_tokens"] or 0,
+            "requests": requests,
+            "cost": None if requests else 0.0,
+            "cost_available": False,          # Codex 费用恒 NULL
+            "cost_partial": requests > 0,     # 有用量但费用未知 → 不完整
+            "request_count_exact": bool(row["exact"])}
 
 
 def _win_merge(*rows: dict[str, Any]) -> dict[str, Any]:
-    out = {"tokens": 0, "cost": 0.0, "requests": 0}
-    for r in rows:
-        out["tokens"] += r["tokens"]
-        out["cost"] += r["cost"]
-        out["requests"] += r["requests"]
+    """多来源窗口行合并 (简报固定形态): 费用只合计 requests>0 的已知小计;
+    空源不纳入 known; 有数据但费用未知 (如纯 Codex) → cost=NULL, 混合来源
+    保留其他来源已知小计并标 cost_partial, 不删除已估算费用。"""
+    known = [r["cost"] for r in rows if r["requests"] > 0 and r["cost"] is not None]
+    has_usage = any(r["requests"] > 0 for r in rows)
+    out = {
+        "tokens": sum(r["tokens"] for r in rows),
+        "input_tokens": sum(r["input_tokens"] for r in rows),
+        "output_tokens": sum(r["output_tokens"] for r in rows),
+        "cache_read_tokens": sum(r["cache_read_tokens"] for r in rows),
+        "cache_write_tokens": sum(r["cache_write_tokens"] for r in rows),
+        "reasoning_tokens": sum(r["reasoning_tokens"] for r in rows),
+        "requests": sum(r["requests"] for r in rows),
+        "cost": sum(known) if known else (None if has_usage else 0.0),
+        "cost_available": any(r.get("cost_available", False) for r in rows),
+        "cost_partial": any(r.get("cost_partial", False) for r in rows),
+        "request_count_exact": has_usage and all(
+            r.get("request_count_exact", False) for r in rows if r["requests"] > 0),
+    }
     return out
 
 
 def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
-    """时间窗口汇总条 (R6 三表求和): today/yesterday/7d/30d + 同时段环比 (样本保护)
-    + 数据深度 + 同步状态。dsh 今日由 server 层并入 (T6), db 层不碰 dsh_api。
+    """时间窗口汇总条 (R6 四表求和: today/yesterday/7d/30d + 同时段环比 (样本保护)
+    + 数据深度 + 同步状态。dsh 今日由 server 层并入 (T6), db 层不碰 dsh_api;
+    codex 经 _win_codex 参与四表合并 (费用未知 → 纯 Codex 窗口 cost=NULL)。
 
     同时段口径 (spec v4/v5): 今日截至当前 vs 昨日同时刻; 7 天同时段均值 = 近 7 个
     完整自然日(不含今天)各日同时段之和/7; <03:00 由测试环境窗口保证, 或对比窗口
@@ -2483,10 +2603,12 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
         rw, rp = records_where(range_, same_time)
         zw, zp = local_where(range_, "z.started_at", same_time)
         cw, cp = local_where(range_, "c.started_at", same_time)
+        xw, xp = local_where(range_, "started_at", same_time)
         return _win_merge(
             _win_records(rw, rp),
-            _win_zcode(zw, zp) if not channel or channel == "zcode" else {"tokens": 0, "cost": 0.0, "requests": 0},
-            _win_cc(cw, cp) if not channel or channel == "claudecode" else {"tokens": 0, "cost": 0.0, "requests": 0},
+            _win_zcode(zw, zp) if not channel or channel == "zcode" else dict(_WIN_ZERO),
+            _win_cc(cw, cp) if not channel or channel == "claudecode" else dict(_WIN_ZERO),
+            _win_codex(xw, xp) if not channel or channel == "codex" else dict(_WIN_ZERO),
         )
 
     windows = {
@@ -2507,8 +2629,9 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
                 [start, end])
     same_7 = _win_merge(
         (lambda w, p: _win_records(w + ch_filter, p + list(ch_params)))(*same7_where("r.created_at")),
-        _win_zcode(*same7_where("z.started_at")) if not channel or channel == "zcode" else {"tokens": 0, "cost": 0.0, "requests": 0},
-        _win_cc(*same7_where("c.started_at")) if not channel or channel == "claudecode" else {"tokens": 0, "cost": 0.0, "requests": 0},
+        _win_zcode(*same7_where("z.started_at")) if not channel or channel == "zcode" else dict(_WIN_ZERO),
+        _win_cc(*same7_where("c.started_at")) if not channel or channel == "claudecode" else dict(_WIN_ZERO),
+        _win_codex(*same7_where("started_at")) if not channel or channel == "codex" else dict(_WIN_ZERO),
     )
     early = _dt.datetime.now().hour < 1
     insufficient = early or same_y["requests"] < 5
@@ -2529,7 +2652,9 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
                   "last_sync_at": r["last_sync"], "ok": (r["fails"] or 0) == 0}
         for r in rows
     }
-    for tbl, ch, ts in (("zcode_usage z", "zcode", "z.started_at"), ("claudecode_usage c", "claudecode", "c.started_at")):   # 新R8 N29: FROM 带别名, 否则 z.started_at 列不存在
+    for tbl, ch, ts in (("zcode_usage z", "zcode", "z.started_at"),
+                        ("claudecode_usage c", "claudecode", "c.started_at"),
+                        ("codex_usage", "codex", "started_at")):   # 新R8 N29: FROM 带别名, 否则 z.started_at 列不存在
         if channel and channel != ch:
             continue
         r = get_db().execute(
@@ -2547,15 +2672,23 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
 
 
 def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
-    """渠道明细表行 (R6 五渠道; dsh 今日行由 server 层并入 T6)。estimated=估算渠道
-    {bai, zcode, claudecode}。"""
+    """渠道明细表行 (R6 五渠道 + codex; dsh 今日行由 server 层并入 T6)。
+
+    渠道行固定字段: channel/tokens/input/output/cache_read/cache_write/reasoning/
+    requests/cost/cost_available/cost_partial/request_count_exact/data_since/estimated。
+    NULL 不是 0: Codex 行 cost=null、cost_available=false、cost_partial=true、
+    estimated=false; 当前范围无数据不出行 (历史 tab 仍由 list_channel_summary 保留)。
+    """
     exprs_t = _report_metric_exprs("tokens")
     exprs_c = _report_metric_exprs("cost")
     range_sql, range_params = _report_range_sql(range_, "r.created_at")
     rows = get_db().execute(
         f"SELECT {_report_channels_expr()} AS ch,"
         f" {exprs_t['records']} tokens, SUM(r.input_tokens) input, SUM(r.output_tokens) output,"
-        f" SUM(r.cache_read_tokens) cache_read, {_report_metric_exprs('requests')['records']} requests,"
+        f" SUM(r.cache_read_tokens) cache_read,"
+        f" SUM(r.cache_write_5m_tokens + r.cache_write_1h_tokens) cache_write,"
+        f" SUM(r.reasoning_tokens) reasoning,"
+        f" {_report_metric_exprs('requests')['records']} requests,"
         f" {exprs_c['records']} cost"
         f" FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
         f" WHERE {range_sql} GROUP BY ch",
@@ -2569,35 +2702,67 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
         r = get_db().execute(
             f"SELECT {exprs_t[ch]} tokens, SUM({alias}.input_tokens) input,"
             f" SUM({alias}.output_tokens) output, SUM({alias}.cache_read_tokens) cache_read,"
+            f" SUM({alias}.cache_write_tokens) cache_write,"
+            f" {'0' if ch == 'claudecode' else f'SUM({alias}.reasoning_tokens)'} reasoning,"
             f" COUNT(*) requests, {exprs_c[ch]} cost"
             f" FROM {table} {alias} WHERE {range_sql}",
             range_params,
         ).fetchone()
         if r and ((r["tokens"] or 0) or (r["requests"] or 0)):
             agg[ch] = dict(r)
+    # Codex 行 (费用未知 → NULL; request_count_exact 按事件模式聚合)
+    range_sql, range_params = _report_range_sql(range_, "x.started_at")
+    r = get_db().execute(
+        f"SELECT {exprs_t['codex']} tokens, SUM(x.input_tokens) input,"
+        f" SUM(x.output_tokens) output, SUM(x.cache_read_tokens) cache_read,"
+        f" SUM(x.cache_write_tokens) cache_write, SUM(x.reasoning_tokens) reasoning,"
+        f" COUNT(*) requests, NULL AS cost,"
+        f" CASE WHEN COUNT(*) > 0 AND MIN(x.request_count_exact) = 1"
+        f" THEN 1 ELSE 0 END request_count_exact"
+        f" FROM codex_usage x WHERE {range_sql}",
+        range_params,
+    ).fetchone()
+    if r and ((r["tokens"] or 0) or (r["requests"] or 0)):
+        agg["codex"] = dict(r)
     since = {r["ch"]: r["oldest"] for r in get_db().execute(
         "SELECT a.source ch, MIN(substr(s.oldest_record_at,1,10)) oldest"
         " FROM accounts a LEFT JOIN usage_sync_state s ON s.account_id = a.id"
         " WHERE s.oldest_record_at IS NOT NULL GROUP BY ch"
     ).fetchall()}
-    for ch, ts, table in (("zcode", "z.started_at", "zcode_usage z"), ("claudecode", "c.started_at", "claudecode_usage c")):   # 新R8 N29b: 同 N29, FROM 带别名
+    for ch, ts, table in (("zcode", "z.started_at", "zcode_usage z"),
+                          ("claudecode", "c.started_at", "claudecode_usage c"),
+                          ("codex", "started_at", "codex_usage")):   # 新R8 N29b: 同 N29, FROM 带别名
         r = get_db().execute(f"SELECT MIN(substr({ts},1,10)) oldest FROM {table}").fetchone()
         if r["oldest"]:
             since[ch] = r["oldest"]
     order = [c for c in _CHANNEL_ORDER if c != "dsh" and c in agg]
     order += sorted((c for c in agg if c not in _CHANNEL_ORDER))
-    return [
-        {"channel": ch, "tokens": agg[ch]["tokens"] or 0, "input": agg[ch]["input"] or 0,
-         "output": agg[ch]["output"] or 0, "cache_read": agg[ch]["cache_read"] or 0,
-         "requests": agg[ch]["requests"] or 0, "cost": agg[ch]["cost"] or 0.0,
-         "data_since": since.get(ch), "estimated": ch in _LOCAL_EST_CHANNELS}
-        for ch in order
-    ]
+
+    def _channel_row(ch: str, a: dict[str, Any]) -> dict[str, Any]:
+        requests = int(a["requests"] or 0)
+        if ch == "codex":
+            cost = None                                  # NULL 不是 0
+            cost_available, cost_partial = False, True
+            exact = bool(a.get("request_count_exact"))
+        else:
+            cost = a["cost"] or 0.0
+            cost_available, cost_partial = requests > 0, False
+            exact = requests > 0                         # COUNT(*) 精确
+        return {"channel": ch, "tokens": a["tokens"] or 0, "input": a["input"] or 0,
+                "output": a["output"] or 0, "cache_read": a["cache_read"] or 0,
+                "cache_write": a["cache_write"] or 0, "reasoning": a["reasoning"] or 0,
+                "requests": requests, "cost": cost,
+                "cost_available": cost_available, "cost_partial": cost_partial,
+                "request_count_exact": exact,
+                "data_since": since.get(ch), "estimated": ch in _LOCAL_EST_CHANNELS}
+
+    return [_channel_row(ch, agg[ch]) for ch in order]
 
 
 def list_channel_summary() -> list[dict[str, Any]]:
     """渠道 tab 列表 (R6 五渠道; dsh 由 server 按 dsh_api found 追加): 账号渠道
-    accounts=账号行数, 本地渠道恒 1 (单数据源); 其余渠道按最早账号追加。"""
+    accounts=账号行数, 本地渠道恒 1 (单数据源); 其余渠道按最早账号追加。
+    Codex 数据存在时按 tab 顺序追加 (accounts=0, 无账号概念); 无数据不显示。"""
     rows = get_db().execute(
         "SELECT source ch, COUNT(*) accounts, MIN(created_at) first_at"
         " FROM accounts GROUP BY source"
@@ -2606,15 +2771,33 @@ def list_channel_summary() -> list[dict[str, Any]]:
     fixed = [c for c in _CHANNEL_ORDER if c != "dsh" and (c in m or c in ("zcode", "claudecode"))]
     extra = sorted((c for c in m if c not in _CHANNEL_ORDER), key=lambda c: m[c]["_at"] or "")
     # 新R8 N31: m 值为 {accounts,_at} dict, 必须取 ["accounts"]; 原写法 m.get(c,1) 返回整个 dict
-    return [{"channel": c, "accounts": m[c]["accounts"] if c in m else 1} for c in fixed + extra]
+    result = [{"channel": c, "accounts": m[c]["accounts"] if c in m else 1} for c in fixed + extra]
+    if get_db().execute("SELECT 1 FROM codex_usage LIMIT 1").fetchone():
+        result.append({"channel": "codex", "accounts": 0})
+    return result
+
+
+# hourly buckets 固定字段 (需求 §6; hour 键单列, 缺失小时补 0)
+_HOURLY_BUCKET_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens",
+                       "cache_write_tokens", "reasoning_tokens", "total_tokens", "requests")
 
 
 def report_hourly(date_: str = "today", channel: Optional[str] = None) -> dict[str, Any]:
-    """24h × 渠道堆叠 (R6 三表 UNION); date_: today|yesterday; dsh 无历史不参与。"""
+    """24h × 渠道堆叠 (R6 三表 UNION + codex); date_: today|yesterday (本地自然日);
+    dsh 无历史不参与。
+
+    旧形状 labels/series 保留 (tokens 口径 in+out+reason, 前端堆叠图); 新形状
+    (需求 §6): date=本地自然日、channel、固定 24 桶 buckets, 每桶 hour/input_tokens/
+    output_tokens/cache_read_tokens/cache_write_tokens/reasoning_tokens/total_tokens/
+    requests, 缺失小时补 0; codex 的 total 用 SUM(total_tokens), 其余来源
+    in+out+reason 同旧口径。
+    """
     today = datetime.now().astimezone().date()
-    start = _local_day_utc_start(today - timedelta(days=1)) if date_ == "yesterday" else _local_day_utc_start(today)
-    end = _local_day_utc_start(today) if date_ == "yesterday" else _local_day_utc_start(today + timedelta(days=1))
+    day = today - timedelta(days=1) if date_ == "yesterday" else today
+    start = _local_day_utc_start(day)
+    end = _local_day_utc_start(day + timedelta(days=1))
     day_pred = "datetime({ts}) >= datetime(?) AND datetime({ts}) < datetime(?)"
+    buckets = [dict(hour=h, **dict.fromkeys(_HOURLY_BUCKET_KEYS, 0)) for h in range(24)]
     segs: list[str] = []
     params: list[Any] = []
     if channel is None or channel in ("opencode", "bai", "commandcode"):
@@ -2642,15 +2825,78 @@ def report_hourly(date_: str = "today", channel: Optional[str] = None) -> dict[s
             f" SUM(c.input_tokens + c.output_tokens) v FROM claudecode_usage c"
             f" WHERE {day_pred.format(ts='c.started_at')} GROUP BY h")
         params.extend([start, end])
+    if channel is None or channel == "codex":
+        segs.append(
+            f"SELECT CAST(strftime('%H', datetime(x.started_at,'localtime')) AS INTEGER) h, 'codex' ch,"
+            f" SUM(x.total_tokens) v FROM codex_usage x"
+            f" WHERE {day_pred.format(ts='x.started_at')} GROUP BY h")
+        params.extend([start, end])
     if not segs:
-        return {"labels": list(range(24)), "series": {}}
+        return {"labels": list(range(24)), "series": {}, "date": day.isoformat(),
+                "channel": channel or "all", "buckets": buckets}
     rows = get_db().execute(
         f"SELECT h, ch, SUM(v) v FROM ({' UNION ALL '.join(segs)}) GROUP BY h, ch", params
     ).fetchall()
     series: dict[str, list[int]] = {}
     for r in rows:
         series.setdefault(r["ch"], [0] * 24)[r["h"]] = r["v"] or 0
-    return {"labels": list(range(24)), "series": series}
+    # buckets: 8 字段聚合 (旧 series 查询不含缓存写/请求数等列, 单独 UNION 一轮)
+    b_segs: list[str] = []
+    b_params: list[Any] = []
+    if channel is None or channel in ("opencode", "bai", "commandcode"):
+        ch_where = f" AND {_report_channels_expr()} = ?" if channel else ""
+        b_segs.append(
+            f"SELECT CAST(strftime('%H', datetime(r.created_at,'localtime')) AS INTEGER) h,"
+            f" SUM(r.input_tokens) input_tokens, SUM(r.output_tokens) output_tokens,"
+            f" SUM(r.cache_read_tokens) cache_read_tokens,"
+            f" SUM(r.cache_write_5m_tokens + r.cache_write_1h_tokens) cache_write_tokens,"
+            f" SUM(r.reasoning_tokens) reasoning_tokens,"
+            f" SUM(r.input_tokens + r.output_tokens + r.reasoning_tokens) total_tokens,"
+            f" COUNT(*) requests"
+            f" FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"
+            f" WHERE {day_pred.format(ts='r.created_at')}{ch_where} GROUP BY h")
+        b_params.extend([start, end] + ([channel] if channel else []))
+    if channel is None or channel == "zcode":
+        b_segs.append(
+            f"SELECT CAST(strftime('%H', datetime(z.started_at,'localtime')) AS INTEGER) h,"
+            f" SUM(z.input_tokens) input_tokens, SUM(z.output_tokens) output_tokens,"
+            f" SUM(z.cache_read_tokens) cache_read_tokens,"
+            f" SUM(z.cache_write_tokens) cache_write_tokens,"
+            f" SUM(z.reasoning_tokens) reasoning_tokens,"
+            f" SUM(z.input_tokens + z.output_tokens + z.reasoning_tokens) total_tokens,"
+            f" COUNT(*) requests FROM zcode_usage z"
+            f" WHERE {day_pred.format(ts='z.started_at')} GROUP BY h")
+        b_params.extend([start, end])
+    if channel is None or channel == "claudecode":
+        b_segs.append(
+            f"SELECT CAST(strftime('%H', datetime(c.started_at,'localtime')) AS INTEGER) h,"
+            f" SUM(c.input_tokens) input_tokens, SUM(c.output_tokens) output_tokens,"
+            f" SUM(c.cache_read_tokens) cache_read_tokens,"
+            f" SUM(c.cache_write_tokens) cache_write_tokens,"
+            f" 0 reasoning_tokens,"
+            f" SUM(c.input_tokens + c.output_tokens) total_tokens,"
+            f" COUNT(*) requests FROM claudecode_usage c"
+            f" WHERE {day_pred.format(ts='c.started_at')} GROUP BY h")
+        b_params.extend([start, end])
+    if channel is None or channel == "codex":
+        b_segs.append(
+            f"SELECT CAST(strftime('%H', datetime(x.started_at,'localtime')) AS INTEGER) h,"
+            f" SUM(x.input_tokens) input_tokens, SUM(x.output_tokens) output_tokens,"
+            f" SUM(x.cache_read_tokens) cache_read_tokens,"
+            f" SUM(x.cache_write_tokens) cache_write_tokens,"
+            f" SUM(x.reasoning_tokens) reasoning_tokens,"
+            f" SUM(x.total_tokens) total_tokens,"
+            f" COUNT(*) requests FROM codex_usage x"
+            f" WHERE {day_pred.format(ts='x.started_at')} GROUP BY h")
+        b_params.extend([start, end])
+    for r in get_db().execute(
+            f"SELECT h, {', '.join(_HOURLY_BUCKET_KEYS)} FROM ({' UNION ALL '.join(b_segs)})",
+            b_params):
+        bucket = buckets[r["h"]]
+        for key in _HOURLY_BUCKET_KEYS:
+            bucket[key] += r[key] or 0
+    return {"labels": list(range(24)), "series": series, "date": day.isoformat(),
+            "channel": channel or "all", "buckets": buckets}
 
 
 def _totals_from_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -2681,8 +2927,13 @@ def _totals_from_row(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def channel_totals(range_: str, channel: str) -> dict[str, Any]:
-    """单渠道聚合 totals (键与 db.totals 对齐, 供 renderOverview 复用; R6 三表分派;
-    dsh 由 server 层组装, 本函数不处理)。"""
+    """单渠道聚合 totals (键与 db.totals 对齐, 供 renderOverview 复用; R6 三表分派
+    + codex; dsh 由 server 层组装, 本函数不处理)。
+
+    Codex 返回 T2 完整聚合字典 (含 total_tokens), 不交给 _totals_from_row 把
+    NULL 费用转零。"""
+    if channel == "codex":
+        return codex_totals(range_)
     if channel == "zcode":
         range_sql, range_params = _report_range_sql(range_, "z.started_at")
         row = get_db().execute(
@@ -2734,29 +2985,80 @@ def channel_totals(range_: str, channel: str) -> dict[str, Any]:
 
 
 def channel_trend(date_: str = "today", channel: str = "opencode") -> list[dict[str, Any]]:
-    """单渠道 24h input/output 双序列 (供 chartToday 复用; R6 三表分派; dsh 返回空)。"""
+    """单渠道 24h 趋势 (供 chartToday 复用; R6 三表分派 + codex; dsh 返回空)。
+
+    每行固定 hour/total_input_tokens/total_output_tokens/total_reasoning_tokens/
+    total_tokens/cache_read_tokens/cache_write_tokens (需求 §6); codex 含缓存的
+    input 不再加缓存 (total 用 SUM(total_tokens)), 其余来源 total=in+out+reason;
+    旧 input/output 键保留兼容。
+    """
     if channel == "dsh":
         return []                                               # R6: dsh 无历史
-    ts = "z.started_at" if channel == "zcode" else ("c.started_at" if channel == "claudecode" else "r.created_at")
+    src = channel if channel in ("zcode", "claudecode", "codex") else "records"
+    al = {"zcode": "z", "claudecode": "c", "codex": "x"}.get(src, "r")
+    ts = "r.created_at" if src == "records" else f"{al}.started_at"
     table = {"zcode": "zcode_usage z", "claudecode": "claudecode_usage c",
-             }.get(channel, "usage_records r LEFT JOIN accounts a ON a.id = r.account_id")
-    tok_in = {"zcode": "SUM(z.input_tokens)", "claudecode": "SUM(c.input_tokens)",
-              }.get(channel, "SUM(r.input_tokens)")
-    tok_out = {"zcode": "SUM(z.output_tokens)", "claudecode": "SUM(c.output_tokens)",
-               }.get(channel, "SUM(r.output_tokens)")
-    ch_filter = "" if channel in ("zcode", "claudecode") else \
+             "codex": "codex_usage x"}.get(
+        src, "usage_records r LEFT JOIN accounts a ON a.id = r.account_id")
+    tok_in = f"SUM({al}.input_tokens)"
+    tok_out = f"SUM({al}.output_tokens)"
+    tok_rea = "0" if src == "claudecode" else f"SUM({al}.reasoning_tokens)"
+    tok_total = (f"SUM({al}.total_tokens)" if src == "codex"
+                 else f"{tok_in} + {tok_out} + {tok_rea}")
+    cache_write = ("SUM(r.cache_write_5m_tokens + r.cache_write_1h_tokens)"
+                   if src == "records" else f"SUM({al}.cache_write_tokens)")
+    ch_filter = "" if src in ("zcode", "claudecode", "codex") else \
         f" AND {_report_channels_expr()} = ?"
-    params: list[Any] = [] if channel in ("zcode", "claudecode") else [channel]
+    params: list[Any] = [] if src in ("zcode", "claudecode", "codex") else [channel]
     day_eq = "date('now','localtime')" if date_ != "yesterday" else "date('now','localtime','-1 day')"
     rows = get_db().execute(
         f"SELECT CAST(strftime('%H', datetime({ts},'localtime')) AS INTEGER) h,"
-        f" {tok_in} i, {tok_out} o FROM {table}"
+        f" {tok_in} i, {tok_out} o, {tok_rea} rea, {tok_total} tok,"
+        f" SUM({al}.cache_read_tokens) cr, {cache_write} cw FROM {table}"
         f" WHERE substr(datetime({ts},'localtime'),1,10) = {day_eq}{ch_filter} GROUP BY h",
         params,
     ).fetchall()
     m = {r["h"]: r for r in rows}
-    return [{"hour": h, "input": (m[h]["i"] or 0) if h in m else 0,
-             "output": (m[h]["o"] or 0) if h in m else 0} for h in range(24)]
+    return [{"hour": h,
+             "input": (m[h]["i"] or 0) if h in m else 0,
+             "output": (m[h]["o"] or 0) if h in m else 0,
+             "total_input_tokens": (m[h]["i"] or 0) if h in m else 0,
+             "total_output_tokens": (m[h]["o"] or 0) if h in m else 0,
+             "total_reasoning_tokens": (m[h]["rea"] or 0) if h in m else 0,
+             "total_tokens": (m[h]["tok"] or 0) if h in m else 0,
+             "cache_read_tokens": (m[h]["cr"] or 0) if h in m else 0,
+             "cache_write_tokens": (m[h]["cw"] or 0) if h in m else 0,
+             } for h in range(24)]
+
+
+def report_totals(range_: str) -> dict[str, Any]:
+    """全渠道聚合 totals (复用 report_channels 同范围/同源聚合): request_count/
+    total_tokens/total_input_tokens/total_output_tokens/cache_hit_tokens/
+    total_cost_usd + 费用完整性 (cost_available/cost_partial/
+    cost_unavailable_channels) + request_count_exact。
+
+    NULL 不是 0: 仅 Codex 有数据时 total_cost_usd=NULL 并标 cost_partial,
+    混合来源保留其余来源已知小计。DSH 无历史表, 由 server 层仅对 today 并入
+    (与 _report_windows_response 对齐), 本函数不碰 dsh_api。
+    """
+    codex = _win_codex(*_report_range_sql(range_, "started_at"))
+    merged = _win_merge(
+        _win_records(*_report_range_sql(range_, "r.created_at")),
+        _win_zcode(*_report_range_sql(range_, "z.started_at")),
+        _win_cc(*_report_range_sql(range_, "c.started_at")),
+        codex,
+    )
+    cost = merged["cost"]
+    return {"request_count": merged["requests"],
+            "total_tokens": merged["tokens"],
+            "total_input_tokens": merged["input_tokens"],
+            "total_output_tokens": merged["output_tokens"],
+            "cache_hit_tokens": merged["cache_read_tokens"],
+            "total_cost_usd": round(cost, 6) if cost is not None else None,
+            "cost_available": merged["cost_available"],
+            "cost_partial": merged["cost_partial"],
+            "cost_unavailable_channels": ["codex"] if codex["requests"] > 0 else [],
+            "request_count_exact": merged["request_count_exact"]}
 
 
 # ---------------------------------------------------------------------------
