@@ -476,6 +476,26 @@ html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
   .kpi-row.kpi5 { grid-template-columns: repeat(3, 1fr); }
 }
 
+/* ---------- Codex 本地用量 (统计页) ---------- */
+/* section 本体不加 card (避免外层 card 再嵌 KPI cards 双层卡壳): KPI 卡直接铺在
+   页面背景上, 与 stats-total-cards 同风格; 颜色/边框全部走主题 token */
+.codex-stats { margin-bottom: 12px; }
+/* KPI 两行各 6 卡: 固定 minmax tracks, 极窄窗口 3 列换行 */
+.codex-stats .kpi-row { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.codex-stats .kpi-row + .kpi-row { margin-top: 0; }
+/* 数据表外层横向滚动, 不挤压窗口; 双表间距 */
+.codex-table-scroll { overflow-x: auto; margin-bottom: 4px; }
+.codex-table-scroll .tbl + .tbl { margin-top: 12px; }
+/* 渠道/模型为外部数据字符串, 超长单元格省略防破版 (同 zcode-stats) */
+.codex-stats .tbl td { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.codex-stats .chart-box { min-height: 220px; }
+#codex-missing { margin: 8px 0 12px; padding: 12px 14px; font-size: 12px; color: var(--text2); background: var(--muted); border-radius: 10px; }
+/* 导入失败状态条 (role=status): 独立显示, 不清旧数据 */
+#codex-error { margin: 8px 0 10px; padding: 10px 14px; font-size: 12px; color: var(--red); background: var(--danger-soft); border-radius: 10px; }
+@media (max-width: 1200px) {
+  .codex-stats .kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
 /* ---- 首页: 时间窗口汇总条 + 渠道摘要条 (spec §3.1) ---- */
 .windows-bar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
 .wb-cell { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: pointer; }

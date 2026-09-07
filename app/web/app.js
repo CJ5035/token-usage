@@ -108,6 +108,13 @@ const I18N = {
     claudecodeStatsMissing: "未检测到 Claude Code 本地数据（~/.claude/projects）",
     claudecodeCostHint: "费用为按量价目估算值（订阅套餐实际不按此扣费），未收录定价的模型按 0 计算",
     claudecodeKpiOutput: "输出 TOKEN",
+    codexStatsTitle: "Codex 本地用量",
+    codexMissing: "未检测到 Codex 会话",
+    codexImportError: "Codex 导入失败",
+    codexSpeedUnavailable: "日志未提供请求耗时",
+    codexCostUnavailable: "费用未知",
+    codexApproxRequests: "请求数为近似值（按去重后用量事件统计）",
+    codexUnknownModel: "未知模型",
     channelAll: "全部渠道", yesterday: "昨天", vsSame: "vs 昨日同时段",
     sampleInsufficient: "样本不足", dailyAvg: "日均", scopeHint: "{n} 渠道 · {m} 账号",
     accountsUnit: "账号", quotaBarTitle: "各渠道配额",
@@ -115,7 +122,7 @@ const I18N = {
     reportEmpty: "暂无数据", segTokens: "Token",
     dataSinceToday: "仅今日", dataSince: "数据自",
     noUsageToday: "今日暂无用量", noDataInRange: "该范围暂无数据",
-    cmpExcludesDsh: "涨跌百分比未含今日 DSH", statsScopeHint: "主区仅统计 OpenCode 渠道用量；ZCode / Claude Code / DSH 本地用量见下方独立区块（首页「今天」合计已并入今日 DSH 用量，涨跌百分比未含）",
+    cmpExcludesDsh: "涨跌百分比未含今日 DSH", statsScopeHint: "主区仅统计 OpenCode 渠道用量；ZCode / Claude Code / DSH / Codex 本地用量见下方独立区块（首页「今天」合计已并入今日 DSH 用量，涨跌百分比未含）",
   },
   en: {
     syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh", themeToggle: "Toggle theme", minimize: "Minimize", close: "Close",
@@ -220,6 +227,13 @@ const I18N = {
     claudecodeStatsMissing: "Claude Code local data not found (~/.claude/projects)",
     claudecodeCostHint: "Costs are pay-as-you-go estimates (subscriptions are not actually billed this way); models without pricing are counted as 0",
     claudecodeKpiOutput: "Output Tokens",
+    codexStatsTitle: "Codex Local Usage",
+    codexMissing: "Codex sessions not found",
+    codexImportError: "Codex import failed",
+    codexSpeedUnavailable: "Request duration unavailable",
+    codexCostUnavailable: "Cost unavailable",
+    codexApproxRequests: "Approximate request count (deduped usage events)",
+    codexUnknownModel: "Unknown model",
     channelAll: "All Channels", yesterday: "Yesterday", vsSame: "vs yesterday same time",
     sampleInsufficient: "Low sample", dailyAvg: "Daily avg", scopeHint: "{n} channels · {m} accounts",
     accountsUnit: " acct", quotaBarTitle: "Channel Quotas",
@@ -227,7 +241,7 @@ const I18N = {
     reportEmpty: "No data yet", segTokens: "Tokens",
     dataSinceToday: "Today only", dataSince: "Data since",
     noUsageToday: "No usage today", noDataInRange: "No data in this range",
-    cmpExcludesDsh: "Trend % excludes today's DSH", statsScopeHint: "Main section covers OpenCode channels only; see the dedicated ZCode / Claude Code / DSH blocks below (today's homepage total includes today's DSH usage; the trend % does not)",
+    cmpExcludesDsh: "Trend % excludes today's DSH", statsScopeHint: "Main section covers OpenCode channels only; see the dedicated ZCode / Claude Code / DSH / Codex blocks below (today's homepage total includes today's DSH usage; the trend % does not)",
   },
 };
 let lang = "zh";
@@ -369,6 +383,7 @@ function applyLang(l) {
   if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);
   if (dshUsageLast) renderDsh(dshUsageLast);
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);
+  if (codexSummaryLast) renderCodexSummary(codexSummaryLast);   // Codex 区块随语言即时重渲染 (复用已拉取数据)
 }
 
 /* EVOLUTION-9: data-i18n-title tooltip 与估算徽标随语言切换 (applyLang 内调用) */
@@ -484,6 +499,7 @@ function applyCurrency(cur) {
   if (state.page === "overview") loadOverview(true).catch(() => {});  // 总览页费用随货币即时换算
   if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);  // ZCode 估算费用随货币即时换算
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);  // Claude Code 估算费用随货币即时换算
+  if (codexSummaryLast) renderCodexSummary(codexSummaryLast);  // Codex 区块随货币/语言即时重渲染 (费用恒未知, 重渲保文案一致)
 }
 
 /* ---------------- 页面路由 ---------------- */
@@ -496,6 +512,7 @@ function switchPage(page) {
   if (page === "stats") loadZcodeSummary().catch(() => {});  // ZCode 本地用量区块
   if (page === "stats") loadDshUsage().catch(() => {});  // DSH 本地用量区块
   if (page === "stats") loadClaudecodeSummary().catch(() => {});  // Claude Code 本地用量区块
+  if (page === "stats") loadCodexSummary().catch(() => {});  // Codex 本地用量区块
   if (page === "overview") loadOverview().catch(() => {});
   if (page === "records") { loadSessions().catch(() => {}); loadRecords().catch(() => {}); }
   if (page === "settings") renderSettings();
@@ -1174,6 +1191,170 @@ function chartClaudecodeTrend(daily7, noAnim) {
   cClaudecodeTrend.resize();
 }
 
+/* ---------------- 统计页: Codex 本地用量区块 ---------------- */
+/* 数据源 /api/codex/summary?range=<statsRange> (与 loadDashboard 统计页 range 同源,
+   独立于远程账号登录); db_found=false (无 ~/.codex 且镜像表无历史) → 仅显示空态文案;
+   fetch 异常 → 保留旧数据 + codex-error 状态条 (不清缓存不隐藏区块);
+   Codex 费用恒 NULL (后端契约): 不渲染为 0, 显示 — + codexCostUnavailable 提示 */
+let codexSummaryLast = null;
+let codexSumSeq = 0;
+let cCodexTrend = null;
+
+async function loadCodexSummary() {
+  const seq = ++codexSumSeq;
+  const range = state.statsRange;
+  try {
+    const d = await api("/api/codex/summary?range=" + encodeURIComponent(range));
+    if (seq !== codexSumSeq || range !== state.statsRange) return;  // 丢弃过期响应 (快速切 range 时旧请求/旧 range 均不覆盖)
+    codexSummaryLast = d;
+    renderCodexSummary(d);
+  } catch (e) {
+    if (seq !== codexSumSeq) return;
+    $("codex-error").hidden = false;
+    $("codex-error").textContent = t("codexImportError") + ": " + e.message;
+  }
+}
+function codexSpeed(value) {
+  return value == null ? "\u2014" : Number(value).toFixed(1) + " tok/s";
+}
+/* 速度/费用未知原因以 tooltip + aria-label 呈现 (不加教学段落), NULL 显示 — 而非 0 */
+function codexSpeedCell(value) {
+  if (value != null) return escapeHtml(codexSpeed(value));
+  const tip = escapeHtml(t("codexSpeedUnavailable"));
+  return `<span title="${tip}" aria-label="${tip}">—</span>`;
+}
+function codexCostCell() {
+  const tip = escapeHtml(t("codexCostUnavailable"));
+  return `<span title="${tip}" aria-label="${tip}">—</span>`;
+}
+/* request_count_exact=false → `~` 前缀 + codexApproxRequests 说明 (需求 §8 近似请求数标记) */
+function codexApproxSpan(n, exact) {
+  const v = fmtInt(n);
+  if (exact) return v;
+  const tip = escapeHtml(t("codexApproxRequests"));
+  return `<span title="${tip}" aria-label="${tip}">~${v}</span>`;
+}
+function codexRenderHeads() {
+  $("codex-prov-head").innerHTML = `
+    <th>${t("zcodeChannel")}</th><th class="num">${t("totalRequests")}</th>
+    <th class="num">${t("input")}(${t("inclCache")})</th><th class="num">${t("output")}</th>
+    <th class="num">${t("totalTokens")}</th><th class="num">${t("zcodeAvgTps")}</th>`;
+  $("codex-model-head").innerHTML = `
+    <th>${t("zcodeChannel")}</th><th>${t("zcodeModel")}</th><th class="num">${t("totalRequests")}</th>
+    <th class="num">${t("input")}(${t("inclCache")})</th><th class="num">${t("output")}</th>
+    <th class="num">${t("totalTokens")}</th><th class="num">${t("zcodeAvgTps")}</th>`;
+}
+function renderCodexSummary(data) {
+  const box = $("codex-stats");
+  if (!box) return;
+  $("codex-error").hidden = true;   // 成功路径清错误条 (失败路径保留旧数据 + 错误条独立)
+  const missing = $("codex-missing");
+  const kpis = $("codex-kpis");
+  const todayKpis = $("codex-today-kpis");
+  const tables = box.querySelector(".codex-table-scroll");
+  const chartBox = box.querySelector(".chart-box");
+  if (!data || data.db_found === false) {
+    // 真正 missing (无 source 目录且镜像表无历史): 仅显示空态文案, 隐藏 KPI/表格/图
+    box.hidden = false;
+    missing.hidden = false;
+    kpis.hidden = true;
+    kpis.innerHTML = "";
+    todayKpis.hidden = true;
+    todayKpis.innerHTML = "";
+    tables.hidden = true;
+    chartBox.hidden = true;
+    if (cCodexTrend) { cCodexTrend.destroy(); cCodexTrend = null; }
+    return;
+  }
+  // 有 source 无 records → 零 KPI; 无 source 有历史 → 照常展示历史
+  box.hidden = false;
+  missing.hidden = true;
+  kpis.hidden = false;
+  todayKpis.hidden = false;
+  tables.hidden = false;
+  chartBox.hidden = false;
+  codexRenderHeads();
+  const exact = data.request_count_exact === true;
+  const kpi = (cls, l, v) => `<div class="card kpi ${cls}"><div class="kpi-l">${l}</div><div class="kpi-v">${v}</div></div>`;
+  const cards = (agg) => [
+    kpi("c-blue", t("totalRequests"), codexApproxSpan(agg.request_count || 0, exact)),
+    kpi("c-violet", t("totalTokens"), fmtTokens(agg.total_tokens || 0)),
+    kpi("c-green", t("input"), fmtTokens(agg.total_input_tokens || 0)),
+    kpi("c-slate", t("output"), fmtTokens(agg.total_output_tokens || 0)),
+    kpi("c-cyan", t("zcodeAvgTps"), codexSpeedCell(agg.avg_tps)),
+    kpi("c-amber", t("zcodeEstCost"), codexCostCell()),
+  ];
+  kpis.innerHTML = cards(data.totals || {}).join("");     // 总量行 ← totals
+  todayKpis.innerHTML = cards(data.today || {}).join(""); // 今日行 ← today
+  const provs = data.channels || [];
+  $("codex-prov-body").innerHTML = provs.length ? provs.map((p) => `
+    <tr><td>${escapeHtml(p.provider_id || "—")}</td>
+    <td class="num">${codexApproxSpan(p.request_count, exact)}</td>
+    <td class="num">${fmtTokens(p.total_input_tokens)}</td>
+    <td class="num">${fmtTokens(p.total_output_tokens)}</td>
+    <td class="num">${fmtTokens(p.total_tokens)}</td>
+    <td class="num">${codexSpeedCell(p.avg_tps)}</td></tr>`).join("")
+    : `<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
+  const models = data.models || [];
+  $("codex-model-body").innerHTML = models.length ? models.map((m) => `
+    <tr><td>${escapeHtml(m.provider_id || "—")}</td>
+    <td><span class="model-cell">${modelIcon(m.model || "")}${m.model ? escapeHtml(m.model) : escapeHtml(t("codexUnknownModel"))}</span></td>
+    <td class="num">${codexApproxSpan(m.request_count, exact)}</td>
+    <td class="num">${fmtTokens(m.total_input_tokens)}</td>
+    <td class="num">${fmtTokens(m.total_output_tokens)}</td>
+    <td class="num">${fmtTokens(m.total_tokens)}</td>
+    <td class="num">${codexSpeedCell(m.avg_tps)}</td></tr>`).join("")
+    : `<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
+  chartCodexTrend(data.daily7 || []);
+  updateStatsScopeHint();   // 成功路径末尾刷新口径 hint
+}
+/* 7 日趋势: Token + 请求两条线, 固定近 7 天窗口 (数据源 daily7, 不随 range 变化); 无费用线 (Codex 费用恒 NULL) */
+function chartCodexTrend(daily7, noAnim) {
+  const canvas = $("codex-trend-chart");
+  const emptyEl = $("codex-trend-empty");
+  if (!canvas) return;
+  if (cCodexTrend) { cCodexTrend.destroy(); cCodexTrend = null; }
+  if (!daily7 || !daily7.length || !daily7.some((d) => (d.total_tokens || 0) > 0 || (d.request_count || 0) > 0)) {
+    if (emptyEl) { emptyEl.textContent = t("zcodeNoData"); emptyEl.hidden = false; }
+    return;
+  }
+  if (emptyEl) emptyEl.hidden = true;
+  cCodexTrend = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: daily7.map((d) => d.date.slice(5)),
+      datasets: [
+        { label: t("totalTokens"), data: daily7.map((d) => d.total_tokens || 0), borderColor: COLOR.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
+        { label: t("totalRequests"), data: daily7.map((d) => d.request_count || 0), borderColor: COLOR.output, borderWidth: 2, pointRadius: 1.5, tension: 0.3, borderDash: [4, 3], yAxisID: "y1" },
+      ],
+    },
+    options: {
+      responsive: false, maintainAspectRatio: false,
+      animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
+        tooltip: { callbacks: { label: (it) => ` ${it.dataset.label}: ${it.dataset.yAxisID === "y" ? fmtTokens(it.parsed.y) : fmtInt(it.parsed.y)}` } },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 7 } },
+        y: { position: "left", grid: { color: cssVar("--grid") }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtTokens(v) } },
+        y1: { position: "right", grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtInt(v) } },
+      },
+    },
+  });
+  cCodexTrend.resize();
+}
+
+/* Codex 导入完成后的可见数据刷新分派 (pollUntilIdle 空闲分支调用):
+   stats→loadCodexSummary, home→loadDashboard(true), records→records+sessions 并发,
+   其他页仅更新状态 (切页时 switchPage 自然重拉) */
+function refreshCodexVisible() {
+  if (state.page === "stats") loadCodexSummary().catch(() => {});
+  else if (state.page === "home") loadDashboard(true);
+  else if (state.page === "records") Promise.all([loadRecords().catch(() => {}), loadSessions().catch(() => {})]);
+}
+
 /* ---------------- 首页: 用量概览 6 格 ---------------- */
 function renderOverview(totals, source) {
   const isEst = ["bai", "zcode", "claudecode"].includes(source);   // R6: 费用估算徽章扩展至本地渠道
@@ -1249,10 +1430,12 @@ function updateStatsScopeHint() {   // EVOLUTION-7: 主区全 0 且本地渠道�
     && (tt.total_input_tokens || 0) + (tt.total_output_tokens || 0) + (tt.total_reasoning_tokens || 0) === 0;
   const zcT = (zcodeSummaryLast || {}).totals || {};        // zcode totals 为 total_input/output/reasoning_tokens 三段 (与 renderZcodeSummary 同口径)
   const ccT = (claudecodeSummaryLast || {}).totals || {};   // claudecode totals 为 total_tokens 单字段 (与 renderClaudecodeSummary 同口径)
+  const coT = (codexSummaryLast || {}).totals || {};        // codex totals 为 total_tokens 单字段 + request_count (与 renderCodexSummary 同口径)
   const dsh = dshUsageLast || {};                           // dsh 为 total.input/output + 顶层 sessions_count (与 renderDsh 同口径)
   const dshT = dsh.total || {};
   const localHas = ((zcT.total_input_tokens || 0) + (zcT.total_output_tokens || 0) + (zcT.total_reasoning_tokens || 0)) > 0 || (zcT.request_count || 0) > 0
     || (ccT.total_tokens || 0) > 0 || (ccT.request_count || 0) > 0
+    || (coT.total_tokens || 0) > 0 || (coT.request_count || 0) > 0
     || ((dshT.input || 0) + (dshT.output || 0)) > 0 || (dsh.sessions_count || 0) > 0;
   const show = mainEmpty && localHas;
   if (show) el.textContent = t("statsScopeHint");
@@ -1480,7 +1663,7 @@ function modelIcon(m) {
 function refreshIcons() {
   if (!document.getElementById("page-stats").hidden && state.data) chartModel(state.data.models, true);
   const dark = document.documentElement.dataset.theme === "dark";
-  for (const id of ["zcode-model-body", "dsh-model-body", "claudecode-model-body", "records-body"]) {
+  for (const id of ["zcode-model-body", "dsh-model-body", "claudecode-model-body", "codex-model-body", "records-body"]) {
     document.getElementById(id)?.querySelectorAll("img[alt]").forEach((img) => {
       const next = `icons/${themedName(img.alt, dark)}.svg`;   // img.alt 属性经 escapeHtml 写入、DOM 读回原文
       if (img.getAttribute("src") !== next) img.setAttribute("src", next);
@@ -1544,15 +1727,23 @@ function pollUntilIdle() {
       const st = await api("/api/state");
       renderSyncBanner(st.progress);
       renderSettingsSyncProgress(st.progress);
-      if (!st.progress.running) {
+      // 账号同步与 Codex 后台导入都空闲才恢复按钮并刷新 (任一在跑继续等)
+      if (!st.progress.running && !(st.codex && st.codex.running)) {
         clearInterval(state.syncTimer); state.syncTimer = null;
         $("tb-refresh").disabled = false;
         $("btn-full-sync").disabled = false;
+        // 后台导入可能新增渠道数据: 失效 60s tabs 缓存, 随后 loadDashboard 立即重拉
+        channelTabsCache = { at: 0, data: null };
         await loadDashboard();
         if (state.page === "settings") renderSettings();
         if (state.page === "overview") loadOverview(true).catch(() => {});
+        refreshCodexVisible();   // stats→loadCodexSummary / home→loadDashboard(true) / records→records+sessions
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      // 拉取状态失败也释放按钮, 避免同步卡死无法手动刷新 (timer 保留, 下轮自愈)
+      $("tb-refresh").disabled = false;
+      $("btn-full-sync").disabled = false;
+    }
   }, 2500);
 }
 function renderSyncBanner(progress) {
@@ -2038,6 +2229,7 @@ function bindEvents() {
     b.classList.add("active"); state.statsRange = b.dataset.r; loadDashboard();
     loadZcodeSummary();  // ZCode 区块跟随 range 切换
     loadClaudecodeSummary();  // Claude Code 区块跟随 range 切换
+    loadCodexSummary();  // Codex 区块跟随 range 切换
   }));
   $("mr-dim").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
@@ -2516,6 +2708,7 @@ function rerenderCharts() {
     chartTrend(state.data.trend, true);
     if (zcodeSummaryLast) chartZcodeTrend(zcodeSummaryLast.daily7, true);
     if (claudecodeSummaryLast) chartClaudecodeTrend(claudecodeSummaryLast.daily7, true);
+    if (codexSummaryLast) chartCodexTrend(codexSummaryLast.daily7, true);
   }
   refreshIcons();   // 图标变体原地换 src + chartModel 重渲 (唯一入口)
 }
@@ -2537,6 +2730,7 @@ window.addEventListener("resize", () => {
       safeResize(cTrend);
       safeResize(cZcodeTrend);  // ZCode 趋势图窗口缩放跟随
       safeResize(cClaudecodeTrend);  // Claude Code 趋势图窗口缩放跟随
+      safeResize(cCodexTrend);  // Codex 趋势图窗口缩放跟随
     }
     if (!document.getElementById("page-overview").hidden) safeResize(cOvTrendChart);
   }, 250);

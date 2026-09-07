@@ -10,8 +10,9 @@
 - 三处 DOM 内联快照色改用 CH_COLOR[...] CSS 变量引用 (qb-dot background 与
   qb-name color 分别命中), 模板行内不再出现 `${chColor(` 内联 style 用法;
   Chart.js 数据集路径仍走 chColor (canvas 不解析 var(), 两条上色路径不混用);
-- 9 个图表函数 noAnim 参数 + animation 关闭; themedName 全量解析契约
-  (muse→meta / hy 前缀 / 未知→deepseek); refreshIcons 四表体原地换 src;
+- 9 个既有图表函数 + Codex 趋势图 (chartCodexTrend) 共 10 个图表函数 noAnim 参数
+  + animation 关闭; themedName 全量解析契约
+  (muse→meta / hy 前缀 / 未知→deepseek); refreshIcons 五表体原地换 src;
   applyDarkMode 不再直接调用 refreshIcons (重渲收敛, 唯一入口).
 """
 from __future__ import annotations
@@ -178,14 +179,16 @@ def test_ch_color_still_used_by_chart_datasets():
 _NOANIM_FUNCS = [
     "chartToday", "chartReportStack", "chartReportDonut", "chartReportHourly",
     "chartOvTrend", "chartTrend", "chartZcodeTrend", "chartClaudecodeTrend", "chartModel",
+    "chartCodexTrend",   # Codex 交付一 T4: 统计页第 10 个图表函数
 ]
 
 
 def test_nine_chart_functions_take_noanim_param():
     src = _src()
+    # 旧 9 个 + chartCodexTrend 逐个命名检查 (内容保留, 仅扩清单)
     for name in _NOANIM_FUNCS:
         assert re.search(rf"function {name}\([^)]*noAnim", src), f"{name} 缺少 noAnim 参数"
-    assert src.count("animation: noAnim ? false : undefined,") == 9
+    assert src.count("animation: noAnim ? false : undefined,") == 10
 
 
 def test_rerender_and_refresh_icons_pass_noanim_true():
@@ -200,6 +203,7 @@ def test_rerender_and_refresh_icons_pass_noanim_true():
         "chartTrend(state.data.trend, true)",
         "chartZcodeTrend(zcodeSummaryLast.daily7, true)",
         "chartClaudecodeTrend(claudecodeSummaryLast.daily7, true)",
+        "chartCodexTrend(codexSummaryLast.daily7, true)",   # Codex 交付一 T4
     ):
         assert call in rerender, f"rerenderCharts 缺少 noAnim 调用: {call}"
     # chartModel 移入 refreshIcons 统一处理 (noAnim), 不再出现在 rerenderCharts
@@ -229,9 +233,10 @@ def test_model_icon_uses_themed_name():
 
 
 def test_refresh_icons_swaps_src_in_place_on_four_tbodies():
-    """四张表体 img 原地换 src, 不重建 DOM (记录页滚动/分页/筛选态保持)."""
+    """四张表体 img 原地换 src, 不重建 DOM (记录页滚动/分页/筛选态保持);
+    Codex 交付一 T4 增第五张 codex-model-body."""
     body = _extract_fn(_src(), "refreshIcons")
-    for tid in ("zcode-model-body", "dsh-model-body", "claudecode-model-body", "records-body"):
+    for tid in ("zcode-model-body", "dsh-model-body", "claudecode-model-body", "records-body", "codex-model-body"):
         assert f'"{tid}"' in body
     assert 'themedName(img.alt, dark)' in body
     assert 'img.getAttribute("src") !== next' in body

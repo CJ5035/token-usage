@@ -153,6 +153,18 @@
         </div>
         <div class="chart-box" id="claudecode-trend-box" style="min-height:220px"><canvas id="claudecode-trend-chart"></canvas><div class="zcode-chart-empty" id="claudecode-trend-empty" hidden></div></div>
       </div>
+      <section id="codex-stats" class="codex-stats" hidden>
+        <div class="card-h"><h3 data-i18n="codexStatsTitle">Codex 本地用量</h3></div>
+        <div id="codex-error" role="status" hidden></div>
+        <div id="codex-missing" data-i18n="codexMissing" hidden>未检测到 Codex 会话</div>
+        <div class="kpi-row" id="codex-kpis"></div>
+        <div class="kpi-row" id="codex-today-kpis"></div>
+        <div class="codex-table-scroll">
+          <table class="tbl"><thead><tr id="codex-prov-head"></tr></thead><tbody id="codex-prov-body"></tbody></table>
+          <table class="tbl"><thead><tr id="codex-model-head"></tr></thead><tbody id="codex-model-body"></tbody></table>
+        </div>
+        <div class="chart-box"><canvas id="codex-trend-chart"></canvas><div class="zcode-chart-empty" id="codex-trend-empty" hidden></div></div>
+      </section>
     </section>
 
     <!-- ============ 记录页 (会话用量 + 使用记录) ============ -->
