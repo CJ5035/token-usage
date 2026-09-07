@@ -39,14 +39,14 @@ const I18N = {
     language: "语言 / Language", languageDesc: "界面显示语言",
     setData: "数据", dataDir: "数据目录", syncInfo: "同步记录",
     aboutTitle: "关于", aboutIntro: "简介",
-    introText: "是一款本地优先的 OpenCode Go 用量面板：配额窗口、Token 构成、模型排行与使用记录整理在同一处，打开即见。所有数据仅保存在本地，登录凭证只用于同步官方接口。",
+    introText: "是一款本地优先的用量面板：OpenCode Go 配额窗口、Token 构成、模型排行与使用记录整理在同一处，并汇总本机 ZCode、Claude Code、DSH、Codex 会话用量。所有数据仅保存在本地，登录凭证只用于同步官方接口。",
     aboutFeatures: "功能", feat1: "配额窗口实时监控（滚动 5 小时 / 每周 / 每月）",
     feat2: "今日用量与 24 小时趋势", feat3: "各模型 Token 消耗排行与用量趋势",
     feat4: "详细使用记录分页浏览（10 条/页）", feat5: "自动同步数据，无需手动刷新",
     aboutTech: "技术栈", aboutLinks: "链接", aboutThanks: "致谢", thanksText: "数据提供",
-    pageFoot: "{version} · GoGauge · 数据仅保存在本地 · 数据提供 OpenCode",
+    pageFoot: "{version} · GoGauge · 数据仅保存在本地 · 数据提供 OpenCode · ZCode · Claude Code · DSH · Codex",
     loginTitle: "连接 OpenCode Go",
-    welcomeDesc: "本地优先的 OpenCode Go 用量仪表盘 — 配额窗口、Token 构成、模型排行、使用记录，打开即见。",
+    welcomeDesc: "本地优先的用量仪表盘 — OpenCode Go 配额窗口、Token 构成、模型排行、使用记录，以及本机 ZCode / Claude Code / DSH / Codex 用量，打开即见。",
     welcomeFeat1: "配额实时监控（5 小时 / 每周 / 每月）",
     welcomeFeat2: "Token 全维度统计与 24 小时趋势",
     welcomeFeat3: "数据仅保存在本机，安全私密",
@@ -158,14 +158,14 @@ const I18N = {
     language: "Language", languageDesc: "Interface language",
     setData: "Data", dataDir: "Data Directory", syncInfo: "Sync History",
     aboutTitle: "About", aboutIntro: "Intro",
-    introText: "is a local-first OpenCode Go usage dashboard: quota windows, token breakdown, model ranking and usage records in one place. All data stays on your machine; credentials are only used to sync official APIs.",
+    introText: "is a local-first usage dashboard: OpenCode Go quota windows, token breakdown, model ranking and usage records in one place, plus local session usage from ZCode, Claude Code, DSH and Codex. All data stays on your machine; credentials are only used to sync official APIs.",
     aboutFeatures: "Features", feat1: "Quota window monitoring (5h rolling / weekly / monthly)",
     feat2: "Today's usage with 24-hour trend", feat3: "Per-model token ranking and usage trend",
     feat4: "Paginated usage records (10 per page)", feat5: "Auto sync — no manual refresh needed",
     aboutTech: "Tech Stack", aboutLinks: "Links", aboutThanks: "Thanks", thanksText: "Data provided by",
-    pageFoot: "{version} · GoGauge · Local-only data · Data by OpenCode",
+    pageFoot: "{version} · GoGauge · Local-only data · Data by OpenCode · ZCode · Claude Code · DSH · Codex",
     loginTitle: "Connect OpenCode Go",
-    welcomeDesc: "A local-first OpenCode Go usage dashboard — quota windows, token breakdown, model ranking and usage records in one place.",
+    welcomeDesc: "A local-first usage dashboard — OpenCode Go quota windows, token breakdown, model ranking and usage records, plus local ZCode / Claude Code / DSH / Codex usage, all in one place.",
     welcomeFeat1: "Real-time quota monitoring (5h / weekly / monthly)",
     welcomeFeat2: "Full token stats with 24-hour trend",
     welcomeFeat3: "All data stays on your machine — private & safe",
@@ -364,9 +364,11 @@ function applyLang(l) {
   });
   syncI18nTitles();   // EVOLUTION-9: tooltip/估算徽标随语言切换
   document.querySelectorAll("#set-lang-pills .pill").forEach((b) => b.classList.toggle("active", b.dataset.v === lang));
-  // 版本号: 唯一来源为后端 /api/version (app/__init__.py), 前端动态获取
+  // 版本号: 唯一来源为后端 /api/version (app/__init__.py), 前端动态获取; 副题覆盖远程与本地多来源
   const ver = APP_VERSION ? "v" + APP_VERSION : "GoGauge";
-  document.getElementById("about-sub").textContent = `${ver} · OpenCode Go Usage Panel`;
+  document.getElementById("about-sub").textContent = lang === "zh"
+    ? `${ver} · 本地优先多来源用量面板`
+    : `${ver} · Local-First Multi-Source Usage Panel`;
   const pf = document.querySelector('[data-i18n="pageFoot"]');
   if (pf) pf.textContent = t("pageFoot").replace("{version}", ver);
   const sv = document.getElementById("set-version");
@@ -1700,7 +1702,7 @@ function renderAll(data) {
     $("trend-hint").textContent = t("trendHint");
   }
   syncTopBar(data);   // EVOLUTION-9: 顶栏段提取 (下方), renderAll 对外行为不变
-  renderSyncBanner(data.progress);
+  renderSyncBanner(data.progress, data.codex);
   renderSettingsSyncProgress(data.progress);
 }
 function syncTopBar(data) {   // EVOLUTION-9: renderAll 顶栏段逐行提取, applyLang 切语言仅刷顶栏
@@ -1727,6 +1729,8 @@ function maskWs(data) {
 async function startSync(mode) {
   $("tb-refresh").disabled = true;
   $("btn-full-sync").disabled = true;
+  // 未登录远程账号时 /api/sync 回 401: 只记日志, 不永久禁用按钮;
+  // 仍轮询至空闲, Codex 本地导入 (state.codex) 照常等待完成
   try { await api("/api/sync?mode=" + mode, { method: "POST" }); } catch (e) { console.error(e); }
   pollUntilIdle();
 }
@@ -1735,7 +1739,7 @@ function pollUntilIdle() {
   state.syncTimer = setInterval(async () => {
     try {
       const st = await api("/api/state");
-      renderSyncBanner(st.progress);
+      renderSyncBanner(st.progress, st.codex);
       renderSettingsSyncProgress(st.progress);
       // 账号同步与 Codex 后台导入都空闲才恢复按钮并刷新 (任一在跑继续等)
       if (!st.progress.running && !(st.codex && st.codex.running)) {
@@ -1756,8 +1760,9 @@ function pollUntilIdle() {
     }
   }, 2500);
 }
-function renderSyncBanner(progress) {
-  $("sync-indicator").hidden = !(progress && progress.running);
+function renderSyncBanner(progress, codex) {
+  // 账号同步与 Codex 后台导入任一在跑都显示同步指示条 (首次导入 importing 状态可见)
+  $("sync-indicator").hidden = !((progress && progress.running) || (codex && codex.running));
 }
 function renderSettingsSyncProgress(progress) {
   if (!progress || !progress.running) {
@@ -2128,7 +2133,11 @@ async function onUserRowAction(id, act) {
           renderUsersList(r.accounts || [], r.active_id);
           await loadDashboard();
           if (state.page === "overview") loadOverview(true).catch(() => {});  // 退出后账号卡片即时移除
-          if (!(r.accounts || []).some((x) => x.has_token)) showLoginOverlay(true);  // 全部退出 -> 欢迎页
+          if (!(r.accounts || []).some((x) => x.has_token)) {
+            // 全部退出: 无远程账号且无本地 Codex 数据才回欢迎页 (统一走 canUseLocalCodex)
+            const st = await api("/api/state").catch(() => null);
+            if (!st || !canUseLocalCodex(st)) showLoginOverlay(true);
+          }
         } catch (e) { toast(e.message || t("loadFailed"), "err"); }
       },
     });
@@ -2171,7 +2180,11 @@ async function onUserRowAction(id, act) {
           await loadDashboard();
           renderSettings().catch(() => {});
           if (state.page === "overview") loadOverview(true).catch(() => {});
-          if ((r.remaining ?? 1) === 0) showLoginOverlay(true);
+          if ((r.remaining ?? 1) === 0) {
+            // 全部删除: 同样经 canUseLocalCodex 判定, 有本地 Codex 数据则留在面板
+            const st = await api("/api/state").catch(() => null);
+            if (!st || !canUseLocalCodex(st)) showLoginOverlay(true);
+          }
         } catch (e) { toast(e.message || t("loadFailed"), "err"); }
       },
     });
@@ -2180,6 +2193,12 @@ async function onUserRowAction(id, act) {
 
 /* ---------------- 登录状态 ---------------- */
 let loginPollTimer = null;
+/* 本地 Codex 可用性 (简报固定): 检测到源目录或镜像已有历史即视为可用,
+   与远程账号登录状态 (logged_in) 相互独立; 所有"无账号则回欢迎页"的
+   判断统一走本函数, 不复制条件 */
+function canUseLocalCodex(st) {
+  return !!(st.codex && (st.codex.source_found || st.codex.has_data));
+}
 function showLoginOverlay(show) {
   // 遮罩背景不透明, 直接显示即可覆盖页面; 不要隐藏 .app (会连同遮罩一起隐藏)
   $("login-overlay").hidden = !show;
@@ -2189,7 +2208,8 @@ function showLoginOverlay(show) {
     loginPollTimer = setInterval(async () => {
       try {
         const st = await api("/api/state");
-        if (st.logged_in) {
+        // 登录成功或本地 Codex 数据就绪都进入面板 (远程登录与本地可用是独立条件)
+        if (st.logged_in || canUseLocalCodex(st)) {
           clearInterval(loginPollTimer);
           loginPollTimer = null;
           showLoginOverlay(false);
@@ -2207,9 +2227,12 @@ function showLoginOverlay(show) {
 async function checkState() {
   try {
     const st = await api("/api/state");
-    if (!st.logged_in) { showLoginOverlay(true); return; }
+    // logged_in 只表示远程账号: 未登录但本地 Codex 可用时直达面板, 两者皆无才显示欢迎页
+    if (!st.logged_in && !canUseLocalCodex(st)) { showLoginOverlay(true); return; }
     showLoginOverlay(false);
-    if (st.progress && st.progress.running) pollUntilIdle();
+    // 账号同步或 Codex 后台导入进行中: 轮询至空闲后统一刷新 (首次 source_found
+    // 未导入完成时保持本地访问, 完成自动刷新)
+    if ((st.progress && st.progress.running) || (st.codex && st.codex.running)) pollUntilIdle();
     await loadDashboard();
   } catch (e) { console.error("state check failed", e); }
 }

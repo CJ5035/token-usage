@@ -78,6 +78,16 @@ Output: `dist\GoGauge.exe` (~38 MB, --noconsole, logo icon and tray support incl
 - **Cache hit rate** = hits / (hits + misses)
 - **Cost**: raw USD; CNY converted via open.er-api.com live FX rate (24h cache)
 
+### Codex Local Data
+
+- **Source**: local Codex session logs, directory priority `GOUSAGE_CODEX_HOME` > `ZBAR_CODEX_HOME` > `~/.codex` (the `sessions` folder inside); viewable without signing in to any remote account
+- **Collected content**: token usage events only (model / provider / time) — conversation content is never read or stored
+- **"Full history"**: means locally readable session logs and the local mirror, not a cumulative cloud-account total
+- **Provider & speed**: provider comes from the log records; speed is computed only when logs contain explicit duration fields, otherwise shown as `—` (no estimation)
+- **Data scope**: Codex usage appears in its dedicated stats block and all-channel reports; the records / sessions pages do not include Codex details in the current phase (unified source filtering comes later)
+- **Sync interval**: Codex incremental import reuses the existing auto-sync interval control — no Codex-specific setting is added
+- **Retention**: the remote sync range (retention days) only trims remote account history and never deletes the Codex local mirror
+
 ## 🔒 Privacy
 
 - Login cookie stays on your machine only — never logged, never uploaded

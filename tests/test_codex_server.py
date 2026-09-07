@@ -492,3 +492,23 @@ def test_account_switch_keeps_scope_all(tmp_codex_db, codex_row, monkeypatch, ap
     assert db.set_active_account(a2)
     after = api_call("/api/dashboard?scope=all&range=today")["data"]["totals"]
     assert before == after
+
+
+# ---------------------------------------------------------------------------
+# 6. 本地访问入口 (T7): 未登录 + 本地 Codex 可用的状态语义
+# ---------------------------------------------------------------------------
+
+
+def test_local_access_without_login(tmp_codex_db, codex_row, monkeypatch, api_call):
+    """未登录但 codex.has_data=true: /api/state 供本地入口判定 (logged_in 仍 false),
+    POST /api/sync 未登录远程账号保持 401, /api/codex/summary 同状态下无需登录 200."""
+    monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
+    _no_source(tmp_codex_db, monkeypatch)   # 源目录缺失, 仅镜像有历史 (has_data 分支)
+    db.import_codex_usage([codex_row()])
+    assert db.count_logged_in_accounts() == 0
+    data = api_call("/api/state")["data"]
+    assert data["logged_in"] is False
+    assert data["codex"]["has_data"] is True and data["codex"]["source_found"] is False
+    sync_resp = api_call("/api/sync?mode=incremental", method="POST")
+    assert sync_resp["status"] == 401
+    assert api_call("/api/codex/summary?range=today")["status"] == 200

@@ -33,3 +33,14 @@ def test_home_has_range_totals_and_codex_color():
     css = (ROOT / "app/web/style.css").read_text(encoding="utf-8")
     assert 'codex: "var(--ch-codex)"' in js
     assert "--ch-codex:" in css
+
+
+def test_copy_and_local_entry_contract():
+    js = (ROOT / "app/web/app.js").read_text(encoding="utf-8")
+    html = (ROOT / "app/web/index.html").read_text(encoding="utf-8")
+    p = Nodes()
+    p.feed(html)
+    assert {"introText", "welcomeDesc", "pageFoot"} <= p.keys
+    assert "function canUseLocalCodex(" in js
+    for path in ("README.md", "README_en.md"):
+        assert "GOUSAGE_CODEX_HOME" in (ROOT / path).read_text(encoding="utf-8")
