@@ -346,7 +346,7 @@ def test_report_hourly_and_totals_local_dispatch(tmp_report_db):
     t = db.channel_totals("today", "zcode")
     assert t["request_count"] == 1 and t["total_input_tokens"] == 30 + 2      # input+cache_write
     assert t["uncached_input_tokens"] == 30 - 10                              # input-cache_read
-    assert t["hit_rate"] == 33.33                                             # 10/(10+20)*100
+    assert t["hit_rate"] == 31.25                                             # 10/(10+20+2)*100
     assert t["total_cost_usd"] == pytest.approx(80 * 100_000 / 1e8)
     tr = db.channel_trend("today", "claudecode")
     assert sum(x["output"] for x in tr) == 40
@@ -462,3 +462,13 @@ def test_local_mirror_predicate_uses_expression_index(tmp_report_db):
             c_params).fetchall())
         assert "SEARCH" in plan and "INDEX idx_cc_utc" in plan, \
             f"{range_} claudecode 谓词未命中 idx_cc_utc: {plan}"
+
+
+def test_server_merge_dsh_zero_today_no_row(tmp_report_db, monkeypatch):
+    """dsh 已接入但今日零用量: 明细行不出 (与「当前范围无数据不出行」对齐); 渠道 tab 保留."""
+    _seed_channels()
+    _mock_dsh(monkeypatch, today_tokens=0)
+    from app import server
+    resp = server._report_channels_response("today")
+    assert not any(r["channel"] == "dsh" for r in resp["rows"])
+    assert any(s["channel"] == "dsh" for s in resp["summary"])

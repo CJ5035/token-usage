@@ -1050,7 +1050,8 @@ def _charts_totals_dict(row: sqlite3.Row) -> dict[str, Any]:
     """桶聚合行 -> totals()/model_stats() 元素同构字典 (键名逐一对照现有函数)."""
     hit = int(row["cache_hit_tokens"] or 0)
     miss = int(row["uncached_input_tokens"] or 0)
-    hit_rate = (hit / (hit + miss) * 100) if (hit + miss) > 0 else 0.0
+    cw = int(row["cache_write_tokens"] or 0)
+    hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
     return {
         "request_count": int(row["request_count"] or 0),
         "session_count": 0,            # 桶数据无会话维度, 记 0 保持键存在
@@ -1069,7 +1070,8 @@ def _charts_daily_dict(row: sqlite3.Row) -> dict[str, Any]:
     """桶聚合行 -> daily_stats() 元素同构字典 (无 session_count, 多 date)."""
     hit = int(row["cache_hit_tokens"] or 0)
     miss = int(row["uncached_input_tokens"] or 0)
-    hit_rate = (hit / (hit + miss) * 100) if (hit + miss) > 0 else 0.0
+    cw = int(row["cache_write_tokens"] or 0)
+    hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
     return {
         "date": row["date"],
         "total_input_tokens": int(row["total_input_tokens"] or 0),
@@ -1095,7 +1097,7 @@ def charts_aggregate(account_id: Optional[int] = None, days: Optional[int] = Non
     - today_trend: 今日 24 小时补 0, input=未缓存输入 (对照 today_trend 的
       input_tokens 口径), 桶无推理 token 故 reasoning 恒 0
     - models: 按模型聚合 (对应 dashboard "models")
-    hit_rate 口径与现有函数一致: cache_read / (cache_read + uncached_input).
+    hit_rate 口径与现有函数一致: cache_read / (cache_read + uncached_input + cache_write) (命中/总输入).
     """
     aid = _resolve_account_id(account_id)
     conn = get_db()
@@ -1471,7 +1473,8 @@ def model_stats(period: str = "30d", account_id: Optional[int] = None) -> list[d
     for r in rows:
         hit = int(r["cache_hit_tokens"] or 0)
         miss = int(r["uncached_input_tokens"] or 0)
-        hit_rate = (hit / (hit + miss) * 100) if (hit + miss) > 0 else 0.0
+        cw = int(r["cache_write_tokens"] or 0)
+        hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
         result.append(
             {
                 "model": r["model"],
@@ -1517,7 +1520,8 @@ def daily_stats(days: int = 30, account_id: Optional[int] = None) -> list[dict[s
     for r in rows:
         hit = int(r["cache_hit_tokens"] or 0)
         miss = int(r["uncached_input_tokens"] or 0)
-        hit_rate = (hit / (hit + miss) * 100) if (hit + miss) > 0 else 0.0
+        cw = int(r["cache_write_tokens"] or 0)
+        hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
         result.append(
             {
                 "date": r["date"],
@@ -1596,7 +1600,8 @@ def totals(period: str = "30d", account_id: Optional[int] = None) -> dict[str, A
         }
     hit = int(row["cache_hit_tokens"] or 0)
     miss = int(row["uncached_input_tokens"] or 0)
-    hit_rate = (hit / (hit + miss) * 100) if (hit + miss) > 0 else 0.0
+    cw = int(row["cache_write_tokens"] or 0)
+    hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
     return {
         "request_count": int(row["request_count"] or 0),
         "session_count": int(row["session_count"] or 0),
@@ -1837,17 +1842,22 @@ def zcode_totals(period: str = "30d") -> dict[str, Any]:
         f"SELECT {_ZCODE_AGG_COLS}, {_ZCODE_SPEED_COLS} FROM zcode_usage {where}",
         params,
     ).fetchone()
+    hit = int(row["cache_hit_tokens"] or 0)
+    miss = int(row["uncached_input_tokens"] or 0)
+    cw = int(row["cache_write_tokens"] or 0)
+    hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
     return {
         "request_count": int(row["request_count"]),
         "total_input_tokens": int(row["total_input_tokens"]),
-        "uncached_input_tokens": int(row["uncached_input_tokens"]),
+        "uncached_input_tokens": miss,
         "total_reasoning_tokens": int(row["total_reasoning_tokens"]),
-        "cache_hit_tokens": int(row["cache_hit_tokens"]),
+        "cache_hit_tokens": hit,
         "cache_write_tokens": int(row["cache_write_tokens"]),
         "total_output_tokens": int(row["total_output_tokens"]),
         "total_tokens": int(row["total_tokens"]),
         "total_cost_usd": _zcode_cost_usd(row),
         **_zcode_speed_dict(row),
+        "hit_rate": round(hit_rate, 2),
     }
 
 
@@ -1866,21 +1876,28 @@ def zcode_daily(days: int = 7) -> list[dict[str, Any]]:
         """,
         (f"-{days} days",),
     ).fetchall()
-    return [
-        {
-            "date": r["date"],
-            "request_count": int(r["request_count"]),
-            "total_input_tokens": int(r["total_input_tokens"]),
-            "uncached_input_tokens": int(r["uncached_input_tokens"]),
-            "total_reasoning_tokens": int(r["total_reasoning_tokens"]),
-            "cache_hit_tokens": int(r["cache_hit_tokens"]),
-            "cache_write_tokens": int(r["cache_write_tokens"]),
-            "total_output_tokens": int(r["total_output_tokens"]),
-            "total_tokens": int(r["total_tokens"]),
-            "total_cost_usd": _zcode_cost_usd(r),
-        }
-        for r in rows
-    ]
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        hit = int(r["cache_hit_tokens"] or 0)
+        miss = int(r["uncached_input_tokens"] or 0)
+        cw = int(r["cache_write_tokens"] or 0)
+        hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
+        result.append(
+            {
+                "date": r["date"],
+                "request_count": int(r["request_count"]),
+                "total_input_tokens": int(r["total_input_tokens"]),
+                "uncached_input_tokens": miss,
+                "total_reasoning_tokens": int(r["total_reasoning_tokens"]),
+                "cache_hit_tokens": hit,
+                "cache_write_tokens": int(r["cache_write_tokens"]),
+                "total_output_tokens": int(r["total_output_tokens"]),
+                "total_tokens": int(r["total_tokens"]),
+                "total_cost_usd": _zcode_cost_usd(r),
+                "hit_rate": round(hit_rate, 2),
+            }
+        )
+    return result
 
 
 def zcode_provider_stats(period: str = "30d") -> list[dict[str, Any]]:
@@ -1905,27 +1922,34 @@ def zcode_provider_stats(period: str = "30d") -> list[dict[str, Any]]:
         """,
         params,
     ).fetchall()
-    return [
-        {
-            "provider_id": r["provider_id"],
-            "provider_name": r["provider_name"],
-            "request_count": int(r["request_count"]),
-            "total_input_tokens": int(r["total_input_tokens"]),
-            "uncached_input_tokens": int(r["uncached_input_tokens"]),
-            "total_reasoning_tokens": int(r["total_reasoning_tokens"]),
-            "cache_hit_tokens": int(r["cache_hit_tokens"]),
-            "cache_write_tokens": int(r["cache_write_tokens"]),
-            "total_output_tokens": int(r["total_output_tokens"]),
-            "total_cost_usd": _zcode_cost_usd(r),
-            **_zcode_speed_dict(r),
-        }
-        for r in rows
-    ]
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        hit = int(r["cache_hit_tokens"] or 0)
+        miss = int(r["uncached_input_tokens"] or 0)
+        cw = int(r["cache_write_tokens"] or 0)
+        hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
+        result.append(
+            {
+                "provider_id": r["provider_id"],
+                "provider_name": r["provider_name"],
+                "request_count": int(r["request_count"]),
+                "total_input_tokens": int(r["total_input_tokens"]),
+                "uncached_input_tokens": miss,
+                "total_reasoning_tokens": int(r["total_reasoning_tokens"]),
+                "cache_hit_tokens": hit,
+                "cache_write_tokens": int(r["cache_write_tokens"]),
+                "total_output_tokens": int(r["total_output_tokens"]),
+                "total_cost_usd": _zcode_cost_usd(r),
+                **_zcode_speed_dict(r),
+                "hit_rate": round(hit_rate, 2),
+            }
+        )
+    return result
 
 
 def zcode_model_stats(period: str = "30d") -> list[dict[str, Any]]:
     """按渠道+模型聚合, 行字段同 zcode_provider_stats 另含缓存命中率 hit_rate
-    (算法照抄 model_stats: hit/(hit+miss)*100).
+    (算法照抄 model_stats: hit/(hit+miss+cw)*100, cache_write 计入未命中).
     """
     where, params = _zcode_period_where(period)
     rows = get_db().execute(
@@ -1950,7 +1974,8 @@ def zcode_model_stats(period: str = "30d") -> list[dict[str, Any]]:
     for r in rows:
         hit = int(r["cache_hit_tokens"])
         miss = int(r["uncached_input_tokens"])
-        hit_rate = (hit / (hit + miss) * 100) if (hit + miss) > 0 else 0.0
+        cw = int(r["cache_write_tokens"])
+        hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
         result.append(
             {
                 "provider_id": r["provider_id"],
@@ -2096,6 +2121,30 @@ def save_claudecode_enabled_at(ms: int) -> None:
         conn.commit()
 
 
+# proxy 差集拉取水位 payload 键: 已拉取 cc-switch proxy_request_logs 的最大
+# created_at (Unix 秒); 照 zcode_last_started_at 先例存 settings payload
+# (白名单外键, 不暴露给设置 API, save_settings 不丢该键)
+_CC_PROXY_WATERMARK_KEY = "claudecode_proxy_watermark"
+
+
+def get_cc_proxy_watermark() -> int:
+    """读取 cc-switch proxy 差集拉取水位 (Unix 秒); 缺失/非法 → 0 (全量首刷)."""
+    raw = _raw_payload(get_db()).get(_CC_PROXY_WATERMARK_KEY)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return 0
+    return int(raw)
+
+
+def save_cc_proxy_watermark(seconds: int) -> None:
+    """写入 cc-switch proxy 差集拉取水位 (白名单外键, 不污染 get_settings/save_settings)."""
+    with _DB_LOCK:
+        conn = get_db()
+        data = _raw_payload(conn)
+        data[_CC_PROXY_WATERMARK_KEY] = int(seconds)
+        _write_payload(conn, data)
+        conn.commit()
+
+
 def get_claude_file_progress_all() -> dict[str, tuple[int, int]]:
     """载入全部 JSONL 续读进度: path → (offset, size), 一次读出供采集编排判定增量."""
     rows = get_db().execute(
@@ -2162,16 +2211,21 @@ def claudecode_totals(period: str = "30d") -> dict[str, Any]:
         f"SELECT {_CC_AGG_COLS}, {_CC_SPEED_COLS} FROM claudecode_usage {where}",
         params,
     ).fetchone()
+    hit = int(row["cache_hit_tokens"] or 0)
+    miss = int(row["uncached_input_tokens"] or 0)
+    cw = int(row["cache_write_tokens"] or 0)
+    hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
     return {
         "request_count": int(row["request_count"]),
         "total_input_tokens": int(row["total_input_tokens"]),
-        "uncached_input_tokens": int(row["uncached_input_tokens"]),
-        "cache_hit_tokens": int(row["cache_hit_tokens"]),
+        "uncached_input_tokens": miss,
+        "cache_hit_tokens": hit,
         "cache_write_tokens": int(row["cache_write_tokens"]),
         "total_output_tokens": int(row["total_output_tokens"]),
         "total_tokens": int(row["total_tokens"]),
         "total_cost_usd": _cc_cost_usd(row),
         **_cc_speed_dict(row),
+        "hit_rate": round(hit_rate, 2),
     }
 
 
@@ -2190,20 +2244,27 @@ def claudecode_daily(days: int = 7) -> list[dict[str, Any]]:
         """,
         (f"-{days} days",),
     ).fetchall()
-    return [
-        {
-            "date": r["date"],
-            "request_count": int(r["request_count"]),
-            "total_input_tokens": int(r["total_input_tokens"]),
-            "uncached_input_tokens": int(r["uncached_input_tokens"]),
-            "cache_hit_tokens": int(r["cache_hit_tokens"]),
-            "cache_write_tokens": int(r["cache_write_tokens"]),
-            "total_output_tokens": int(r["total_output_tokens"]),
-            "total_tokens": int(r["total_tokens"]),
-            "total_cost_usd": _cc_cost_usd(r),
-        }
-        for r in rows
-    ]
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        hit = int(r["cache_hit_tokens"] or 0)
+        miss = int(r["uncached_input_tokens"] or 0)
+        cw = int(r["cache_write_tokens"] or 0)
+        hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
+        result.append(
+            {
+                "date": r["date"],
+                "request_count": int(r["request_count"]),
+                "total_input_tokens": int(r["total_input_tokens"]),
+                "uncached_input_tokens": miss,
+                "cache_hit_tokens": hit,
+                "cache_write_tokens": int(r["cache_write_tokens"]),
+                "total_output_tokens": int(r["total_output_tokens"]),
+                "total_tokens": int(r["total_tokens"]),
+                "total_cost_usd": _cc_cost_usd(r),
+                "hit_rate": round(hit_rate, 2),
+            }
+        )
+    return result
 
 
 def claudecode_channel_stats(period: str = "30d") -> list[dict[str, Any]]:
@@ -2222,21 +2283,28 @@ def claudecode_channel_stats(period: str = "30d") -> list[dict[str, Any]]:
         """,
         params,
     ).fetchall()
-    return [
-        {
-            "channel": r["channel"],
-            "request_count": int(r["request_count"]),
-            "total_input_tokens": int(r["total_input_tokens"]),
-            "uncached_input_tokens": int(r["uncached_input_tokens"]),
-            "cache_hit_tokens": int(r["cache_hit_tokens"]),
-            "cache_write_tokens": int(r["cache_write_tokens"]),
-            "total_output_tokens": int(r["total_output_tokens"]),
-            "total_tokens": int(r["total_tokens"]),
-            "total_cost_usd": _cc_cost_usd(r),
-            **_cc_speed_dict(r),
-        }
-        for r in rows
-    ]
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        hit = int(r["cache_hit_tokens"] or 0)
+        miss = int(r["uncached_input_tokens"] or 0)
+        cw = int(r["cache_write_tokens"] or 0)
+        hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
+        result.append(
+            {
+                "channel": r["channel"],
+                "request_count": int(r["request_count"]),
+                "total_input_tokens": int(r["total_input_tokens"]),
+                "uncached_input_tokens": miss,
+                "cache_hit_tokens": hit,
+                "cache_write_tokens": int(r["cache_write_tokens"]),
+                "total_output_tokens": int(r["total_output_tokens"]),
+                "total_tokens": int(r["total_tokens"]),
+                "total_cost_usd": _cc_cost_usd(r),
+                **_cc_speed_dict(r),
+                "hit_rate": round(hit_rate, 2),
+            }
+        )
+    return result
 
 
 def claudecode_model_stats(period: str = "30d") -> list[dict[str, Any]]:
@@ -2253,21 +2321,28 @@ def claudecode_model_stats(period: str = "30d") -> list[dict[str, Any]]:
         """,
         params,
     ).fetchall()
-    return [
-        {
-            "model": r["model"],
-            "request_count": int(r["request_count"]),
-            "total_input_tokens": int(r["total_input_tokens"]),
-            "uncached_input_tokens": int(r["uncached_input_tokens"]),
-            "cache_hit_tokens": int(r["cache_hit_tokens"]),
-            "cache_write_tokens": int(r["cache_write_tokens"]),
-            "total_output_tokens": int(r["total_output_tokens"]),
-            "total_tokens": int(r["total_tokens"]),
-            "total_cost_usd": _cc_cost_usd(r),
-            **_cc_speed_dict(r),
-        }
-        for r in rows
-    ]
+    result: list[dict[str, Any]] = []
+    for r in rows:
+        hit = int(r["cache_hit_tokens"] or 0)
+        miss = int(r["uncached_input_tokens"] or 0)
+        cw = int(r["cache_write_tokens"] or 0)
+        hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
+        result.append(
+            {
+                "model": r["model"],
+                "request_count": int(r["request_count"]),
+                "total_input_tokens": int(r["total_input_tokens"]),
+                "uncached_input_tokens": miss,
+                "cache_hit_tokens": hit,
+                "cache_write_tokens": int(r["cache_write_tokens"]),
+                "total_output_tokens": int(r["total_output_tokens"]),
+                "total_tokens": int(r["total_tokens"]),
+                "total_cost_usd": _cc_cost_usd(r),
+                **_cc_speed_dict(r),
+                "hit_rate": round(hit_rate, 2),
+            }
+        )
+    return result
 
 
 def claudecode_last_import_at() -> Optional[str]:
@@ -2901,7 +2976,7 @@ def report_hourly(date_: str = "today", channel: Optional[str] = None) -> dict[s
 
 def _totals_from_row(row: sqlite3.Row) -> dict[str, Any]:
     """聚合行 → db.totals 对齐键 + hit_rate (R6 抽公共, 供三表分派复用)。
-    空行回退全零 dict; int/round 规范化 + hit/(hit+miss) 口径逐字段对齐 totals()。"""
+    空行回退全零 dict; int/round 规范化 + hit/(hit+miss+cw) 口径逐字段对齐 totals()。"""
     if row is None or row["request_count"] is None:
         return {
             "request_count": 0, "session_count": 0, "total_input_tokens": 0,
@@ -2911,7 +2986,8 @@ def _totals_from_row(row: sqlite3.Row) -> dict[str, Any]:
         }
     hit = int(row["cache_hit_tokens"] or 0)
     miss = int(row["uncached_input_tokens"] or 0)
-    hit_rate = (hit / (hit + miss) * 100) if (hit + miss) > 0 else 0.0
+    cw = int(row["cache_write_tokens"] or 0)
+    hit_rate = (hit / (hit + miss + cw) * 100) if (hit + miss + cw) > 0 else 0.0
     return {
         "request_count": int(row["request_count"] or 0),
         "session_count": int(row["session_count"] or 0),
@@ -3416,9 +3492,10 @@ _CODEX_AGG_COLS = """
  COUNT(speed_tps) AS speed_samples, NULL AS total_cost_usd"""
 
 
-def _codex_hit_rate(cache_hit: int, total_input: int) -> float:
-    """命中率派生键: cache_hit/input*100, 空输入为 0。"""
-    return round(cache_hit / total_input * 100, 2) if total_input > 0 else 0.0
+def _codex_hit_rate(cache_hit: int, total_input: int, cache_write: int) -> float:
+    """命中率派生键: cache_hit/(input+write)*100 (cache_write 计入未命中), 空输入为 0。"""
+    denom = total_input + cache_write
+    return round(cache_hit / denom * 100, 2) if denom > 0 else 0.0
 
 
 def _codex_totals_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -3428,6 +3505,7 @@ def _codex_totals_dict(row: sqlite3.Row) -> dict[str, Any]:
     max_tps = row["max_tps"]
     total_input = int(row["total_input_tokens"] or 0)
     cache_hit = int(row["cache_hit_tokens"] or 0)
+    cw = int(row["cache_write_tokens"] or 0)
     return {
         "request_count": int(row["request_count"] or 0),
         "session_count": int(row["session_count"] or 0),
@@ -3437,7 +3515,7 @@ def _codex_totals_dict(row: sqlite3.Row) -> dict[str, Any]:
         "total_output_tokens": int(row["total_output_tokens"] or 0),
         "total_reasoning_tokens": int(row["total_reasoning_tokens"] or 0),
         "cache_hit_tokens": cache_hit,
-        "cache_write_tokens": int(row["cache_write_tokens"] or 0),
+        "cache_write_tokens": cw,
         "avg_tps": round(float(avg_tps), 2) if avg_tps is not None else None,
         "max_tps": round(float(max_tps), 2) if max_tps is not None else None,
         "speed_samples": int(row["speed_samples"] or 0),
@@ -3445,7 +3523,7 @@ def _codex_totals_dict(row: sqlite3.Row) -> dict[str, Any]:
         "total_cost_usd": None,  # Codex 费用恒 NULL, 不以 0 代替
         "cost_usd": None,
         "cost_available": False,  # 库列写死 0 (false)
-        "hit_rate": _codex_hit_rate(cache_hit, total_input),
+        "hit_rate": _codex_hit_rate(cache_hit, total_input, cw),
     }
 
 
@@ -3622,3 +3700,258 @@ def codex_last_import_at() -> Optional[str]:
     row = get_db().execute(
         "SELECT MAX(synced_at) AS last_at FROM codex_usage").fetchone()
     return row["last_at"]
+
+
+# ---------------------------------------------------------------------------
+# 统一来源明细/会话分页 (交付二 T6): usage_records / zcode_usage /
+# claudecode_usage / codex_usage 四表归一为同一查询。每段 SELECT 只做常量与
+# 原列映射, 输出 _UNIFIED_COLS 固定列序; source/model/days 筛选在归一 CTE 上
+# 用绑定参数完成, 统一 COUNT 与 ORDER BY ... LIMIT/OFFSET, 不在 Python 侧
+# 排序。CommandCode 只取 usage_records 已有明细 (charts_buckets 不当请求)。
+# ---------------------------------------------------------------------------
+
+# 对外固定列序 (四段投影一致): 记录与会话聚合共用同一输入形状
+_UNIFIED_COLS = (
+    "source, account_id, source_record_id, started_at, model, provider_id,"
+    " session_id, key_id, input_tokens, output_tokens, reasoning_tokens,"
+    " cache_read_tokens, cache_write_tokens, total_tokens, duration_ms,"
+    " speed_tps, speed_source, cost_usd, cost_available, request_count_exact"
+)
+
+
+def _unified_source_sql() -> str:
+    """四段 UNION ALL 归一投影 (仅常量/原列映射, 无 WHERE)。
+
+    - usage_records JOIN accounts: source=账号渠道, source_record_id 带账号维度
+      前缀; 无 total 列 → input+output (与 Codex 缺总量回退口径一致, 缓存/
+      reasoning 是子项不再另加); duration/speed 无列 → NULL; 费用已知。
+    - zcode_usage: input 原样 (已含缓存读); 速度无列, 按查询侧公式
+      _ZCODE_TPS_SQL 由 output/duration 现算, speed_source=duration (有值时);
+      provider_name 快照优先于 provider_id。
+    - claudecode_usage: 无 reasoning 列 → 0; speed_tps/duration_ms 原列,
+      speed_source=duration (有值时)。
+    - codex_usage: total/duration/speed/speed_source/request_count_exact 按
+      记录保留; 费用恒 NULL、cost_available=0 (库列写死 0)。
+    """
+    src = _report_channels_expr()
+    seg_records = f"""
+    SELECT {src} AS source, r.account_id AS account_id,
+           {src} || ':' || r.account_id || ':' || r.usg_id AS source_record_id,
+           r.created_at AS started_at, r.model AS model, r.provider AS provider_id,
+           r.session_id AS session_id, r.key_id AS key_id,
+           r.input_tokens AS input_tokens, r.output_tokens AS output_tokens,
+           r.reasoning_tokens AS reasoning_tokens,
+           r.cache_read_tokens AS cache_read_tokens,
+           (r.cache_write_5m_tokens + r.cache_write_1h_tokens) AS cache_write_tokens,
+           (r.input_tokens + r.output_tokens) AS total_tokens,
+           NULL AS duration_ms, NULL AS speed_tps, NULL AS speed_source,
+           r.cost_usd AS cost_usd, 1 AS cost_available, 1 AS request_count_exact
+    FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"""
+    seg_zcode = f"""
+    SELECT 'zcode' AS source, NULL AS account_id,
+           'zcode:' || z.id AS source_record_id,
+           z.started_at AS started_at, z.model_id AS model,
+           COALESCE(NULLIF(z.provider_name, ''), z.provider_id) AS provider_id,
+           z.session_id AS session_id, NULL AS key_id,
+           z.input_tokens AS input_tokens, z.output_tokens AS output_tokens,
+           z.reasoning_tokens AS reasoning_tokens,
+           z.cache_read_tokens AS cache_read_tokens,
+           z.cache_write_tokens AS cache_write_tokens,
+           z.total_tokens AS total_tokens, z.duration_ms AS duration_ms,
+           z.row_tps AS speed_tps,
+           CASE WHEN z.row_tps IS NOT NULL THEN 'duration' END AS speed_source,
+           z.cost_raw / 1e8 AS cost_usd, 1 AS cost_available, 1 AS request_count_exact
+    FROM (SELECT z0.*, ({_ZCODE_TPS_SQL}) AS row_tps FROM zcode_usage z0) z"""
+    seg_cc = """
+    SELECT 'claudecode' AS source, NULL AS account_id,
+           'claudecode:' || c.id AS source_record_id,
+           c.started_at AS started_at, c.model AS model, c.channel AS provider_id,
+           c.session_id AS session_id, NULL AS key_id,
+           c.input_tokens AS input_tokens, c.output_tokens AS output_tokens,
+           0 AS reasoning_tokens, c.cache_read_tokens AS cache_read_tokens,
+           c.cache_write_tokens AS cache_write_tokens,
+           c.total_tokens AS total_tokens, c.duration_ms AS duration_ms,
+           c.speed_tps AS speed_tps,
+           CASE WHEN c.speed_tps IS NOT NULL THEN 'duration' END AS speed_source,
+           c.cost_raw / 1e8 AS cost_usd, 1 AS cost_available, 1 AS request_count_exact
+    FROM claudecode_usage c"""
+    seg_codex = """
+    SELECT 'codex' AS source, NULL AS account_id, x.id AS source_record_id,
+           x.started_at AS started_at, x.model AS model,
+           x.provider_id AS provider_id, x.session_id AS session_id, NULL AS key_id,
+           x.input_tokens AS input_tokens, x.output_tokens AS output_tokens,
+           x.reasoning_tokens AS reasoning_tokens,
+           x.cache_read_tokens AS cache_read_tokens,
+           x.cache_write_tokens AS cache_write_tokens,
+           x.total_tokens AS total_tokens, x.duration_ms AS duration_ms,
+           x.speed_tps AS speed_tps, x.speed_source AS speed_source,
+           NULL AS cost_usd, 0 AS cost_available,
+           x.request_count_exact AS request_count_exact
+    FROM codex_usage x"""
+    return (seg_records + "\n UNION ALL " + seg_zcode
+            + "\n UNION ALL " + seg_cc + "\n UNION ALL " + seg_codex)
+
+
+def _unified_filter(source: str, model: Optional[str],
+                    days: Optional[int]) -> tuple[str, list[Any]]:
+    """归一 CTE 上的绑定参数筛选: source=all 不过滤; days 沿用明细页滚动
+    N 天旧义与 365 上限 (Codex period 专属汇总仍走自然日, 不在此处)。"""
+    where: list[str] = []
+    params: list[Any] = []
+    if source != "all":
+        where.append("source = ?")
+        params.append(source)
+    if model:
+        where.append("model = ?")
+        params.append(model)
+    if days:
+        where.append("datetime(started_at) >= datetime('now', ?)")
+        params.append(f"-{max(1, min(int(days), 365))} days")
+    return ("WHERE " + " AND ".join(where)) if where else "", params
+
+
+def unified_records_page(source: str, page: int = 1, page_size: int = 20,
+                         model: Optional[str] = None, days: Optional[int] = None
+                         ) -> tuple[list[dict[str, Any]], int]:
+    """统一来源明细分页, 返回 (records, total)。
+
+    source=all 跨所有持久化来源与全部账号 (不随活跃账号变化); 单一来源跨该
+    来源全部账号。稳定排序 started_at DESC, source ASC, source_record_id ASC,
+    LIMIT/OFFSET 在 SQL 最后。本地来源 key_name 由 server 层按 key_names 回填,
+    Codex/本地来源无 key 行 key_name 保留 NULL。
+    """
+    page = max(1, page)
+    page_size = max(1, min(page_size, 100))
+    where, params = _unified_filter(source, model, days)
+    unified = _unified_source_sql()
+    conn = get_db()
+    total = int(conn.execute(
+        f"SELECT COUNT(*) AS c FROM ({unified}) {where}", params).fetchone()["c"])
+    rows = conn.execute(
+        f"""SELECT {_UNIFIED_COLS} FROM ({unified}) {where}
+            ORDER BY started_at DESC, source ASC, source_record_id ASC
+            LIMIT ? OFFSET ?""",
+        params + [page_size, (page - 1) * page_size],
+    ).fetchall()
+    records = [
+        {
+            "source": r["source"],
+            "source_record_id": r["source_record_id"],
+            "account_id": r["account_id"],
+            "started_at": r["started_at"],
+            "model": r["model"],
+            "provider_id": r["provider_id"],
+            "session_id": r["session_id"],
+            "key_id": r["key_id"],
+            "key_name": None,
+            "input_tokens": int(r["input_tokens"] or 0),
+            "output_tokens": int(r["output_tokens"] or 0),
+            "reasoning_tokens": int(r["reasoning_tokens"] or 0),
+            "cache_read_tokens": int(r["cache_read_tokens"] or 0),
+            "cache_write_tokens": int(r["cache_write_tokens"] or 0),
+            "total_tokens": int(r["total_tokens"] or 0),
+            "duration_ms": r["duration_ms"],
+            "speed_tps": r["speed_tps"],
+            "speed_source": r["speed_source"],
+            "cost_usd": r["cost_usd"],
+            "cost_available": bool(r["cost_available"]),
+            "request_count_exact": bool(r["request_count_exact"]),
+        }
+        for r in rows
+    ]
+    return records, total
+
+
+def unified_models(source: str, days: Optional[int] = None) -> list[str]:
+    """统一来源模型下拉: 归一 CTE 上分页前 distinct (不只取本页模型)。"""
+    where, params = _unified_filter(source, None, days)
+    rows = get_db().execute(
+        f"SELECT DISTINCT model FROM ({_unified_source_sql()}) {where} ORDER BY model",
+        params,
+    ).fetchall()
+    return [r["model"] for r in rows]
+
+
+def unified_sessions_page(source: str, page: int = 1, page_size: int = 10,
+                          model: Optional[str] = None, days: Optional[int] = None
+                          ) -> tuple[list[dict[str, Any]], int]:
+    """统一来源会话分页: 归一 CTE 上按 (source, account_id, 会话键) 生成
+    group_id 后分组 SUM/COUNT, 同过滤计算总组数, 返回 (records, total)。
+
+    会话键沿用各来源旧规则: session_id 优先; 空会话按该来源旧 key_id 规则
+    (opencode), 无 key 时用记录 ID 兜底, 防止所有本地无会话记录混为一组;
+    显示 session_id 保留原值, 另回 group_id。聚合口径与 Codex 聚合及现有
+    hit_rate 一致: uncached_input=MAX(input-cache_read,0)、cache_hit=cache_read。
+    费用 SUM 忽略 NULL, 无已知值返回 NULL, 混合会话标 cost_partial; 平均速度
+    只用有效行 (AVG 不补 0)。
+    """
+    page = max(1, page)
+    page_size = max(1, min(page_size, 50))
+    where, params = _unified_filter(source, model, days)
+    session_key = (
+        "CASE WHEN session_id IS NOT NULL AND session_id != '' THEN session_id "
+        "WHEN key_id IS NOT NULL AND key_id != '' THEN key_id ELSE source_record_id END"
+    )
+    group_id = f"source || ':' || COALESCE(account_id, '') || ':' || {session_key}"
+    unified = _unified_source_sql()
+    conn = get_db()
+    total = int(conn.execute(
+        f"""SELECT COUNT(*) AS c FROM (
+                SELECT {group_id} AS g FROM ({unified}) {where} GROUP BY g)""",
+        params,
+    ).fetchone()["c"])
+    rows = conn.execute(
+        f"""SELECT {group_id} AS group_id,
+               MIN(source) AS source, MAX(session_id) AS session_id,
+               MAX(account_id) AS account_id, MAX(key_id) AS key_id,
+               MAX(started_at) AS started_at,
+               COUNT(*) AS request_count,
+               MIN(request_count_exact) AS request_count_exact,
+               SUM(total_tokens) AS total_tokens,
+               SUM(input_tokens) AS total_input_tokens,
+               SUM(MAX(input_tokens - cache_read_tokens, 0)) AS uncached_input_tokens,
+               SUM(output_tokens) AS total_output_tokens,
+               SUM(reasoning_tokens) AS total_reasoning_tokens,
+               SUM(cache_read_tokens) AS cache_hit_tokens,
+               SUM(cache_write_tokens) AS cache_write_tokens,
+               AVG(speed_tps) AS avg_tps,
+               COUNT(speed_tps) AS speed_samples,
+               SUM(cost_usd) AS total_cost_usd,
+               COUNT(cost_usd) AS cost_known
+        FROM ({unified}) {where}
+        GROUP BY group_id
+        ORDER BY started_at DESC, source ASC, group_id ASC
+        LIMIT ? OFFSET ?""",
+        params + [page_size, (page - 1) * page_size],
+    ).fetchall()
+    records = []
+    for r in rows:
+        known = int(r["cost_known"] or 0)
+        count = int(r["request_count"] or 0)
+        cost = r["total_cost_usd"]
+        records.append({
+            "source": r["source"],
+            "group_id": r["group_id"],
+            "source_record_id": r["group_id"],
+            "session_id": r["session_id"],
+            "account_id": r["account_id"],
+            "key_id": r["key_id"],
+            "key_name": None,
+            "started_at": r["started_at"],
+            "last_at": r["started_at"],
+            "request_count": count,
+            "request_count_exact": bool(r["request_count_exact"]),
+            "total_tokens": int(r["total_tokens"] or 0),
+            "total_input_tokens": int(r["total_input_tokens"] or 0),
+            "uncached_input_tokens": int(r["uncached_input_tokens"] or 0),
+            "total_output_tokens": int(r["total_output_tokens"] or 0),
+            "total_reasoning_tokens": int(r["total_reasoning_tokens"] or 0),
+            "cache_hit_tokens": int(r["cache_hit_tokens"] or 0),
+            "cache_write_tokens": int(r["cache_write_tokens"] or 0),
+            "avg_tps": round(float(r["avg_tps"]), 2) if r["avg_tps"] is not None else None,
+            "speed_samples": int(r["speed_samples"] or 0),
+            "total_cost_usd": round(float(cost), 6) if cost is not None else None,
+            "cost_available": known > 0,
+            "cost_partial": 0 < known < count,
+        })
+    return records, total

@@ -756,7 +756,7 @@ def zcode_import_async() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Claude Code 本地用量导入编排 (enabled_at → 采集 → 逐批导入+推进偏移)
+# Claude Code 本地用量导入编排 (enabled_at → 采集 → 逐批导入+推进偏移 → 差集补录)
 # ---------------------------------------------------------------------------
 
 _cc_import_lock = threading.Lock()  # 防 claude 导入自身重入 (锁顺序恒定 _sync_lock → 本锁)
@@ -764,13 +764,14 @@ _cc_sync_error: str = ""  # 最近一次导入错误文案 (成功清空)
 
 
 def _sync_claude_local() -> int:
-    """读启用时刻 → 采集 → 逐批导入+推进偏移; 返回新增行数, 异常不外抛.
+    """读启用时刻 → 采集 → 逐批导入+推进偏移 → 差集补录; 返回新增行数, 异常不外抛.
 
     锁: 调用方负责拿 ``_cc_import_lock`` (本函数自身不碰任何锁, 也严禁
     内部 acquire ``_sync_lock`` — threading.Lock 不可重入).
     enabled_at 为 0 时取当前时刻写入 (= 集成启用时刻, 锁内执行无竞态).
     行落库与进度写为两步提交, 无跨表事务; 两步之间崩溃则下次重读该文件,
-    去重键幂等兜底.
+    去重键幂等兜底. 末尾差集补录 (cc-switch 代理日志中 JSONL 未落盘的调用,
+    见 _sync_cc_proxy_gap): 失败降级只记文案, 不影响 JSONL 主流程.
     """
     global _cc_sync_error
     try:
@@ -781,17 +782,65 @@ def _sync_claude_local() -> int:
         progress = db.get_claude_file_progress_all()
         batches = claudecode_api.import_incremental(enabled_at, progress)
         if not batches:
-            return 0  # 空采集短路径: 不清错误、不推进进度
+            # 空采集短路径: JSONL 无增量, 差集补录照跑 (不清既有错误)
+            gap_inserted, gap_error = _sync_cc_proxy_gap()
+            if gap_error:
+                _cc_sync_error = gap_error
+            return gap_inserted
         pricing = _load_model_pricing()  # 预载定价表, 批量导入只加载一次
         inserted = 0
         for batch in batches:
             inserted += db.import_claudecode_usage(batch["rows"], pricing)
             db.save_claude_file_progress(batch["path"], batch["new_offset"], batch["size"])
-        _cc_sync_error = ""
-        return inserted
+        gap_inserted, gap_error = _sync_cc_proxy_gap(pricing)
+        _cc_sync_error = gap_error or ""  # JSONL 成功: 补录错误(若有)可见, 否则清空
+        return inserted + gap_inserted
     except Exception as exc:  # noqa: BLE001 失败只记文案, 不影响 opencode/bai 同步
         _cc_sync_error = str(exc)
         return 0
+
+
+def _sync_cc_proxy_gap(
+    pricing: list[dict[str, Any]] | None = None,
+) -> tuple[int, Optional[str]]:
+    """cc-switch 代理差集补录: 只读拉取 → id 直连对账 → 盖 channel 章 → 落库.
+
+    对账基准 = claudecode_usage.dedupe_key 全集 (库查询, 不依赖本次增量
+    rows); 差集行落库前照 JSONL 行同口径盖 channel 章 (merge_proxy_gap 保持
+    纯函数产 None, 判定所需 enabled_at/base_url 在此读取); 水位 = 本批拉取
+    行最大 created_at (Unix 秒), 仅拉取成功且落库完成后才推进 (导入异常不
+    推进, 下轮重拉由 msg id 键"总量大者胜"upsert 幂等吸收). cc-switch.db
+    不存在 → 静默降级 (错误 None, 未装 cc-switch 属正常形态); 打开/查询异常
+    → 错误文案返回供调用方记 _cc_sync_error, 不中断不崩, JSONL 数据不受
+    影响.
+    """
+    try:
+        since = db.get_cc_proxy_watermark()
+        baseline = {r["dedupe_key"] for r in db.get_db().execute(
+            "SELECT dedupe_key FROM claudecode_usage")}
+        gap_rows, watermark, error = claudecode_api.collect_proxy_gap_rows(
+            baseline, since)
+        inserted = 0
+        if gap_rows:
+            # channel 盖章: 差集行与 JSONL 行共用键空间与渠道统计, 判定口径
+            # 必须一致 — 照 _process_file 同款 (enabled_at + 每轮 base_url
+            # 快照, 按 started_at 反解 epoch ms; resolve_channel 不依赖
+            # project_path, 差集行无路径不影响判定); model 缺失按 "" 归一
+            # (同 import 层口径, 启用后行不走模型名启发, 不受影响)
+            enabled_at = db.get_claudecode_enabled_at()
+            base_url = claudecode_api.read_base_url()
+            for row in gap_rows:
+                row["channel"] = claudecode_api.resolve_channel(
+                    row["model"] or "",
+                    claudecode_api._parse_ts_ms(row["started_at"]) or 0,
+                    enabled_at, base_url,
+                )
+            inserted = db.import_claudecode_usage(gap_rows, pricing)
+        if watermark > since:
+            db.save_cc_proxy_watermark(watermark)  # 落库完成后才推进
+        return inserted, error
+    except Exception as exc:  # noqa: BLE001 补录异常降级, 不影响 JSONL 主流程
+        return 0, str(exc)
 
 
 def claude_import_async() -> None:
@@ -1291,14 +1340,16 @@ def _report_channels_response(range_: str) -> dict[str, Any]:
         dsh = dsh_api.get_dsh_usage()
         if dsh.get("found"):
             t = dsh.get("today") or {}
-            rows = rows + [{"channel": "dsh", "tokens": (t.get("input") or 0) + (t.get("output") or 0)
-                            + (t.get("reasoning") or 0),
-                            "input": t.get("input") or 0, "output": t.get("output") or 0,
-                            "cache_read": t.get("cache") or 0, "cache_write": 0,
-                            "reasoning": t.get("reasoning") or 0, "requests": 0, "cost": 0.0,
-                            "cost_available": False, "cost_partial": False,
-                            "request_count_exact": False,
-                            "data_since": None, "estimated": False}]
+            # 明细行与 db.report_channels「当前范围无数据不出行」对齐; summary 保留 (渠道 tab 接入可见性)
+            if (t.get("input") or 0) + (t.get("output") or 0) + (t.get("reasoning") or 0) > 0:
+                rows = rows + [{"channel": "dsh", "tokens": (t.get("input") or 0) + (t.get("output") or 0)
+                                + (t.get("reasoning") or 0),
+                                "input": t.get("input") or 0, "output": t.get("output") or 0,
+                                "cache_read": t.get("cache") or 0, "cache_write": 0,
+                                "reasoning": t.get("reasoning") or 0, "requests": 0, "cost": 0.0,
+                                "cost_available": False, "cost_partial": False,
+                                "request_count_exact": False,
+                                "data_since": None, "estimated": False}]
             summary = summary + [{"channel": "dsh", "accounts": 0}]
     return {"rows": rows, "summary": summary}
 
@@ -1681,10 +1732,28 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             days = max(1, min(int(days_raw), 365)) if days_raw else None
         except ValueError:
             days = None
-        records, total = db.usage_records_page(page, page_size, model, days)
+        # T6: 显式 source 走四表统一查询; 缺省保持旧函数旧行为 (API 兼容)
+        source = query.get("source", [None])[0]
+        if source is not None and source not in {
+                "all", "opencode", "bai", "commandcode", "zcode", "claudecode", "codex"}:
+            _json_response(handler, {"error": "invalid source"}, 400)
+            return
+        if source in ("codex", "all"):   # 统一路由属 Codex 触发点 (防抖, 不等待)
+            _maybe_trigger_codex_import()
         key_names = db.get_key_names()
-        for rec in records:
-            rec["key_name"] = key_names.get(rec.get("key_id") or "", "")
+        if source is None:
+            records, total = db.usage_records_page(page, page_size, model, days)
+            for rec in records:
+                rec["key_name"] = key_names.get(rec.get("key_id") or "", "")
+            models = db.list_models()
+            filter_info: dict[str, Any] = {"model": model, "days": days}
+        else:
+            records, total = db.unified_records_page(source, page, page_size, model, days)
+            for rec in records:
+                if rec.get("key_id"):   # 仅本地有 key 行回填; Codex key_name 保留 NULL
+                    rec["key_name"] = key_names.get(rec["key_id"], "")
+            models = db.unified_models(source, days)
+            filter_info = {"source": source, "model": model, "days": days}
         _json_response(
             handler,
             {
@@ -1692,8 +1761,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                 "total": total,
                 "page": page,
                 "page_size": page_size,
-                "models": db.list_models(),
-                "filter": {"model": model, "days": days},
+                "models": models,
+                "filter": filter_info,
             },
         )
         return
@@ -1775,13 +1844,29 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             days = max(1, min(int(days_raw), 365)) if days_raw else None
         except ValueError:
             days = None
-        records, total = db.session_stats_page(page, page_size, days)
+        model = query.get("model", [""])[0] or None   # T6: 模型筛选同步应用会话表
+        source = query.get("source", [None])[0]
+        if source is not None and source not in {
+                "all", "opencode", "bai", "commandcode", "zcode", "claudecode", "codex"}:
+            _json_response(handler, {"error": "invalid source"}, 400)
+            return
+        if source in ("codex", "all"):
+            _maybe_trigger_codex_import()
         key_names = db.get_key_names()
-        for rec in records:
-            rec["key_name"] = key_names.get(rec.get("key_id") or "", "")
-            # 无 session 的行分组键为 key_id, 前端据此显示"未归属"
-            if rec["session_id"] and rec["session_id"].startswith("key_"):
-                rec["session_id"] = ""
+        if source is None:
+            records, total = db.session_stats_page(page, page_size, days)
+            for rec in records:
+                rec["key_name"] = key_names.get(rec.get("key_id") or "", "")
+                # 无 session 的行分组键为 key_id, 前端据此显示"未归属"
+                if rec["session_id"] and rec["session_id"].startswith("key_"):
+                    rec["session_id"] = ""
+            filter_info = {"days": days}
+        else:
+            records, total = db.unified_sessions_page(source, page, page_size, model, days)
+            for rec in records:
+                if rec.get("key_id"):
+                    rec["key_name"] = key_names.get(rec["key_id"], "")
+            filter_info = {"source": source, "model": model, "days": days}
         _json_response(
             handler,
             {
@@ -1789,7 +1874,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                 "total": total,
                 "page": page,
                 "page_size": page_size,
-                "filter": {"days": days},
+                "filter": filter_info,
             },
         )
         return
@@ -1821,6 +1906,11 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
+        # parse_qs 默认丢弃空值参数 (?source= 整体消失 → usage 路由误走 legacy):
+        # 按段精确恢复 source 空值, 使 ?source= 与 ?source=invalid 一致按非法 400
+        # (仅此参数, 不改全局空值参数语义; subsource= 等同形段不误伤)
+        if "source" not in query and "source=" in parsed.query.split("&"):
+            query["source"] = [""]
         if path.startswith("/api/"):
             try:
                 _handle_api(self, path, query)

@@ -377,7 +377,7 @@ def test_four_layer_aggregates(tmp_db, zcode_source, monkeypatch):
     ]
     m1, m2 = models
     assert m1["provider_name"] == "Plan A New"
-    assert m1["hit_rate"] == 45.45                 # 50/(50+60)*100 = cache/input
+    assert m1["hit_rate"] == 41.67                 # 50/(50+60+10)*100 = cache/(input+cache_write)
     assert m1["total_input_tokens"] == 120
     assert m2["hit_rate"] == 0.0                   # 0/(0+20)*100
 

@@ -26,7 +26,10 @@ def api_call(monkeypatch):
     def call(url, method="GET"):
         captured.clear()
         parsed = urlsplit(url)
-        server._handle_api(SimpleNamespace(command=method), parsed.path, parse_qs(parsed.query))
+        # keep_blank_values 对齐真实入口 do_GET 的空值 source 恢复 (fix round 1):
+        # 否则 ?source= 在夹具内被丢弃, 无法覆盖 usage 路由的非法 source=400 校验
+        server._handle_api(SimpleNamespace(command=method), parsed.path,
+                           parse_qs(parsed.query, keep_blank_values=True))
         return dict(captured)
     return call
 
@@ -512,3 +515,104 @@ def test_local_access_without_login(tmp_codex_db, codex_row, monkeypatch, api_ca
     sync_resp = api_call("/api/sync?mode=incremental", method="POST")
     assert sync_resp["status"] == 401
     assert api_call("/api/codex/summary?range=today")["status"] == 200
+
+
+# ---------------------------------------------------------------------------
+# 7. 统一来源明细/会话路由 (T6): source 分派 / 统一分页 / 会话归并
+# ---------------------------------------------------------------------------
+
+
+def test_unified_route_not_active_account(tmp_codex_db, codex_row, monkeypatch, api_call):
+    monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
+    db.import_codex_usage([codex_row()])
+    missing = api_call("/api/usage/records")
+    assert missing["data"]["total"] == 0
+    explicit = api_call("/api/usage/records?source=codex")
+    assert explicit["data"]["total"] == 1
+    row = explicit["data"]["records"][0]
+    assert row["source"] == "codex" and row["key_name"] is None
+    assert row["total_tokens"] == 130 and row["cost_usd"] is None
+    assert api_call("/api/usage/records?source=invalid")["status"] == 400
+    # fix round 1: 空值 source 在 parse_qs 默认下被丢弃而误走 legacy; 空串与非法同样 400
+    assert api_call("/api/usage/records?source=")["status"] == 400
+    assert api_call("/api/usage/sessions?source=")["status"] == 400
+    assert api_call("/api/usage/sessions?source=invalid")["status"] == 400
+
+
+def test_unified_paging_and_sessions(tmp_codex_db, codex_row, monkeypatch, api_call):
+    monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
+    db.import_codex_usage([codex_row("s:" + str(i)) for i in range(1, 10)])
+    a = api_call("/api/usage/records?source=all&page=1&page_size=7")["data"]
+    b = api_call("/api/usage/records?source=all&page=2&page_size=7")["data"]
+    assert a["total"] == b["total"] == 9
+    assert len({r["source_record_id"] for r in a["records"] + b["records"]}) == 9
+    sessions = api_call("/api/usage/sessions?source=codex")["data"]
+    assert sessions["total"] == 1 and sessions["records"][0]["total_tokens"] == 1170
+
+
+# ---------------------------------------------------------------------------
+# 8. 数据勾稽 (T8 交付二): 同一数据集上 Codex 各层口径一致
+# (totals=channels合计=models合计=report windows=hourly buckets=统一记录全页合计;
+#  同 source 会话合计=明细合计; 全渠道新增 Codex 前后 delta=Codex total。
+#  DSH 只有当日快照, 注入 absent 使其不参与明细来源勾稽; 触发点已 stub = 导入空闲)
+# ---------------------------------------------------------------------------
+
+
+def test_codex_reconciliation_layers(tmp_codex_db, codex_row, monkeypatch, api_call):
+    monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
+    _mock_dsh_absent(monkeypatch)
+    _no_source(tmp_codex_db, monkeypatch)
+    db.import_codex_usage([codex_row(f"s:{i}") for i in range(1, 10)])
+    totals = 1170   # 9 x 130
+    assert db.codex_totals("all")["total_tokens"] == totals
+    assert sum(c["total_tokens"] for c in db.codex_channel_stats("all")) == totals
+    assert sum(m["total_tokens"] for m in db.codex_model_stats("all")) == totals
+    win = api_call("/api/report/windows?channel=codex")["data"]
+    assert win["today"]["tokens"] == db.codex_totals("today")["total_tokens"] == totals
+    hourly = api_call("/api/report/hourly?date=today&channel=codex")["data"]
+    assert sum(b["total_tokens"] for b in hourly["buckets"]) == totals
+    # 统一记录全页合计 (source=codex, 7 条/页翻页, source_record_id 跨页不重复)
+    seen, rec_sum, page = [], 0, 1
+    while True:
+        d = api_call(f"/api/usage/records?source=codex&page={page}&page_size=7")["data"]
+        seen += [r["source_record_id"] for r in d["records"]]
+        rec_sum += sum(r["total_tokens"] for r in d["records"])
+        if len(seen) >= d["total"]:
+            break
+        page += 1
+    assert d["total"] == len(set(seen)) == 9
+    assert rec_sum == totals
+    sessions = api_call("/api/usage/sessions?source=codex")["data"]
+    assert sessions["total"] == 1
+    assert sessions["records"][0]["total_tokens"] == rec_sum == totals
+
+
+def test_codex_delta_in_all_channel_and_sessions(tmp_codex_db, codex_row, monkeypatch,
+                                                 api_call):
+    """全渠道聚合新增 Codex 前后 delta == Codex total; source=all 会话合计
+    == source=all 明细合计 (opencode 无会话记录单独成组, 不与 codex 合并)。"""
+    monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
+    _mock_dsh_absent(monkeypatch)
+    import datetime as _dt
+    aid = db.add_account("tok-oc", "ws-oc")
+    noon = (_dt.datetime.now().astimezone()
+            .replace(hour=12, minute=0, second=0, microsecond=0)
+            .astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    db.insert_usage_records([{
+        "usg_id": "u-delta", "created_at": noon, "model": "m", "provider": "anthropic",
+        "input_tokens": 10, "output_tokens": 20, "reasoning_tokens": 0,
+        "cache_read_tokens": 0, "cache_write_5m_tokens": 0, "cache_write_1h_tokens": 0,
+        "cost_raw": 0, "cost_usd": 0.5, "key_id": None, "session_id": None, "plan": None,
+    }], aid)
+    url = "/api/dashboard?scope=all&range=today"
+    before = api_call(url)["data"]["totals"]["total_tokens"]
+    db.import_codex_usage([codex_row(f"s:{i}") for i in range(1, 10)])
+    after = api_call(url)["data"]["totals"]["total_tokens"]
+    assert after - before == db.codex_totals("all")["total_tokens"] == 1170
+    # source=all 单页取全 (10 条): 明细合计 == 会话合计 (codex 组 1170 + opencode 组 30)
+    recs = api_call("/api/usage/records?source=all&page=1&page_size=100")["data"]
+    assert recs["total"] == 10
+    rec_sum = sum(r["total_tokens"] for r in recs["records"])
+    ses = api_call("/api/usage/sessions?source=all&page=1&page_size=50")["data"]
+    assert ses["total"] == 2
+    assert sum(s["total_tokens"] for s in ses["records"]) == rec_sum == 1200

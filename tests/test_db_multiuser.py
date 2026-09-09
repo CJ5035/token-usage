@@ -358,3 +358,16 @@ def test_bai_dedupe_key_scoped_to_bai_only(tmp_db):
     rows = {r["id"]: r["source"] for r in db.list_accounts()}
     assert rows[op] == "opencode" and rows[b] == "bai"
     assert db.count_accounts() == 3                              # 种子 + opencode + bai
+
+
+# ---------------------------------------------------------------------------
+# Codex 生命周期回归 (task-6): 账号增删/凭证清理不影响 Codex 本地镜像
+# ---------------------------------------------------------------------------
+
+
+def test_codex_survives_account_lifecycle(tmp_codex_db, codex_row):
+    db.import_codex_usage([codex_row()])
+    aid = db.add_account("t", "w")
+    db.clear_account()
+    db.delete_account(aid)
+    assert db.codex_totals("all")["total_tokens"] == 130

@@ -5,11 +5,14 @@ fixture 模式照 test_zcode_sync.py 的 tmp_db.
 """
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app import claudecode_api
 from app import db
+from app import server
 
 # 手工定价表 (每百万 token 的 USD 价), 不依赖本机真实定价文件:
 # cost_raw = round((inp*1 + out*3 + cr*0.2 + cw*0.5) / 1e6 * 1e8)
@@ -415,3 +418,287 @@ def test_empty_aggregates(tmp_db):
     assert db.claudecode_daily(7) == []
     assert db.claudecode_channel_stats("30d") == []
     assert db.claudecode_model_stats("30d") == []
+
+
+# ---------------------------------------------------------------------------
+# 11. cc-switch 代理差集对账 (merge_proxy_gap 纯函数; 采集出口集成属后续任务)
+# ---------------------------------------------------------------------------
+
+# created_at Unix 秒基准: 1757255520 = 2025-09-07T14:32:00.000Z (UTC)
+PROXY_TS = 1_757_255_520
+PROXY_TS_ISO = "2025-09-07T14:32:00.000Z"
+
+
+def _proxy_row(**overrides):
+    """构造一条 cc-switch proxy 记录 (键名逐字照 proxy_request_logs 采集契约)."""
+    values = {
+        "request_id": "session:msg_gap_1",
+        "session_id": "sess-proxy",
+        "model": "glm-5.3",
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "cache_read_tokens": 30,
+        "cache_creation_tokens": 4,
+        "total_cost_usd": 0.0000123,
+        "created_at": PROXY_TS,
+        "status_code": 200,
+        "data_source": "proxy",
+        "app_type": "claude",
+    }
+    values.update(overrides)
+    return values
+
+
+def test_proxy_gap_id_match_skipped():
+    """场景 1: proxy msg id 已在 jsonl_keys → 同一次调用, 不产出."""
+    rows = claudecode_api.merge_proxy_gap({"msg_gap_1"}, [_proxy_row()])
+    assert rows == []
+
+
+def test_proxy_gap_row_built_for_missing_id():
+    """场景 2: 差集补充 → 产出行, dedupe_key 无前缀/四项/total/started_at 正确;
+    token 四项 NULL→0, 行内无 cost 键 (import 层按定价表自算)."""
+    rows = claudecode_api.merge_proxy_gap({"msg_other"}, [
+        _proxy_row(request_id="session:msg_gap_1"),
+        _proxy_row(request_id="session:msg_null_tok", input_tokens=None,
+                   output_tokens=None, cache_read_tokens=None,
+                   cache_creation_tokens=None),
+    ])
+    assert len(rows) == 2
+    row = rows[0]
+    assert row["dedupe_key"] == "msg_gap_1"   # 不加 session: 前缀 (共用键空间)
+    assert row["session_id"] == "sess-proxy"
+    assert row["project_path"] is None
+    assert row["model"] == "glm-5.3"
+    assert row["channel"] is None             # channel 判定不在本函数做
+    assert row["started_at"] == PROXY_TS_ISO
+    assert (row["input_tokens"], row["output_tokens"],
+            row["cache_read_tokens"], row["cache_write_tokens"]) == (10, 20, 30, 4)
+    assert row["total_tokens"] == 64          # 四项之和
+    assert row["duration_ms"] is None
+    assert row["speed_tps"] is None           # 快照 token 不参与速度统计
+    assert row["file_path"] == "cc-switch:proxy"
+    assert "total_cost_usd" not in row and "cost_raw" not in row
+    # NULL token → 0
+    assert (rows[1]["input_tokens"], rows[1]["output_tokens"],
+            rows[1]["cache_read_tokens"],
+            rows[1]["cache_write_tokens"]) == (0, 0, 0, 0)
+    assert rows[1]["total_tokens"] == 0
+
+
+def test_proxy_gap_filter_criteria():
+    """场景 3: 过滤口径 — app_type 非 claude / data_source 非 proxy /
+    status_code≠200 → 不产出 (末行基准对照, 证明非全跳)."""
+    rows = claudecode_api.merge_proxy_gap(set(), [
+        _proxy_row(app_type="codex"),
+        _proxy_row(data_source="api"),
+        _proxy_row(status_code=500),
+        _proxy_row(status_code=None),
+        _proxy_row(),
+    ])
+    assert len(rows) == 1
+    assert rows[0]["dedupe_key"] == "msg_gap_1"
+
+
+def test_proxy_gap_nonstandard_request_id_skipped():
+    """场景 4: request_id None/空串/裸 UUID/前缀后为空 → 不产出."""
+    rows = claudecode_api.merge_proxy_gap(set(), [
+        _proxy_row(request_id=None),
+        _proxy_row(request_id=""),
+        _proxy_row(request_id="3f2a9c1e-8b4d-4c3a-9e2f-1a2b3c4d5e6f"),
+        _proxy_row(request_id="session:"),
+    ])
+    assert rows == []
+
+
+def test_proxy_gap_same_id_on_both_sides_skipped():
+    """场景 5: 键融合自愈前置 — 同 msg id 两侧都有 (token 不同) → 差集行不
+    产出 (id 相同即跳过, JSONL 最终值为准; upsert 覆盖属 import 层既有测试)."""
+    proxy_rows = [_proxy_row(
+        request_id="session:msg_both",
+        input_tokens=1, output_tokens=2,
+        cache_read_tokens=0, cache_creation_tokens=0,
+    )]
+    assert claudecode_api.merge_proxy_gap({"msg_both"}, proxy_rows) == []
+
+
+def test_proxy_gap_started_at_unix_seconds_to_utc_iso():
+    """场景 6: created_at Unix 秒 → UTC ISO (Z 后缀, 毫秒精度, 同 JSONL 行)."""
+    rows = claudecode_api.merge_proxy_gap(
+        set(), [_proxy_row(created_at=1_725_300_000)]  # 2024-09-02T18:00:00Z
+    )
+    assert rows[0]["started_at"] == "2024-09-02T18:00:00.000Z"
+
+
+# ---------------------------------------------------------------------------
+# 12. 采集出口集成 (cc-switch 差集补录: 只读读取 → 对账 → 落库 → 水位;
+#     proxy 读取一律 monkeypatch 注入/路径重定向, 不触真 ~/.cc-switch 库)
+# ---------------------------------------------------------------------------
+
+_PROXY_COLS = ("request_id", "session_id", "model", "input_tokens",
+               "output_tokens", "cache_read_tokens", "cache_creation_tokens",
+               "total_cost_usd", "created_at", "status_code", "data_source",
+               "app_type")
+
+
+def _install_proxy_db(path, rows) -> None:
+    """临时 cc-switch 形状库 (仅采集 SQL 用到的 12 列), 供路径重定向测试."""
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """CREATE TABLE proxy_request_logs (
+               request_id TEXT, session_id TEXT, model TEXT,
+               input_tokens INTEGER, output_tokens INTEGER,
+               cache_read_tokens INTEGER, cache_creation_tokens INTEGER,
+               total_cost_usd REAL, created_at INTEGER, status_code INTEGER,
+               data_source TEXT, app_type TEXT)"""
+    )
+    conn.executemany(
+        "INSERT INTO proxy_request_logs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        [tuple(r[k] for k in _PROXY_COLS) for r in rows],
+    )
+    conn.commit()
+    conn.close()
+
+
+def _proxy_file_count() -> int:
+    return int(db.get_db().execute(
+        "SELECT COUNT(*) AS c FROM claudecode_usage WHERE file_path = 'cc-switch:proxy'"
+    ).fetchone()["c"])
+
+
+def test_proxy_gap_end_to_end_imported_and_totals_grow(tmp_db, monkeypatch):
+    """差集行端到端: 注入假 proxy 行 (monkeypatch read_proxy_rows) →
+    server._sync_cc_proxy_gap 对账落库 → totals 请求数/token 增加;
+    对账基准 = claudecode_usage 全集 (JSONL 已有 m1 跳过, 非本次增量 rows);
+    落库前盖 channel 章 (同 JSONL 行判定口径)."""
+    assert db.import_claudecode_usage([_row("m1")], PRICING) == 1  # JSONL 侧已有
+    db.save_claudecode_enabled_at((PROXY_TS - 10) * 1000)  # 启用先于差集行
+    monkeypatch.setattr(claudecode_api, "read_base_url",
+                        lambda: "relay.example.com")     # 每轮渠道快照
+    fake_rows = [
+        _proxy_row(request_id="session:m1", created_at=PROXY_TS),  # JSONL 已有 → 跳过
+        _proxy_row(request_id="session:gap_a", created_at=PROXY_TS,
+                   input_tokens=100, output_tokens=200,
+                   cache_read_tokens=0, cache_creation_tokens=0),  # total 300
+        _proxy_row(request_id="session:gap_b", created_at=PROXY_TS + 1,
+                   input_tokens=1, output_tokens=2,
+                   cache_read_tokens=3, cache_creation_tokens=4),  # total 10
+    ]
+    monkeypatch.setattr(claudecode_api, "read_proxy_rows",
+                        lambda since: (fake_rows, None))
+
+    assert server._sync_cc_proxy_gap(PRICING) == (2, None)
+
+    t = db.claudecode_totals("all")
+    assert t["request_count"] == 3                    # m1 + gap_a + gap_b
+    assert t["total_tokens"] == 355 + 300 + 10        # 665
+    r = db.get_db().execute(
+        "SELECT file_path, channel FROM claudecode_usage WHERE dedupe_key = 'gap_a'"
+    ).fetchone()
+    assert r["file_path"] == "cc-switch:proxy"        # 溯源标记
+    assert r["channel"] == "relay.example.com"        # 已盖章 (启用后 → base_url)
+    assert db.get_cc_proxy_watermark() == PROXY_TS + 1  # 本批最大 created_at
+    # 白名单外键真验证: 原始 payload 实际存了该键, 设置 API 白名单不暴露
+    assert "claudecode_proxy_watermark" in db._raw_payload(db.get_db())
+    assert "claudecode_proxy_watermark" not in db.get_settings()
+
+
+def test_proxy_gap_then_jsonl_larger_total_overwrites_tokens_keeps_channel(
+        tmp_db, monkeypatch):
+    """组合端到端: 先落差集行 (小 total, 已盖 channel 章), 再走 JSONL 落库
+    路径导入同 msg id、更大 total 的行 → token 大者胜被覆盖, channel 归属
+    列首插为准 (保持差集行盖章值, 不被打回 NULL/JSONL 侧值)."""
+    db.save_claudecode_enabled_at((PROXY_TS - 10) * 1000)
+    monkeypatch.setattr(claudecode_api, "read_base_url",
+                        lambda: "relay.example.com")
+    monkeypatch.setattr(
+        claudecode_api, "read_proxy_rows",
+        lambda since: ([_proxy_row(request_id="session:m_both",
+                                   input_tokens=10, output_tokens=20,
+                                   cache_read_tokens=30,
+                                   cache_creation_tokens=4)], None))  # total 64
+
+    assert server._sync_cc_proxy_gap(PRICING) == (1, None)
+    r = db.get_db().execute(
+        "SELECT total_tokens, channel, file_path FROM claudecode_usage"
+        " WHERE dedupe_key = 'm_both'").fetchone()
+    assert r["total_tokens"] == 64
+    assert r["channel"] == "relay.example.com"        # F1 盖章已生效
+    assert r["file_path"] == "cc-switch:proxy"
+
+    # JSONL 后到: 同 msg id、更大 total (355)、channel 不同 → token 覆盖,
+    # channel/file_path 归属列首插为准
+    assert db.import_claudecode_usage(
+        [_row("m_both", channel="官方")], PRICING) == 0   # 修订不算新增
+    r = db.get_db().execute(
+        "SELECT total_tokens, channel, file_path FROM claudecode_usage"
+        " WHERE dedupe_key = 'm_both'").fetchone()
+    assert r["total_tokens"] == 355                   # 大者胜
+    assert r["channel"] == "relay.example.com"        # 保持差集行盖章值
+    assert r["file_path"] == "cc-switch:proxy"
+
+
+def test_proxy_gap_degraded_missing_db_sync_still_succeeds(tmp_db, monkeypatch):
+    """降级: cc-switch.db 不存在 (改名验证的等价注入) → 同步成功且结果与纯
+    JSONL 一致, 不记错误 (未装 cc-switch 属正常形态); 库文件损坏 (打开失败)
+    → 仍成功完成同步, 错误文案可见, JSONL 数据不受影响."""
+    monkeypatch.setattr(server, "_cc_sync_error", "")
+    monkeypatch.setattr(db, "get_claudecode_enabled_at", lambda: 1_000)
+    monkeypatch.setattr(db, "get_claude_file_progress_all", lambda: {})
+    monkeypatch.setattr(server, "_load_model_pricing", lambda: PRICING)
+    monkeypatch.setattr(claudecode_api, "import_incremental",
+                        lambda enabled_at, progress, force=False: [
+                            {"path": "/p/a.jsonl", "rows": [_row("m_jsonl")],
+                             "new_offset": 10, "size": 10}])
+    monkeypatch.setattr(claudecode_api, "CC_SWITCH_DB_PATH",
+                        tmp_db / "cc-switch" / "missing.db")
+
+    assert server._sync_claude_local() == 1           # JSONL 行照常落库
+    assert server._cc_sync_error == ""                # 缺文件静默降级不报错
+    t = db.claudecode_totals("all")
+    assert t["request_count"] == 1 and t["total_tokens"] == 355  # 纯 JSONL 口径
+    assert _proxy_file_count() == 0
+
+    # 打开/查询失败 (坏库文件) → 记错误文案, 不中断不崩
+    bad = tmp_db / "bad.db"
+    bad.write_bytes(b"not a sqlite database")
+    monkeypatch.setattr(claudecode_api, "CC_SWITCH_DB_PATH", bad)
+    monkeypatch.setattr(claudecode_api, "import_incremental",
+                        lambda enabled_at, progress, force=False: [])
+    assert server._sync_claude_local() == 0
+    assert server._cc_sync_error                      # 错误已记录
+    assert db.claudecode_totals("all")["request_count"] == 1
+
+
+def test_proxy_gap_watermark_advances_and_skips_refetched_batch(tmp_db, monkeypatch):
+    """水位: 首刷 since=0 全量拉取并落库 → 水位推进为本批最大 created_at
+    (含被过滤行 — 已拉取即推进); 第二次调用以水位为 since, 同批行不再进入
+    对账, 库内差集行不重复."""
+    proxy_rows = [
+        _proxy_row(request_id="session:w1", created_at=PROXY_TS),
+        _proxy_row(request_id="session:w2", created_at=PROXY_TS + 5,
+                   input_tokens=7, output_tokens=8,
+                   cache_read_tokens=9, cache_creation_tokens=1),
+        _proxy_row(request_id="session:w3", created_at=PROXY_TS + 5,
+                   status_code=500),                  # 过滤口径: 不产出差集行
+    ]
+    proxy_db = tmp_db / "cc-switch.db"
+    _install_proxy_db(proxy_db, proxy_rows)
+    monkeypatch.setattr(claudecode_api, "CC_SWITCH_DB_PATH", proxy_db)
+    seen_since = []
+    real_read = claudecode_api.read_proxy_rows
+
+    def spy_read(since):
+        seen_since.append(since)
+        return real_read(since)
+
+    monkeypatch.setattr(claudecode_api, "read_proxy_rows", spy_read)
+
+    assert server._sync_cc_proxy_gap(PRICING) == (2, None)   # w3 失败请求不计
+    assert db.get_cc_proxy_watermark() == PROXY_TS + 5
+    assert seen_since == [0]
+    assert _proxy_file_count() == 2
+
+    assert server._sync_cc_proxy_gap(PRICING) == (0, None)   # 同批不再产出
+    assert seen_since == [0, PROXY_TS + 5]                   # 第二次以水位为 since
+    assert _proxy_file_count() == 2                          # 不重复落库

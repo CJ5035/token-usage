@@ -30,6 +30,9 @@ def claude_state(monkeypatch):
     """复位 server 的 claude 模块级状态, 隔离用例间污染."""
     monkeypatch.setattr(server, "_cc_sync_error", "")
     monkeypatch.setattr(server, "_cc_last_import_trigger", 0.0)
+    # 差集补录默认桩掉: 编排用例不触真 ~/.cc-switch/cc-switch.db (补录行为
+    # 由 test_claudecode_sync.py 第 12 节集成用例覆盖)
+    monkeypatch.setattr(server, "_sync_cc_proxy_gap", lambda *a, **k: (0, None))
 
 
 @pytest.fixture()

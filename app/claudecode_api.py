@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -424,3 +425,154 @@ def _process_file(
             base_url,
         )
     return {"path": key, "rows": rows, "new_offset": new_offset, "size": size}
+
+
+# ---------------------------------------------------------------------------
+# E. cc-switch 代理对账 (纯函数: id 直连差集, 集成到采集出口属后续任务)
+# ---------------------------------------------------------------------------
+
+# 差集行 file_path 来源标记 (溯源: 该行来自 cc-switch 代理日志而非会话 JSONL)
+PROXY_GAP_FILE_PATH = "cc-switch:proxy"
+
+# proxy request_id 前缀: "session:" + message.id (实测与 JSONL 落盘消息的
+# message.id 逐字对应, 对账因此退化为纯 id 关联)
+_PROXY_REQUEST_PREFIX = "session:"
+
+
+def merge_proxy_gap(
+    jsonl_keys: set[str], proxy_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """cc-switch 代理记录 × JSONL 已有键 → id 直连对账的差集用量行 (纯函数).
+
+    背景: 后台任务/快照偏差等场景下, 代理已记录但会话 JSONL 未落盘的调用
+    会被现有采集系统性少计; proxy_request_logs.request_id 全局唯一且形如
+    "session:<message.id>", 与 JSONL 落盘消息的 message.id 逐字对应, 故
+    对账退化为纯 id 关联 (无 token 比对、无时间窗). 本函数无 IO 无全局
+    状态, 畸形行跳过不外抛; 读取 cc-switch 库与采集出口集成属后续任务.
+
+    过滤口径 (与 cc-switch 统计页对齐且防双计): app_type=='claude' 且
+    data_source=='proxy' 且 status_code==200 (失败请求未产生有效输出);
+    request_id 为 NULL/空或非 "session:" 形态跳过 (实测仅一条 0-token 裸
+    UUID 调用); msg id 已在 jsonl_keys 中跳过 (同一次调用, JSONL 最终值为准).
+
+    Returns:
+        差集行列表, 键契约同 db.import_claudecode_usage (行内无 cost 键,
+        费用由 import 层按定价表统一自算): dedupe_key 为去前缀 msg id
+        (不加前缀, 与 JSONL 行共用键空间 — 同键"总量大者胜" upsert 实现
+        时序竞态自愈); started_at 由 created_at Unix 秒 ×1000 复用
+        _ts_ms_to_iso 转 UTC ISO (Z 后缀, 毫秒精度, 与 JSONL 行同格式);
+        四 token NULL→0, total_tokens 为四项之和; duration_ms/speed_tps
+        为 None (快照 token 不参与速度统计, 避免失真); channel/project_path
+        为 None (channel 判定不在本函数做, import 层归属列首插为准);
+        file_path 为来源标记常量 PROXY_GAP_FILE_PATH.
+    """
+    rows: list[dict[str, Any]] = []
+    for rec in proxy_rows:
+        if not isinstance(rec, dict):
+            continue
+        if (rec.get("app_type") != "claude" or rec.get("data_source") != "proxy"
+                or rec.get("status_code") != 200):
+            continue  # 过滤口径: 非本渠道/非代理落库/失败请求
+        request_id = rec.get("request_id")
+        if (not isinstance(request_id, str)
+                or not request_id.startswith(_PROXY_REQUEST_PREFIX)):
+            continue  # NULL/空/裸 UUID 等非标准形态
+        msg_id = request_id[len(_PROXY_REQUEST_PREFIX):]
+        if not msg_id or msg_id in jsonl_keys:
+            continue  # 前缀后为空 / JSONL 已有同 id (最终值为准)
+        created_at = rec.get("created_at")
+        if isinstance(created_at, bool) or not isinstance(created_at, (int, float)):
+            continue  # 无时间戳无法归入统计区间 (同 JSONL 行过滤口径)
+        input_tokens = _as_int(rec.get("input_tokens"))
+        output_tokens = _as_int(rec.get("output_tokens"))
+        cache_read_tokens = _as_int(rec.get("cache_read_tokens"))
+        cache_write_tokens = _as_int(rec.get("cache_creation_tokens"))
+        rows.append({
+            "dedupe_key": msg_id,
+            "session_id": rec.get("session_id"),
+            "project_path": None,
+            "model": rec.get("model"),
+            "channel": None,
+            "started_at": _ts_ms_to_iso(int(created_at * 1000)),  # proxy 是秒
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_tokens": cache_read_tokens,
+            "cache_write_tokens": cache_write_tokens,
+            "total_tokens": (input_tokens + output_tokens
+                             + cache_read_tokens + cache_write_tokens),
+            "duration_ms": None,
+            "speed_tps": None,
+            "file_path": PROXY_GAP_FILE_PATH,
+        })
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# F. cc-switch 只读增量读取 (差集补录采集侧; 对账基准与水位由调用方传入,
+#    本节仍不 import db — 依赖方向同 D 节, 编排属 server 职责)
+# ---------------------------------------------------------------------------
+
+# cc-switch 本机库 (差集补录数据源, 只读访问); 模块加载时求值, 测试 monkeypatch
+# 本常量重定向, 不触真库 (同 CLAUDE_PROJECTS / CLAUDE_SETTINGS 先例)
+CC_SWITCH_DB_PATH = Path.home() / ".cc-switch" / "cc-switch.db"
+
+
+def read_proxy_rows(since_seconds: int) -> tuple[list[dict[str, Any]], Optional[str]]:
+    """只读拉取 cc-switch proxy_request_logs 增量 (created_at >= since_seconds;
+    边界秒重拉由同键"总量大者胜"upsert 幂等吸收, 防边界丢行).
+
+    防御与降级: 库文件不存在 → 空列表 + None (未装 cc-switch 属正常形态,
+    静默降级不报错); 连接/查询异常 (含缺列 OperationalError) → 空列表 +
+    带 "cc-switch 补录" 来源前缀的错误文案 (与主数据源错误可区分), 供上层
+    记 _cc_sync_error. 连接串 uri mode=ro 只读 (写入探测
+    实测报 readonly database), 绝不写本机库. 行转 dict (merge_proxy_gap 的
+    rec.get() 契约, sqlite3.Row 无 .get); 12 列名逐字, app_type/data_source/
+    status_code 过滤不在 SQL 重复 (纯函数统一口径); created_at 为 Unix 秒,
+    水位增量首刷传 0.
+
+    Returns:
+        (rows, error); error 为 None=正常, 否则错误文案字符串.
+    """
+    path = Path(CC_SWITCH_DB_PATH)
+    if not path.is_file():
+        return [], None
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            cursor = conn.execute(
+                """SELECT request_id, session_id, model, input_tokens,
+                          output_tokens, cache_read_tokens,
+                          cache_creation_tokens, total_cost_usd, created_at,
+                          status_code, data_source, app_type
+                   FROM proxy_request_logs
+                   WHERE created_at >= ?
+                   ORDER BY created_at ASC""",
+                (int(since_seconds),),
+            )
+            columns = [d[0] for d in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()], None
+        finally:
+            conn.close()
+    except (sqlite3.Error, ValueError) as exc:
+        return [], f"cc-switch 补录: {exc}"
+
+
+def collect_proxy_gap_rows(
+    baseline_keys: set[str], since_seconds: int
+) -> tuple[list[dict[str, Any]], int, Optional[str]]:
+    """差集补录采集一步: 只读拉取 → merge_proxy_gap 对账 → 差集行.
+
+    Returns:
+        (gap_rows, watermark, error); watermark 为本批拉取行最大 created_at
+        (Unix 秒; 空批/降级/全部不可转换 → 0 = 水位不推进), 调用方在落库成功
+        后推进水位; error 语义同 read_proxy_rows (None=正常).
+        read_proxy_rows 经模块全局名调用, 测试 monkeypatch 本模块属性即可
+        注入假行 (不触真库).
+    """
+    rows, error = read_proxy_rows(since_seconds)
+    if error:
+        return [], 0, error
+    # 水位防御: created_at 不可转换的行跳过不外抛 (_as_int 归 0, 不参与
+    # 最大值; created_at 恒为正秒, 归 0 即等效跳过), 全部不可转换 → 0
+    watermark = max((_as_int(r["created_at"]) for r in rows), default=0)
+    return merge_proxy_gap(baseline_keys, rows), watermark, None

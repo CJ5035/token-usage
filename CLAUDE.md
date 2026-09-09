@@ -45,7 +45,7 @@ build.bat   # 输出 dist\GoGauge.exe
 - **多账号模型**: `accounts` 表多行,`usage_records.account_id` 归属账号,`usage_sync_state` 以 account_id 为主键每账号一份游标。`settings.payload` JSON 存 `active_account_id` 与 `key_names`(key_id→显示名 映射)。兼容约定:db.py 函数不显式传 account_id 时一律作用于**活跃账号**(`get_active_account_id`)。
 - **同步**: `incremental`(每账号最多 5 页=250 条,顺序轮询所有已登录账号)/ `full`(仅活跃账号,2000 页上限,遇窗口边界停)。页并发拉取 `FETCH_BATCH=5`。`usage_records` 以 `usg_id` 主键 upsert 去重。进度经 `_sync_state` 全局 dict + 锁跨线程共享,前端轮询 `/api/dashboard` 拿 `progress`。
 - **配额缓存**: `fetch_quota` 抓 dashboard HTML 正则解析(字段顺序有两种,见 `parse_quota_html`),按账号分槽缓存 30s TTL,过期后台线程刷新(`_ensure_quota_async`),不阻塞 dashboard 响应。
-- **口径约定**: `total_input_tokens = input + cache_read + cache_write_5m + cache_write_1h`;`hit_rate = cache_read / (cache_read + input)`;`cost_raw` 单位 1e-8 USD,`cost_usd = cost_raw / 1e8`。改聚合口径需同步 db.py 的 `totals/model_stats/daily_stats` 三处。
+- **口径约定**: `total_input_tokens = input + cache_read + cache_write_5m + cache_write_1h`;`hit_rate = cache_read / (cache_read + input + cache_write)`;`cost_raw` 单位 1e-8 USD,`cost_usd = cost_raw / 1e8`。改聚合口径需同步 db.py 全渠道聚合函数（totals/model_stats/daily_stats/_totals_from_row/_charts_*_dict/zcode_*/claudecode_*/codex 系，见 doc/20260907-hit-rate-formula-fix.md 清单 15 处）。
 - **数据目录**: 开发模式 `data/`(仓库根);打包后 exe 同目录 `data/`,不可写回退 `LOCALAPPDATA/GoGauge/data`。可用环境变量 `GOUSAGE_DATA` 覆盖。
 - **登录流**: `LoginWatcher` 轮询登录窗 URL/cookie,成功后按 `pending_mode`("add"=新建账号 / "relogin"=更新活跃账号凭证)落库,再触发全量同步。登录窗可被手动关闭,`_recreate_login_window` 负责重建。
 
