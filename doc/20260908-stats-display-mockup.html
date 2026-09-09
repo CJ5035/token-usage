@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用量统计页优化模拟 · 占比条导航 + 折叠面板</title>
+<style>
+  :root {
+    --bg0: #0d1017; --bg1: #131722; --bg2: #1a2030; --bg3: #232b3d;
+    --border: #2a3348; --text1: #e8ecf4; --text2: #9aa4b8; --text3: #5d6878;
+    --blue: #5b8def; --violet: #9a6ff0; --amber: #e8a33d; --green: #34b37e;
+    --gray: #6b7488;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg0); color: var(--text1); font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; padding: 24px; max-width: 960px; margin: 0 auto; }
+  h2 { font-size: 20px; margin-bottom: 16px; }
+
+  /* 时间范围 */
+  .pills { display: inline-flex; gap: 4px; background: var(--bg2); border-radius: 8px; padding: 4px; margin-left: 16px; }
+  .pill { border: none; background: transparent; color: var(--text2); padding: 4px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .pill.active { background: var(--blue); color: #fff; }
+  .ph { display: flex; align-items: center; margin-bottom: 20px; }
+
+  /* KPI 卡片 */
+  .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .kpi { background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; border-top: 3px solid var(--blue); }
+  .kpi.c-violet { border-top-color: var(--violet); }
+  .kpi.c-amber { border-top-color: var(--amber); }
+  .kpi.c-green { border-top-color: var(--green); }
+  .kpi-l { color: var(--text2); font-size: 12px; }
+  .kpi-v { font-size: 22px; font-weight: 700; margin-top: 4px; }
+
+  /* 占比条 */
+  .share-card { background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px; }
+  .share-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .share-title { color: var(--text2); font-size: 13px; }
+  .seg { display: inline-flex; background: var(--bg2); border-radius: 6px; padding: 2px; }
+  .seg button { border: none; background: transparent; color: var(--text2); padding: 2px 10px; border-radius: 5px; cursor: pointer; font-size: 12px; }
+  .seg button.active { background: var(--bg3); color: var(--text1); }
+  .share-bar { display: flex; height: 28px; border-radius: 6px; overflow: hidden; cursor: pointer; }
+  .share-seg { display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,.92); font-size: 12px; font-weight: 600; transition: filter .15s; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .share-seg:hover { filter: brightness(1.25); }
+  .share-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12px; color: var(--text2); }
+  .share-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .share-note { margin-top: 8px; font-size: 12px; color: var(--text3); }
+
+  /* 折叠面板通用 */
+  .panel { background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+  .panel-head { display: flex; align-items: center; padding: 14px 16px; background: var(--bg2); cursor: pointer; user-select: none; }
+  .panel-head:hover { background: var(--bg3); }
+  .panel-body { display: none; padding: 16px; border-top: 1px solid var(--border); }
+  .panel.expanded .panel-body { display: block; }
+  .arrow { color: var(--text3); transition: transform .2s; margin-right: 10px; font-size: 12px; }
+  .panel.expanded .arrow { transform: rotate(90deg); }
+
+  /* 数据源面板 */
+  .src-icon { margin-right: 10px; }
+  .src-name { font-weight: 600; }
+  .badge { font-size: 11px; padding: 1px 8px; border-radius: 10px; margin-left: 8px; background: rgba(232,163,61,.15); color: var(--amber); border: 1px solid rgba(232,163,61,.4); }
+  .badge-muted { background: var(--bg3); color: var(--text3); border-color: var(--border); }
+  .src-head-stats { margin-left: auto; display: flex; align-items: center; gap: 16px; color: var(--text2); font-size: 13px; }
+  .src-mini-bar { width: 120px; height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
+  .src-mini-fill { height: 100%; border-radius: 3px; }
+  .src-cost { color: var(--text1); font-weight: 600; min-width: 64px; text-align: right; }
+
+  .src-summary { color: var(--text2); margin-bottom: 14px; }
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .detail-block h4 { font-size: 13px; color: var(--text2); margin-bottom: 8px; font-weight: 600; }
+  .dim-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+  .dim-name { width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text1); }
+  .dim-bar { flex: 1; height: 8px; background: var(--bg3); border-radius: 4px; overflow: hidden; }
+  .dim-fill { height: 100%; border-radius: 4px; }
+  .dim-val { width: 90px; text-align: right; color: var(--text2); font-size: 12px; }
+  .src-link { display: inline-block; margin-top: 14px; color: var(--blue); text-decoration: none; font-size: 13px; cursor: pointer; }
+  .src-link:hover { text-decoration: underline; }
+
+  /* 无数据收纳区 */
+  .empty-zone { margin-top: 20px; }
+  .empty-zone .panel-head { background: transparent; border: 1px dashed var(--border); border-radius: 10px; color: var(--text3); }
+  .empty-src { display: inline-block; margin: 0 16px 8px 0; color: var(--text3); font-size: 13px; }
+
+  .note { margin-top: 24px; padding: 12px 16px; background: rgba(91,141,239,.08); border: 1px solid rgba(91,141,239,.3); border-radius: 8px; color: var(--text2); font-size: 13px; }
+  .est-hint { color: var(--text3); font-size: 12px; margin-left: 8px; }
+</style>
+</head>
+<body>
+
+<div class="ph">
+  <h2>用量统计</h2>
+  <div class="pills" id="range-pills">
+    <button class="pill" data-r="today">今天</button>
+    <button class="pill" data-r="yesterday">昨天</button>
+    <button class="pill active" data-r="7d">近7天</button>
+    <button class="pill" data-r="30d">近30天</button>
+    <button class="pill" data-r="all">全部</button>
+  </div>
+</div>
+
+<!-- 第一层：全局汇总 -->
+<div class="kpi-row">
+  <div class="kpi"><div class="kpi-l">总请求</div><div class="kpi-v">1,234</div></div>
+  <div class="kpi c-violet"><div class="kpi-l">总 Token</div><div class="kpi-v">456.7K</div></div>
+  <div class="kpi c-amber"><div class="kpi-l">总费用</div><div class="kpi-v">$12.34</div></div>
+  <div class="kpi c-green"><div class="kpi-l">平均命中率</div><div class="kpi-v">42.3%</div></div>
+</div>
+
+<!-- 占比条 = 可视化 + 导航（Token/费用可切换） -->
+<div class="share-card">
+  <div class="share-head">
+    <span class="share-title">数据源占比（点击色块展开对应数据源）</span>
+    <span class="seg" id="metric-seg">
+      <button class="active" data-m="tokens">Token</button>
+      <button data-m="cost">费用</button>
+    </span>
+  </div>
+  <div class="share-bar" id="share-bar"></div>
+  <div class="share-legend" id="share-legend"></div>
+  <div class="share-note" id="share-note" hidden>※ Codex、DSH 费用不可用，未计入费用占比</div>
+</div>
+
+<!-- 全局图表（默认折叠） -->
+<div class="panel" id="chart-panel">
+  <div class="panel-head" onclick="togglePanel('chart-panel')">
+    <span class="arrow">▶</span><span>📈 全局图表（Token 构成 · 用量趋势）</span>
+  </div>
+  <div class="panel-body" style="color:var(--text3)">
+    [ 现有 Token 构成图与用量趋势图原样搬入此处，默认折叠，展开时渲染 ]
+  </div>
+</div>
+
+<!-- 数据源折叠面板（手风琴，默认展开第一名） -->
+<div id="sources"></div>
+
+<!-- 无数据源收纳区（模拟 range=近7天：DSH 仅今日，进收纳区） -->
+<div class="empty-zone">
+  <div class="panel" id="empty-panel">
+    <div class="panel-head" onclick="togglePanel('empty-panel')">
+      <span class="arrow">▶</span><span>无数据的数据源（1）</span>
+    </div>
+    <div class="panel-body">
+      <span class="empty-src">💾 DSH · 仅提供今日数据（当前范围：近7天）</span>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  💡 本地数据源（ZCode / Claude Code）费用为按量价目<b>估算值</b>，订阅套餐实际不按此扣费；Codex / DSH 费用不可用。
+</div>
+
+<script>
+// 数据口径对齐 doc/20260907-usage-stats-layered-view.md（第 3 轮评审修订版）
+// costAvailable=false → 费用占比条不占色块，面板按 Token 排序，显示"费用 —"
+const SOURCES = [
+  { id: "opencode", name: "OpenCode", icon: "☁️", type: "remote", color: "#5b8def",
+    pctCost: 45.2, pctTokens: 38.0, cost: 5.58, costAvailable: true, estimated: false,
+    reqs: 558, tokens: "173.5K", hit: "42%",
+    accounts: [ ["账号 A · user_a@company.com", 60, "$3.35"], ["账号 B · user_b@company.com", 40, "$2.23"] ],
+    keys: [ ["key-prod-001（生产环境）", 35, "$1.95"], ["key-dev-002（开发环境）", 25, "$1.40"], ["其他 5 个 Key", 40, "$2.23"] ],
+    models: [ ["opus-5", 60, "104.1K"], ["sonnet-5", 30, "52.1K"], ["haiku-4", 10, "17.3K"] ] },
+  { id: "bai", name: "BAI", icon: "☁️", type: "remote", color: "#4fc3f7",
+    pctCost: 20.0, pctTokens: 18.5, cost: 2.47, costAvailable: true, estimated: false,
+    reqs: 247, tokens: "84.5K", hit: "39%",
+    accounts: [ ["账号 C · user_c@bai.com", 100, "$2.47"] ],
+    keys: [ ["key-main", 85, "$2.10"], ["key-backup", 15, "$0.37"] ],
+    models: [ ["gpt-5.2", 60, "50.7K"], ["opus-5", 40, "33.8K"] ] },
+  { id: "commandcode", name: "CommandCode", icon: "☁️", type: "remote", color: "#9a6ff0",
+    pctCost: 12.1, pctTokens: 13.2, cost: 1.49, costAvailable: true, estimated: false,
+    reqs: 149, tokens: "60.3K", hit: "36%",
+    accounts: [ ["账号 D · user_d@company.com", 100, "$1.49"] ],
+    keys: [ ["key-cc-main", 100, "$1.49"] ],
+    models: [ ["gpt-5.2", 55, "33.2K"], ["sonnet-5", 45, "27.1K"] ] },
+  { id: "zcode", name: "ZCode", icon: "💾", type: "local", color: "#34b37e",
+    pctCost: 15.3, pctTokens: 15.1, cost: 1.89, costAvailable: true, estimated: true,
+    reqs: 189, tokens: "68.9K", hit: "51%",
+    providers: [ ["GLM Coding Plan", 80, "$1.51"], ["builtin:kimi-for-coding", 20, "$0.38"] ],
+    models: [ ["glm-5", 70, "48.2K"], ["kimi-k3", 30, "20.7K"] ] },
+  { id: "claudecode", name: "Claude Code", icon: "💾", type: "local", color: "#e8a33d",
+    pctCost: 7.4, pctTokens: 7.3, cost: 0.91, costAvailable: true, estimated: true,
+    reqs: 91, tokens: "33.5K", hit: "47%",
+    providers: [ ["Anthropic（订阅）", 100, "$0.91"] ],
+    models: [ ["sonnet-5", 65, "21.8K"], ["opus-5", 35, "11.7K"] ] },
+  { id: "codex", name: "Codex", icon: "💾", type: "local", color: "#6b7488",
+    pctCost: null, pctTokens: 7.9, cost: null, costAvailable: false, estimated: false,
+    reqs: "≈91", tokens: "36.0K", hit: null,
+    providers: [ ["codex（默认）", 100, "—"] ],
+    models: [ ["gpt-5.3-codex", 80, "28.8K"], ["gpt-5.2-codex", 20, "7.2K"] ] },
+];
+
+let metric = "tokens";   // tokens | cost
+const $ = id => document.getElementById(id);
+
+function renderShareBar() {
+  const barSources = SOURCES.filter(s => metric === "tokens" || s.costAvailable);
+  $("share-bar").innerHTML = barSources.map(s => {
+    const pct = metric === "tokens" ? s.pctTokens : s.pctCost;
+    return `<div class="share-seg" style="flex:${pct};background:${s.color}" title="${s.name} ${pct}%"
+      onclick="expandSource('${s.id}', true)">${pct >= 6 ? pct + '%' : ''}</div>`;
+  }).join("");
+  $("share-legend").innerHTML = SOURCES.map(s =>
+    `<span><span class="dot" style="background:${s.color}"></span>${s.name} ${s.costAvailable ? '$' + s.cost + (s.estimated ? '(估)' : '') : '费用 —'}</span>`
+  ).join("");
+  $("share-note").hidden = metric !== "cost";
+}
+
+function dimRows(rows, color) {
+  return rows.map(([name, pct, val]) => `
+    <div class="dim-row">
+      <span class="dim-name" title="${name}">${name}</span>
+      <span class="dim-bar"><span class="dim-fill" style="width:${pct}%;background:${color}"></span></span>
+      <span class="dim-val">${pct}% · ${val}</span>
+    </div>`).join("");
+}
+
+function renderSources() {
+  $("sources").innerHTML = SOURCES.map((s, i) => {
+    const badges = [
+      s.estimated ? `<span class="badge" title="费用为按量价目估算，订阅套餐实际不按此扣费">估算值</span>` : "",
+      s.costAvailable ? "" : `<span class="badge badge-muted">费用不可用</span>`,
+    ].join("");
+    const pct = metric === "tokens" ? s.pctTokens : (s.pctCost ?? s.pctTokens);
+    const stats = s.costAvailable ? `${pct}%` : `${s.tokens}`;
+    const costText = s.costAvailable ? `$${s.cost}` : "费用 —";
+    const detail = s.accounts ? `
+        <div class="detail-grid">
+          <div class="detail-block"><h4>👥 账号分布</h4>${dimRows(s.accounts, s.color)}</div>
+          <div class="detail-block"><h4>🔑 Top Keys</h4>${dimRows(s.keys, s.color)}</div>
+        </div>
+        <div class="detail-block" style="margin-top:14px"><h4>🤖 模型用量</h4>${dimRows(s.models, s.color)}</div>`
+      : `
+        <div class="detail-grid">
+          <div class="detail-block"><h4>🔌 Provider 分布</h4>${dimRows(s.providers, s.color)}</div>
+          <div class="detail-block"><h4>🤖 模型用量</h4>${dimRows(s.models, s.color)}</div>
+        </div>`;
+    return `
+    <div class="panel ${i === 0 ? 'expanded' : ''}" id="src-${s.id}">
+      <div class="panel-head" onclick="expandSource('${s.id}')">
+        <span class="arrow">▶</span>
+        <span class="src-icon">${s.icon}</span>
+        <span class="src-name">${s.name}</span>${badges}
+        <span class="src-head-stats">
+          <span class="src-mini-bar"><span class="src-mini-fill" style="width:${pct}%;background:${s.color}"></span></span>
+          <span>${stats}</span>
+          <span class="src-cost">${costText}</span>
+        </span>
+      </div>
+      <div class="panel-body">
+        <div class="src-summary">📊 ${s.reqs} 请求 · ${s.tokens} Token${s.hit ? ' · 命中率 ' + s.hit : ''}${s.estimated ? '<span class="est-hint">费用为估算值</span>' : ''}${s.costAvailable ? '' : '<span class="est-hint">请求数为事件模式估算，费用不可用</span>'}</div>
+        ${detail}
+        <a class="src-link" onclick="alert('跳转记录页并预设来源=${s.id}（gotoRecords）');return false">查看详细记录 →</a>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// 手风琴：单开；fromShareBar=true 时滚动到位
+function expandSource(id, fromShareBar = false) {
+  SOURCES.forEach(s => {
+    const el = $("src-" + s.id);
+    if (s.id === id) {
+      el.classList.add("expanded");
+      if (fromShareBar) el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } else el.classList.remove("expanded");
+  });
+}
+function togglePanel(id) { $(id).classList.toggle("expanded"); }
+
+$("range-pills").addEventListener("click", e => {
+  if (!e.target.classList.contains("pill")) return;
+  document.querySelectorAll("#range-pills .pill").forEach(p => p.classList.remove("active"));
+  e.target.classList.add("active");
+});
+$("metric-seg").addEventListener("click", e => {
+  if (e.target.tagName !== "BUTTON") return;
+  metric = e.target.dataset.m;
+  document.querySelectorAll("#metric-seg button").forEach(b => b.classList.toggle("active", b === e.target));
+  renderShareBar();
+  renderSources();
+});
+
+renderShareBar();
+renderSources();
+</script>
+</body>
+</html>
