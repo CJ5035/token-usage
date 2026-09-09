@@ -159,7 +159,7 @@ def test_dark_untouched_tokens_unchanged_from_head():
     token (--primary/--primary-strong/--shadow/--danger-soft/--ch-* 其余项) 与 HEAD 一致."""
     head = _dark_vars(_head_css())
     cur = _dark_vars(_css())
-    changed = set(_DARK_EXPECTED) | {"--up", "--down", "--ch-codex", "--ch-claudecode", "--ch-bai"}   # 20260908 三渠道终局配色
+    changed = set(_DARK_EXPECTED) | {"--up", "--down", "--ch-codex", "--ch-claudecode", "--ch-bai", "--shadow"}   # 20260909: --shadow 深色减弱 (D2)
     assert set(cur) - set(head) <= {"--up", "--down", "--ch-codex"} | _THEME_TOKENS   # 20260909 语义令牌
     for token, value in head.items():
         if token in changed:
@@ -416,4 +416,44 @@ def test_theme_tokens_consumers_use_var():
     assert "#codex-error { margin: 8px 0 10px; padding: 10px 14px; font-size: 12px; color: var(--danger-text); background: var(--danger-soft); border-radius: 10px; }" in css
     js = _js()
     assert js.count("color:var(--danger-text)") == 2, "两张记录表内联错误文字应使用 var(--danger-text)"
+
+
+# ---------------------------------------------------------------------------
+# 9. 20260909 D2: 层级/焦点/浮层/减少动画
+# ---------------------------------------------------------------------------
+
+
+def test_dark_shadow_softened_20260909():
+    dark = _dark_vars(_css())
+    assert dark["--shadow"] == "0 1px 2px rgba(0,0,0,.2), 0 4px 14px rgba(0,0,0,.24)"
+
+
+def test_focus_visible_rules_exist():
+    """§3.1: select 恢复 focus-visible; switch 焦点画在相邻 slider; 按钮/导航/pill 有焦点环."""
+    css = _css()
+    assert ".select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }" in css
+    assert ".sw input:focus-visible + .slider { outline: 2px solid var(--focus-ring); outline-offset: 2px; }" in css
+    for sel in (".btn:focus-visible", ".pill:focus-visible", ".tb-btn:focus-visible", ".side-item:focus-visible"):
+        assert sel in css, f"缺少 {sel} 焦点规则"
+
+
+def test_popover_consumers_use_tokens():
+    css = _css()
+    assert ".user-menu { position: absolute; top: calc(100% + 8px); right: 0; min-width: 230px; background: var(--surface-popover); border: 1px solid var(--border-popover); border-radius: 10px; box-shadow: var(--shadow); padding: 5px; z-index: 90; }" in css
+    assert ".modal-card { background: var(--surface-popover); border: 1px solid var(--border-popover);" in css
+    assert ".toast { background: var(--surface-popover); border: 1px solid var(--border-popover);" in css
+
+
+def test_reduced_motion_block_and_dark_th_layer():
+    css = _css()
+    assert "@media (prefers-reduced-motion: reduce)" in css
+    assert 'html[data-theme="dark"] .tbl th { background: var(--muted); }' in css
+
+
+def test_color_scheme_declared_per_theme():
+    css = _css()
+    root_block = _extract_block(css, ":root")
+    dark_block = _extract_block(css, 'html[data-theme="dark"]')
+    assert "color-scheme: light;" in root_block
+    assert "color-scheme: dark;" in dark_block
 

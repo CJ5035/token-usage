@@ -1,5 +1,6 @@
 /* GoGauge 正式版 - 晨雾紫 + Data-Dense Dashboard */
 :root {
+  color-scheme: light;
   --bg: #f7f6f4;
   --card: #ffffff;
   --border: #eae7f2;
@@ -66,6 +67,7 @@
   --chart-tooltip-border: rgba(0, 0, 0, 0);
 }
 html[data-theme="dark"] {
+  color-scheme: dark;
   /* EVOLUTION-6: 中性纯黑灰重定标 (灰阶无紫调), 层次 bg<sidebar<card<muted<hover<border 明度递进 */
   --bg: #111112;
   --card: #1a1a1c;
@@ -81,7 +83,7 @@ html[data-theme="dark"] {
   --titlebar: #1a1a1c;
   --sidebar: #151516;
   --hover: #262628;
-  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
+  --shadow: 0 1px 2px rgba(0,0,0,.2), 0 4px 14px rgba(0,0,0,.24);
   --grid: #242426;
   --danger-soft: #3d2429;
   --up: #4ade80;                /* 按最浅承载面 muted 校准 (>=4.5): muted 9.33:1 / card 9.97:1 */
@@ -464,7 +466,7 @@ html[data-theme="dark"] .src-badge { background: #123144; color: #67e8f9; }
 
 /* ---------- 弹框 / Toast ---------- */
 .modal-overlay { position: fixed; inset: 0; background: rgba(15, 20, 30, 0.45); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(2px); animation: fade .15s ease; }
-.modal-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 20px 60px rgba(16, 24, 40, 0.25); padding: 26px 30px; width: 400px; max-width: 90vw; text-align: center; animation: pop .18s ease; }
+.modal-card { background: var(--surface-popover); border: 1px solid var(--border-popover); border-radius: 16px; box-shadow: 0 20px 60px rgba(16, 24, 40, 0.25); padding: 26px 30px; width: 400px; max-width: 90vw; text-align: center; animation: pop .18s ease; }
 @keyframes pop { from { transform: scale(0.95); opacity: 0; } to { transform: none; opacity: 1; } }
 .modal-icon { width: 46px; height: 46px; border-radius: 50%; margin: 0 auto 14px; display: flex; align-items: center; justify-content: center; font-size: 22px; background: var(--primary-soft); color: var(--primary); }
 .modal-icon.danger { background: var(--danger-soft); color: var(--danger); }
@@ -473,7 +475,7 @@ html[data-theme="dark"] .src-badge { background: #123144; color: #67e8f9; }
 .modal-actions { display: flex; gap: 10px; justify-content: center; }
 .modal-actions .btn { min-width: 96px; padding: 8px 20px; }
 .toast-wrap { position: fixed; top: 56px; right: 16px; z-index: 120; display: flex; flex-direction: column; gap: 8px; }
-.toast { background: var(--card); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 10px 16px; font-size: 13px; display: flex; align-items: center; gap: 8px; animation: slide .2s ease; max-width: 340px; }
+.toast { background: var(--surface-popover); border: 1px solid var(--border-popover); border-radius: 10px; box-shadow: var(--shadow); padding: 10px 16px; font-size: 13px; display: flex; align-items: center; gap: 8px; animation: slide .2s ease; max-width: 340px; }
 .toast.ok { border-left: 3px solid var(--green); }
 .toast.err { border-left: 3px solid var(--red); }
 @keyframes slide { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -493,7 +495,7 @@ html[data-theme="dark"] .src-badge { background: #123144; color: #67e8f9; }
 .user-chip { cursor: pointer; font-family: var(--font-sans); transition: all .15s; }
 .user-chip:hover { border-color: var(--primary); color: var(--text); }
 .chip.num.user-count { color: var(--primary); border-color: transparent; background: var(--primary-soft); font-weight: 600; cursor: default; }
-.user-menu { position: absolute; top: calc(100% + 8px); right: 0; min-width: 230px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 5px; z-index: 90; }
+.user-menu { position: absolute; top: calc(100% + 8px); right: 0; min-width: 230px; background: var(--surface-popover); border: 1px solid var(--border-popover); border-radius: 10px; box-shadow: var(--shadow); padding: 5px; z-index: 90; }
 .um-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
 .um-item:hover { background: var(--hover); }
 .um-empty { color: var(--text3); font-size: 12px; cursor: default; }
@@ -619,3 +621,16 @@ html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
 /* 账期汇总: 账号名通栏标题行, 不与 4 张 KPI 卡争 4 列格位 (问题7);
    限定 #cc-grid — .acct-name 同时被单渠道配额分组标题复用 (renderQuotaSingle) */
 #cc-grid .acct-name { grid-column: 1 / -1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- 20260909 D2: 焦点可见 (select 曾 outline:none 无反馈; switch 真实 input 零尺寸, 焦点画相邻 slider) ---- */
+.btn:focus-visible, .pill:focus-visible, .tb-btn:focus-visible, .side-item:focus-visible, .chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.select:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.sw input:focus-visible + .slider { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* 深色表头轻微提层 (行 hover 已有 var(--muted) 连贯规则, 不新增选择业务) */
+html[data-theme="dark"] .tbl th { background: var(--muted); }
+
+/* 减少动画偏好: toast 关闭由 setTimeout 定时驱动, 不依赖动画完成, 节点仍按原时序删除 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
