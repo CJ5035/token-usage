@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>暗色主题渠道配色全量评估 — GoGauge</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:"Segoe UI","Microsoft YaHei",sans-serif; background:#141416; padding:24px; color:#e8e8ea; }
+  h1 { font-size:20px; margin-bottom:6px; }
+  .sub { font-size:13px; color:#a3a3a8; margin-bottom:16px; line-height:1.7; max-width:1080px; }
+  h2 { font-size:15px; margin:20px 0 10px; color:#d4d4d8; }
+  table.matrix { border-collapse:collapse; font-size:11px; font-family:Consolas,monospace; margin-bottom:8px; }
+  table.matrix th, table.matrix td { width:86px; height:34px; text-align:center; border:1px solid #2a2a2c; }
+  table.matrix th { background:#1a1a1c; color:#a3a3a8; font-weight:400; }
+  table.matrix td.hi { font-weight:700; }
+  .lg { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; margin-bottom:14px; }
+  .lg span { display:inline-flex; align-items:center; gap:5px; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .panels { display:flex; gap:14px; flex-wrap:wrap; }
+  .card { background:#1a1a1c; border:1px solid #2a2a2c; border-radius:12px; padding:14px; flex:1 1 460px; }
+  .card h3 { font-size:13px; margin-bottom:4px; } .card .vs { font-size:11px; color:#a3a3a8; margin-bottom:10px; }
+  .stack { display:flex; height:28px; border-radius:5px; overflow:hidden; margin-bottom:10px; }
+  .stack div { height:100%; }
+  .verdict { font-size:12px; border-radius:6px; padding:3px 9px; display:inline-block; margin-top:6px; }
+  .v-ok { background:rgba(34,197,94,.15); color:#4ade80; } .v-warn { background:rgba(245,158,11,.15); color:#facc15; } .v-bad { background:rgba(239,68,68,.15); color:#f87171; }
+</style>
+</head>
+<body>
+<h1>暗色主题渠道配色：全量重排 vs 三色定点 — 评估页</h1>
+<div class="sub">
+  你问的：暗色主题是否有全部重新调整的必要。本页用<strong>完整 7×7 两两距离矩阵</strong>回答。
+  合格线：渠道对 RGB 距离 ≥100；文字色（明细表渠道名）对暗卡 #1a1a1c ≥4.5。
+  底部可直接目检两个候选全景的堆叠效果。
+</div>
+
+<h2>一、推荐终局（三色定点：claudecode 橙 / Codex 紫 / bai 金黄，opencode+zcode+dsh 不动）</h2>
+<div class="lg" id="lg1"></div>
+<div id="m1"></div>
+<div class="sub" style="margin-top:8px">
+  越线仅 3 对，且全是<strong>既有格局</strong>：opencode-zcode 33（蓝 vs 靛蓝，用户指定的 zcode 色与生俱来）、zcode-dsh 71、opencode-dsh 82（蓝 vs 灰）。
+  本次三个新色相互之间全部 ≥113，未引入任何新撞色。
+</div>
+
+<h2>二、如果硬要"全量重排"消灭这 3 对，会怎样（试排证据）</h2>
+<div class="sub">
+  唯一可行方向是动 opencode 或 zcode（绿/橙/紫/灰都已锁定）。试排结果：
+  <br>· opencode→sky-400 #38bdf8：zcode-dsh 71 仍在，还新添 opencode-commandcode 98 —— 越线数不降反增实质
+  <br>· opencode→cyan/teal：与 commandcode 绿撞到 39-87，绿区有主
+  <br>· zcode→紫移 #a78bfa：与 Codex 紫撞 86，且 <strong>#a78bfa 正是 Token 构成图 reasoning 色同值</strong>——zcode 是用量最大的主渠道，语义撞色不可接受
+  <br>· zcode 是你指定的靛蓝，且暗卡文字对比 5.58 达标——没有理由动
+</div>
+<div class="panels" style="margin-top:12px">
+  <div class="card"><h3>推荐终局 · 全景试堆</h3><div class="vs">opencode #6ba3ff / bai #facc15 / commandcode #34d399 / zcode #818cf8 / claudecode #d97757 / Codex #d946ef / dsh #94a3b8</div>
+    <div class="stack" id="s1"></div><div class="stack" id="s2"></div><div class="stack" id="s3"></div>
+    <span class="verdict v-ok">采纳：改动最小，3 对越线均为既有且图例/表有文字兜底</span></div>
+  <div class="card"><h3>对照 · 现状线上（本轮改动前）</h3><div class="vs">opencode #6ba3ff / bai #f59e0b / commandcode #34d399 / zcode #818cf8 / claudecode #fb7185 / Codex #2dd4bf / dsh #94a3b8</div>
+    <div class="stack" id="s4"></div><div class="stack" id="s5"></div><div class="stack" id="s6"></div>
+    <span class="verdict v-bad">问题：commandcode 绿 vs Codex 青绿 39（最初的撞色源头）；claudecode 鲑粉 vs 橙系/紫系均 <100</span></div>
+</div>
+
+<script>
+const dist=(a,b)=>{const p=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));const[r1,g1,b1]=p(a),[r2,g2,b2]=p(b);return Math.hypot(r1-r2,g1-g2,b1-b2);};
+const FINAL={opencode:"#6ba3ff",bai:"#facc15",commandcode:"#34d399",zcode:"#818cf8",claudecode:"#d97757",codex:"#d946ef",dsh:"#94a3b8"};
+const CURRENT={opencode:"#6ba3ff",bai:"#f59e0b",commandcode:"#34d399",zcode:"#818cf8",claudecode:"#fb7185",codex:"#2dd4bf",dsh:"#94a3b8"};
+const ORDER=["opencode","bai","commandcode","zcode","claudecode","codex","dsh"];
+
+/* 距离矩阵 */
+function matrix(pal, host){
+  const lg=document.getElementById(host+"lg")||document.getElementById(host);
+  document.getElementById("lg1").innerHTML=ORDER.map(k=>`<span><i class="dot" style="background:${pal[k]}"></i>${k==="codex"?"Codex":k}</span>`).join("");
+  let html="<table class='matrix'><tr><th></th>"+ORDER.map(k=>`<th>${k==="codex"?"Codex":k}</th>`).join("")+"</tr>";
+  for(const a of ORDER){
+    html+=`<tr><th>${a==="codex"?"Codex":a}</th>`;
+    for(const b of ORDER){
+      if(a===b){ html+="<td style='background:"+pal[a]+"'></td>"; continue; }
+      const d=dist(pal[a],pal[b]);
+      const cls=d<60?"hi":(d<100?"":"");
+      const bg=d<60?"rgba(239,68,68,.22)":(d<100?"rgba(245,158,11,.13)":"rgba(34,197,94,.10)");
+      html+=`<td class='${cls}' style='background:${bg}'>${Math.round(d)}</td>`;
+    }
+    html+="</tr>";
+  }
+  document.getElementById(host).innerHTML=html+"</table>";
+}
+matrix(FINAL,"m1");
+
+/* 堆叠样本 */
+const SAMPLES=[[["zcode",34],["opencode",22],["codex",18],["claudecode",12],["bai",8],["commandcode",4],["dsh",2]],
+               [["opencode",30],["zcode",26],["codex",20],["bai",12],["commandcode",8],["claudecode",3],["dsh",1]],
+               [["zcode",40],["claudecode",18],["codex",16],["opencode",14],["bai",7],["commandcode",4],["dsh",1]]];
+for(let i=1;i<=3;i++){
+  const s=SAMPLES[i-1], T=s.reduce((x,[,v])=>x+v,0);
+  document.getElementById("s"+i).innerHTML=s.map(([k,v])=>`<div style="width:${v/T*100}%;background:${FINAL[k]}" title="${k}"></div>`).join("");
+  document.getElementById("s"+(i+3)).innerHTML=s.map(([k,v])=>`<div style="width:${v/T*100}%;background:${CURRENT[k]}" title="${k}"></div>`).join("");
+}
+</script>
+</body>
+</html>

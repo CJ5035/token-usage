@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Claude Code 渠道配色候选对比 — GoGauge</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:"Segoe UI","Microsoft YaHei",sans-serif; background:#e8eaf0; padding:24px; color:#1f2937; }
+  h1 { font-size:20px; margin-bottom:6px; }
+  .sub { font-size:13px; color:#6b7280; margin-bottom:18px; line-height:1.6; }
+  .legend-th { display:inline-flex; align-items:center; gap:6px; font-size:12px; background:#fff; border:1px solid #d1d5db; border-radius:12px; padding:2px 10px; margin-right:6px; }
+  .row { background:#fff; border:1px solid #d1d5db; border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+  .row-h { display:flex; align-items:baseline; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+  .row-h .name { font-size:15px; font-weight:600; }
+  .row-h .hexes { font-family:Consolas,monospace; font-size:12px; color:#6b7280; }
+  .verdict { font-size:12px; border-radius:6px; padding:2px 8px; }
+  .v-ok { background:#dcfce7; color:#166534; } .v-warn { background:#fef9c3; color:#854d0e; } .v-bad { background:#fee2e2; color:#991b1b; }
+  .panels { display:flex; gap:12px; flex-wrap:wrap; }
+  .panel { flex:1 1 380px; border-radius:10px; padding:12px; }
+  .panel.light { background:#ffffff; border:1px solid #e5e7eb; }
+  .panel.dark { background:#1a1a1c; border:1px solid #2a2a2c; color:#e8e8ea; }
+  .panel .tag { font-size:11px; opacity:.55; margin-bottom:8px; }
+  .legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; margin-bottom:10px; }
+  .legend span { display:inline-flex; align-items:center; gap:5px; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .stack { display:flex; height:26px; border-radius:5px; overflow:hidden; margin-bottom:10px; }
+  .stack div { height:100%; }
+  .tbl { width:100%; font-size:12px; border-collapse:collapse; margin-bottom:8px; }
+  .tbl td { padding:3px 6px; border-bottom:1px solid rgba(128,128,128,.18); }
+  .chname { font-weight:600; }
+  .badges { display:flex; gap:6px; flex-wrap:wrap; font-size:11px; }
+  .badge { border-radius:6px; padding:2px 7px; font-family:Consolas,monospace; }
+  .b-ok { background:rgba(34,197,94,.15); color:inherit; } .b-warn { background:rgba(245,158,11,.18); color:inherit; } .b-bad { background:rgba(239,68,68,.16); color:inherit; }
+  .panel.light .badge { color:#374151; } .panel.dark .badge { color:#d4d4d8; }
+</style>
+</head>
+<body>
+<h1>Claude Code 渠道配色候选对比</h1>
+<div class="sub">
+  Codex 固定为红系 <b>#e11d48(亮) / #ef4444(暗)</b>（已实施）；本页对比 claudecode 替换候选。
+  每个方案展示：图例条 → 相邻堆叠柱（claudecode 与 Codex 故意相邻，最严苛场景）→ 明细表渠道名文字 → 动态数据徽标。
+  合格线：与最近渠道 RGB 距离 <b>≥100</b>；作为文字色 WCAG 对比 <b>≥4.5</b>。徽标由页面内脚本按真实公式计算。
+</div>
+<div id="rows"></div>
+<script>
+const dist=(a,b)=>{const p=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));const[r1,g1,b1]=p(a),[r2,g2,b2]=p(b);return Math.hypot(r1-r2,g1-g2,b1-b2);};
+const lum=h=>{const f=c=>{c/=255;return c<=.03928?c/12.92:((c+.055)/1.055)**2.4;};const[r,g,b]=h.match(/\w\w/g).map(x=>f(parseInt(x,16)));return .2126*r+.7152*g+.0722*b;};
+const contrast=(a,b)=>{const[l1,l2]=[lum(a),lum(b)].sort((x,y)=>y-x);return(l1+.05)/(l2+.05);};
+
+/* 其余渠道（亮/暗）— claudecode 与 Codex 之外 */
+const OTHERS_L={bai:"#f59e0b",commandcode:"#10b981",zcode:"#6366f1",opencode:"#4f8ef7",dsh:"#64748b"};
+const OTHERS_D={bai:"#f59e0b",commandcode:"#34d399",zcode:"#818cf8",opencode:"#6ba3ff",dsh:"#94a3b8"};
+/* Codex 固定红（方案④除外） */
+const CODEX_L="#e11d48", CODEX_D="#ef4444";
+/* 模拟堆叠数据: 相邻最严苛 — claudecode 紧贴 Codex */
+const STACK=[["zcode",30],["codex",25],["claudecode",20],["commandcode",15],["bai",10]];
+const STACK_TOTAL=STACK.reduce((s,[,v])=>s+v,0);
+
+const ROWS=[
+ {name:"基线 — 现状", cc:{l:"#fb7185",d:"#fb7185"}, note:"当前线上值（鲑粉）。Codex 已换正红，两红系同框距离偏近", skipCodexSwap:false,
+  verdict:["v-warn","参照基线"]},
+ {name:"① 紫罗兰 #A78BFA", cc:{l:"#a78bfa",d:"#a78bfa"}, note:"你标注「与 zcode 拉开色相」— 实测恰相反：暗主题距 zcode #818cf8 仅 38；且 #a78bfa 是 Token 构成图 reasoning 色同值；亮主题文字对比 2.7 严重不足", skipCodexSwap:false,
+  verdict:["v-bad","不推荐：撞 zcode + 撞 reasoning 色"]},
+ {name:"② 青柠绿 #84CC16（亮配深档 #4D7C0F）", cc:{l:"#4d7c0f",d:"#84cc16"}, note:"距离全达标，但亮主题 #84CC16 白卡对比仅 1.98，必须配深档；暗底大面积黄绿偏「荧光草」感", skipCodexSwap:false,
+  verdict:["v-ok","数据可行，观感待你判断"]},
+ {name:"③ 天蓝 #38BDF8（亮配 #0284C7）", cc:{l:"#0284c7",d:"#38bdf8"}, note:"与 opencode 蓝正面相撞（亮 91 / 暗 58），两蓝同框无法区分", skipCodexSwap:false,
+  verdict:["v-bad","不推荐：撞 opencode"]},
+ {name:"④ Claude 品牌陶土橙 #D97757（亮配 #C2410C）", cc:{l:"#c2410c",d:"#d97757"}, note:"品牌联想最佳；但暗主题距 Codex 红 #ef4444 仅 59 → Codex 必须让出红区。本行 Codex 示意换灰 #a8a29e（又撞 dsh 33）— Codex 灰系无解，会被逼回紫/品红区", skipCodexSwap:true,
+  verdict:["v-warn","claudecode 可行，但 Codex 被逼无好色"]},
+ {name:"参照 — 品红重排 #C026D3(亮)/#D946EF(暗)", cc:{l:"#c026d3",d:"#d946ef"}, note:"claudecode 接手品红区（数据最干净的方案），Codex 保持正红；即上一轮方案A 的色给 claudecode", skipCodexSwap:false,
+  verdict:["v-ok","数据最优组合"]},
+];
+
+const root=document.getElementById("rows");
+for(const r of ROWS){
+  const cxL=r.skipCodexSwap?"#a8a29e":CODEX_L, cxD=r.skipCodexSwap?"#a8a29e":CODEX_D;
+  const row=document.createElement("div"); row.className="row";
+  const allL={...OTHERS_L,claudecode:r.cc.l,codex:cxL}, allD={...OTHERS_D,claudecode:r.cc.d,codex:cxD};
+  const nearL=(()=>{const o={...OTHERS_L,codex:cxL};const k=Object.keys(o).reduce((a,b)=>dist(r.cc.l,o[a])<dist(r.cc.l,o[b])?a:b);return[k,dist(r.cc.l,o[k])];})();
+  const nearD=(()=>{const o={...OTHERS_D,codex:cxD};const k=Object.keys(o).reduce((a,b)=>dist(r.cc.d,o[a])<dist(r.cc.d,o[b])?a:b);return[k,dist(r.cc.d,o[k])];})();
+  const dPairL=dist(r.cc.l,cxL), dPairD=dist(r.cc.d,cxD);
+  const conL=contrast(r.cc.l,"#ffffff"), conD=contrast(r.cc.d,"#1a1a1c");
+  const badge=(label,val,ok)=>`<span class="badge ${ok?"b-ok":(val>=70?"b-warn":"b-bad")}">${label}</span>`;
+  const f=v=>v>=100?["b-ok",true]:(v>=70?["b-warn",false]:["b-bad",false]);
+  const [clL,okL]=f(dPairL), [clD,okD]=f(dPairD);
+  const legend=k=>Object.entries(k).map(([n,c])=>`<span><i class="dot" style="background:${c}"></i>${n==="claudecode"?"claudecode":n==="codex"?"Codex":n}</span>`).join("");
+  const stack=c=>STACK.map(([n,v])=>`<div style="width:${v/STACK_TOTAL*100}%;background:${c[n]}" title="${n} ${v}%"></div>`).join("");
+  const tbl=c=>`<table class="tbl"><tr><td class="chname" style="color:${c.claudecode}">claudecode</td><td>565.4k</td><td>¥138.16</td></tr><tr><td class="chname" style="color:${c.codex}">Codex</td><td>57.69M</td><td>—</td></tr></table>`;
+  const badges=c=>`
+    ${badge(`cc↔Codex 距 ${Math.round(dPairD===undefined?0: (c.d?dist(r.cc.d,cxD):dist(r.cc.l,cxL)))}`,0, (c.d?dPairD:dPairL)>=100)}
+    ${badge(`cc 最近: ${c.d?nearD[0]:nearL[0]} ${Math.round(c.d?nearD[1]:nearL[1])}`,0,(c.d?nearD[1]:nearL[1])>=100)}
+    ${badge(`cc 文字对比 ${ (c.d?conD:conL).toFixed(2) }`,0,(c.d?conD:conL)>=4.5)}
+    ${badge(`Codex 文字对比 ${ (c.d?contrast(cxD,"#1a1a1c"):contrast(cxL,"#ffffff")).toFixed(2) }`,0,(c.d?contrast(cxD,"#1a1a1c"):contrast(cxL,"#ffffff"))>=4.5)}`;
+  row.innerHTML=`
+    <div class="row-h"><span class="name">${r.name}</span><span class="hexes">claudecode 亮 ${r.cc.l} / 暗 ${r.cc.d} · Codex 亮 ${cxL} / 暗 ${cxD}</span>
+    <span class="verdict ${r.verdict[0]}">${r.verdict[1]}</span></div>
+    <div class="sub" style="margin:0 0 10px">${r.note}</div>
+    <div class="panels">
+      <div class="panel light"><div class="tag">亮色主题</div><div class="legend">${legend(allL)}</div>
+        <div class="stack">${stack(allL)}</div>${tbl(allL)}<div class="badges">${badges({d:false})}</div></div>
+      <div class="panel dark"><div class="tag">暗色主题</div><div class="legend">${legend(allD)}</div>
+        <div class="stack">${stack(allD)}</div>${tbl(allD)}<div class="badges">${badges({d:true})}</div></div>
+    </div>`;
+  root.appendChild(row);
+}
+</script>
+</body>
+</html>

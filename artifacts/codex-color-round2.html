@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Codex 渠道配色候选（claudecode 已定品牌橙）— GoGauge</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:"Segoe UI","Microsoft YaHei",sans-serif; background:#e8eaf0; padding:24px; color:#1f2937; }
+  h1 { font-size:20px; margin-bottom:6px; }
+  .sub { font-size:13px; color:#6b7280; margin-bottom:18px; line-height:1.6; }
+  .row { background:#fff; border:1px solid #d1d5db; border-radius:12px; padding:14px 16px; margin-bottom:14px; }
+  .row-h { display:flex; align-items:baseline; gap:10px; margin-bottom:10px; flex-wrap:wrap; }
+  .row-h .name { font-size:15px; font-weight:600; }
+  .row-h .hexes { font-family:Consolas,monospace; font-size:12px; color:#6b7280; }
+  .verdict { font-size:12px; border-radius:6px; padding:2px 8px; }
+  .v-ok { background:#dcfce7; color:#166534; } .v-warn { background:#fef9c3; color:#854d0e; } .v-bad { background:#fee2e2; color:#991b1b; }
+  .panels { display:flex; gap:12px; flex-wrap:wrap; }
+  .panel { flex:1 1 380px; border-radius:10px; padding:12px; }
+  .panel.light { background:#ffffff; border:1px solid #e5e7eb; }
+  .panel.dark { background:#1a1a1c; border:1px solid #2a2a2c; color:#e8e8ea; }
+  .panel .tag { font-size:11px; opacity:.55; margin-bottom:8px; }
+  .legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; margin-bottom:10px; }
+  .legend span { display:inline-flex; align-items:center; gap:5px; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .stack { display:flex; height:26px; border-radius:5px; overflow:hidden; margin-bottom:10px; }
+  .stack div { height:100%; }
+  .tbl { width:100%; font-size:12px; border-collapse:collapse; margin-bottom:8px; }
+  .tbl td { padding:3px 6px; border-bottom:1px solid rgba(128,128,128,.18); }
+  .chname { font-weight:600; }
+  .badges { display:flex; gap:6px; flex-wrap:wrap; font-size:11px; }
+  .badge { border-radius:6px; padding:2px 7px; font-family:Consolas,monospace; }
+  .panel.light .badge { color:#374151; background:rgba(0,0,0,.06); }
+  .panel.dark .badge { color:#d4d4d8; background:rgba(255,255,255,.08); }
+  .badge.b-ok { box-shadow:inset 0 0 0 1px rgba(34,197,94,.55); }
+  .badge.b-warn { box-shadow:inset 0 0 0 1px rgba(245,158,11,.6); }
+  .badge.b-bad { box-shadow:inset 0 0 0 1px rgba(239,68,68,.6); }
+</style>
+</head>
+<body>
+<h1>Codex 渠道配色候选 <span style="font-size:13px;font-weight:400;color:#6b7280">（claudecode 已定 Claude 品牌橙：亮 #C2410C / 暗 #D97757）</span></h1>
+<div class="sub">
+  每行：图例条 → 相邻堆叠柱（claudecode 橙紧贴 Codex，最严苛场景）→ 明细表渠道名文字 → 动态数据徽标。
+  合格线：与最近渠道 RGB 距离 <b>≥100</b>；文字色 WCAG 对比 <b>≥4.5</b>。徽标由页面内脚本按真实公式实时计算。
+  <br>结论先行：claudecode 上橙后，<b>橙/红/粉带被 claudecode+bai 占据，绿被 commandcode 占，蓝被 opencode+zcode 占，灰被 dsh 占</b>——唯一空缺且全达标的色相区是梅子紫/品红区（行A）。
+</div>
+<div id="rows"></div>
+<script>
+const dist=(a,b)=>{const p=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));const[r1,g1,b1]=p(a),[r2,g2,b2]=p(b);return Math.hypot(r1-r2,g1-g2,b1-b2);};
+const lum=h=>{const f=c=>{c/=255;return c<=.03928?c/12.92:((c+.055)/1.055)**2.4;};const[r,g,b]=h.match(/\w\w/g).map(x=>f(parseInt(x,16)));return .2126*r+.7152*g+.0722*b;};
+const contrast=(a,b)=>{const[l1,l2]=[lum(a),lum(b)].sort((x,y)=>y-x);return(l1+.05)/(l2+.05);};
+
+/* claudecode 固定品牌橙; 其余渠道基准 */
+const BASE_L={bai:"#f59e0b",commandcode:"#10b981",zcode:"#6366f1",opencode:"#4f8ef7",dsh:"#64748b",claudecode:"#c2410c"};
+const BASE_D={bai:"#f59e0b",commandcode:"#34d399",zcode:"#818cf8",opencode:"#6ba3ff",dsh:"#94a3b8",claudecode:"#d97757"};
+/* 模拟堆叠: claudecode 橙紧贴 Codex (最严苛) */
+const STACK=[["zcode",28],["claudecode",22],["codex",24],["commandcode",14],["bai",12]];
+const TOTAL=STACK.reduce((s,[,v])=>s+v,0);
+
+const ROWS=[
+ {name:"A · 梅子紫（推荐）#C026D3(亮) / #D946EF(暗)", cx:{l:"#c026d3",d:"#d946ef"},
+  note:"唯一全指标达标的色相区（fuchsia 600/500，即你此前确认过的方案A色值）。当时的「玫红感」来自旧 claudecode 鲑粉 #fb7185 与它扎堆——橙化后梅子紫将挨着靛蓝与橙，是全图唯一的紫色调，观感完全不同", verdict:["v-ok","唯一全达标方案"]},
+ {name:"B · 正紫 #9333EA(亮) / #A855F7(暗)", cx:{l:"#9333ea",d:"#a855f7"},
+  note:"距 zcode 靛蓝仅 67-71，两紫同框难分；暗卡对比 4.39 也略欠 4.5", verdict:["v-bad","撞 zcode"]},
+ {name:"C · 青 #0891B2(亮) / #22D3EE(暗)", cx:{l:"#0891b2",d:"#22d3ee"},
+  note:"距 commandcode 翡翠绿仅 64-87，青绿相邻难分；亮卡对比 3.68 不达标", verdict:["v-bad","撞 commandcode"]},
+ {name:"D · 玫红 raspberry #D63384（双主题同值）", cx:{l:"#d63384",d:"#d63384"},
+  note:"暗卡 3.86 不达标；暗主题距 claudecode 橙仅 82。且这正是你 dislke 的「玫红感」本体", verdict:["v-bad","对比不足+撞橙"]},
+ {name:"E · 正红（现状）#E11D48(亮) / #EF4444(暗)", cx:{l:"#e11d48",d:"#ef4444"},
+  note:"claudecode 上橙后正红必须让位：距品牌橙仅 59-77，橙红相邻无法稳定区分", verdict:["v-bad","撞品牌橙"]},
+ {name:"F · 深灰兜底示意 #A8A29E", cx:{l:"#a8a29e",d:"#a8a29e"},
+  note:"「Codex 换深灰/黑」的实拍：白卡对比 2.52 不可用，且距 dsh 石板灰仅 33", verdict:["v-bad","灰系无解"]},
+];
+
+const root=document.getElementById("rows");
+for(const r of ROWS){
+  const row=document.createElement("div"); row.className="row";
+  const allL={...BASE_L, codex:r.cx.l}, allD={...BASE_D, codex:r.cx.d};
+  const nearL=(()=>{const o={...BASE_L};const k=Object.keys(o).reduce((a,b)=>dist(r.cx.l,o[a])<dist(r.cx.l,o[b])?a:b);return[k,dist(r.cx.l,o[k])];})();
+  const nearD=(()=>{const o={...BASE_D};const k=Object.keys(o).reduce((a,b)=>dist(r.cx.d,o[a])<dist(r.cx.d,o[b])?a:b);return[k,dist(r.cx.d,o[k])];})();
+  const conL=contrast(r.cx.l,"#ffffff"), conD=contrast(r.cx.d,"#1a1a1c");
+  const mark=(v,thr)=>v>=thr?"b-ok":(v>=thr*0.7?"b-warn":"b-bad");
+  const legend=k=>Object.entries(k).map(([n,c])=>`<span><i class="dot" style="background:${c}"></i>${n==="codex"?"Codex":n}</span>`).join("");
+  const stack=c=>STACK.map(([n,v])=>`<div style="width:${v/TOTAL*100}%;background:${c[n]}" title="${n} ${v}%"></div>`).join("");
+  const tbl=c=>`<table class="tbl"><tr><td class="chname" style="color:${c.claudecode}">claudecode</td><td>565.4k</td><td>¥138.16</td></tr><tr><td class="chname" style="color:${c.codex}">Codex</td><td>57.69M</td><td>—</td></tr></table>`;
+  const badges=(light)=>{
+    const cx=light?r.cx.l:r.cx.d, base=light?BASE_L:BASE_D;
+    const near=light?nearL:nearD, con=light?conL:conD;
+    return `
+      <span class="badge ${mark(near[1],100)}">距最近渠道 ${near[0]} ${Math.round(near[1])} (线100)</span>
+      <span class="badge ${mark(con,4.5)}">文字对比 ${con.toFixed(2)} (线4.5)</span>
+      <span class="badge ${mark(dist(cx, base.claudecode),100)}">距 claudecode 橙 ${Math.round(dist(cx, base.claudecode))}</span>
+      <span class="badge ${mark(dist(cx, base.zcode),100)}">距 zcode ${Math.round(dist(cx, base.zcode))}</span>`;
+  };
+  row.innerHTML=`
+    <div class="row-h"><span class="name">${r.name}</span><span class="verdict ${r.verdict[0]}">${r.verdict[1]}</span></div>
+    <div class="sub" style="margin:0 0 10px">${r.note}</div>
+    <div class="panels">
+      <div class="panel light"><div class="tag">亮色主题</div><div class="legend">${legend(allL)}</div>
+        <div class="stack">${stack(allL)}</div>${tbl(allL)}<div class="badges">${badges(true)}</div></div>
+      <div class="panel dark"><div class="tag">暗色主题</div><div class="legend">${legend(allD)}</div>
+        <div class="stack">${stack(allD)}</div>${tbl(allD)}<div class="badges">${badges(false)}</div></div>
+    </div>`;
+  root.appendChild(row);
+}
+</script>
+</body>
+</html>
