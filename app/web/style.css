@@ -29,12 +29,12 @@
   --font-sans: "Fira Sans", system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
   --font-mono: "Fira Code", "Cascadia Code", Consolas, monospace;
   --ch-opencode: #4f8ef7;
-  --ch-bai: #f59e0b;            /* 原 #d97706: 暗琥珀 → 亮琥珀 (问题3) */
+  --ch-bai: #f59e0b;            /* 原 #d97706: 暗琥珀 → 亮琥珀 (问题3); 亮档保持, 暗档 20260908 单独提亮 */
   --ch-commandcode: #10b981;    /* 原 #a78bfa: 浅紫 → 翡翠绿 (用户调整渠道配色) */
   --ch-zcode: #6366f1;          /* 原 #06b6d4 青 → 翡翠绿 → 靛蓝 (用户指定) */
-  --ch-claudecode: #fb7185;     /* 原 #e11d48: 暗玫红 → 亮玫红 (问题3) */
+  --ch-claudecode: #c2410c;     /* 20260908: #fb7185 鲑粉 → #c2410c Claude 品牌橙 (亮, orange-700, 白卡 5.18; 用户指定) */
   --ch-dsh: #64748b;
-  --ch-codex: #0f766e;          /* T5: Codex 渠道色 (亮) */
+  --ch-codex: #c026d3;          /* 渠道色演变: #0f766e 青 → 品红/正红多轮 → 20260908 定梅子紫 #c026d3 (fuchsia-600, claudecode 上橙后紫区唯一空缺) */
   --up: #16a34a;                /* 涨/成功语义色 (EVOLUTION-6 新增, 值=原 .wb-s .up 硬编码, 亮色逐像素不变) */
   --down: #dc2626;              /* 跌/失败语义色 (EVOLUTION-6 新增, 值=原 .wb-s .down/.sync-fail 硬编码, 亮色逐像素不变) */
 }
@@ -60,12 +60,12 @@ html[data-theme="dark"] {
   --up: #4ade80;                /* 按最浅承载面 muted 校准 (>=4.5): muted 9.33:1 / card 9.97:1 */
   --down: #f87171;              /* 原亮色值 #dc2626 对 muted 仅 3.37:1 不达标, 提亮: muted 5.88:1 / card 6.28:1 */
   --ch-opencode: #6ba3ff;
-  --ch-bai: #f59e0b;
+  --ch-bai: #facc15;            /* 20260908: #f59e0b → #facc15 金黄 (yellow-400; 品牌橙上位后暗主题距橙 90→113, 亮档仍 #f59e0b) */
   --ch-commandcode: #34d399;
   --ch-zcode: #818cf8;
-  --ch-claudecode: #fb7185;
+  --ch-claudecode: #d97757;     /* 20260908: Claude 品牌陶土橙 (亮配 #c2410c; 暗卡 5.57) */
   --ch-dsh: #94a3b8;
-  --ch-codex: #2dd4bf;          /* T5: Codex 渠道色 (暗) */
+  --ch-codex: #d946ef;          /* 20260908: 定梅子紫 (fuchsia-500, 暗配 #c026d3; 暗卡 5.03, 距最近渠道 113) */
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; overflow: hidden; }
@@ -134,24 +134,39 @@ body { font-family: var(--font-sans); background: var(--bg); color: var(--text);
    (会话用量表与使用记录表同位置列宽一致, 保证上下对齐) */
 #page-records .tbl { table-layout: fixed; }
 #page-records .tbl th, #page-records .tbl td { overflow: hidden; text-overflow: ellipsis; }
-/* 会话用量表: 8列 (Key 12% / 会话 18% / 最后使用 18% / 输入 9% / 输出 9% / 推理 9% / 请求 13% / 成本 12%) */
-#page-records .card.sessions .tbl th:nth-child(1), #page-records .card.sessions .tbl td:nth-child(1) { width: 12%; }
-#page-records .card.sessions .tbl th:nth-child(2), #page-records .card.sessions .tbl td:nth-child(2) { width: 18%; }
-#page-records .card.sessions .tbl th:nth-child(3), #page-records .card.sessions .tbl td:nth-child(3) { width: 18%; }
-#page-records .card.sessions .tbl th:nth-child(4), #page-records .card.sessions .tbl td:nth-child(4) { width: 9%; }
-#page-records .card.sessions .tbl th:nth-child(5), #page-records .card.sessions .tbl td:nth-child(5) { width: 9%; }
-#page-records .card.sessions .tbl th:nth-child(6), #page-records .card.sessions .tbl td:nth-child(6) { width: 9%; }
-#page-records .card.sessions .tbl th:nth-child(7), #page-records .card.sessions .tbl td:nth-child(7) { width: 13%; }
-#page-records .card.sessions .tbl th:nth-child(8), #page-records .card.sessions .tbl td:nth-child(8) { width: 12%; }
-/* 使用记录表: 8列 (Key 12% / 时间 18% / 模型 18% / 输入 9% / 输出 9% / 推理 9% / 缓存读 13% / 费用 12%), 与上表同位置列同宽 */
-#page-records .card.records .tbl th:nth-child(1), #page-records .card.records .tbl td:nth-child(1) { width: 12%; }
-#page-records .card.records .tbl th:nth-child(2), #page-records .card.records .tbl td:nth-child(2) { width: 18%; }
-#page-records .card.records .tbl th:nth-child(3), #page-records .card.records .tbl td:nth-child(3) { width: 18%; }
-#page-records .card.records .tbl th:nth-child(4), #page-records .card.records .tbl td:nth-child(4) { width: 9%; }
-#page-records .card.records .tbl th:nth-child(5), #page-records .card.records .tbl td:nth-child(5) { width: 9%; }
-#page-records .card.records .tbl th:nth-child(6), #page-records .card.records .tbl td:nth-child(6) { width: 9%; }
-#page-records .card.records .tbl th:nth-child(7), #page-records .card.records .tbl td:nth-child(7) { width: 13%; }
-#page-records .card.records .tbl th:nth-child(8), #page-records .card.records .tbl td:nth-child(8) { width: 12%; }
+/* 会话用量表: 12列 (来源 6% / Key 10% / 会话 13% / 最后使用 12% / 输入 8% / 输出 8% / 推理 7% / 缓存写 7% / 总量 8% / 请求 9% / 速度 6% / 成本 6%) */
+#page-records .card.sessions .tbl th:nth-child(1), #page-records .card.sessions .tbl td:nth-child(1) { width: 6%; }
+#page-records .card.sessions .tbl th:nth-child(2), #page-records .card.sessions .tbl td:nth-child(2) { width: 10%; }
+#page-records .card.sessions .tbl th:nth-child(3), #page-records .card.sessions .tbl td:nth-child(3) { width: 13%; }
+#page-records .card.sessions .tbl th:nth-child(4), #page-records .card.sessions .tbl td:nth-child(4) { width: 12%; }
+#page-records .card.sessions .tbl th:nth-child(5), #page-records .card.sessions .tbl td:nth-child(5) { width: 8%; }
+#page-records .card.sessions .tbl th:nth-child(6), #page-records .card.sessions .tbl td:nth-child(6) { width: 8%; }
+#page-records .card.sessions .tbl th:nth-child(7), #page-records .card.sessions .tbl td:nth-child(7) { width: 7%; }
+#page-records .card.sessions .tbl th:nth-child(8), #page-records .card.sessions .tbl td:nth-child(8) { width: 7%; }
+#page-records .card.sessions .tbl th:nth-child(9), #page-records .card.sessions .tbl td:nth-child(9) { width: 8%; }
+#page-records .card.sessions .tbl th:nth-child(10), #page-records .card.sessions .tbl td:nth-child(10) { width: 9%; }
+#page-records .card.sessions .tbl th:nth-child(11), #page-records .card.sessions .tbl td:nth-child(11) { width: 6%; }
+#page-records .card.sessions .tbl th:nth-child(12), #page-records .card.sessions .tbl td:nth-child(12) { width: 6%; }
+/* 使用记录表: 13列 (来源 6% / Key 10% / 时间 12% / 模型 10% / 渠道 8% / 输入 7% / 输出 7% / 推理 6% / 缓存读 7% / 缓存写 7% / 总量 7% / 速度 6% / 费用 7%) */
+#page-records .card.records .tbl th:nth-child(1), #page-records .card.records .tbl td:nth-child(1) { width: 6%; }
+#page-records .card.records .tbl th:nth-child(2), #page-records .card.records .tbl td:nth-child(2) { width: 10%; }
+#page-records .card.records .tbl th:nth-child(3), #page-records .card.records .tbl td:nth-child(3) { width: 12%; }
+#page-records .card.records .tbl th:nth-child(4), #page-records .card.records .tbl td:nth-child(4) { width: 10%; }
+#page-records .card.records .tbl th:nth-child(5), #page-records .card.records .tbl td:nth-child(5) { width: 8%; }
+#page-records .card.records .tbl th:nth-child(6), #page-records .card.records .tbl td:nth-child(6) { width: 7%; }
+#page-records .card.records .tbl th:nth-child(7), #page-records .card.records .tbl td:nth-child(7) { width: 7%; }
+#page-records .card.records .tbl th:nth-child(8), #page-records .card.records .tbl td:nth-child(8) { width: 6%; }
+#page-records .card.records .tbl th:nth-child(9), #page-records .card.records .tbl td:nth-child(9) { width: 7%; }
+#page-records .card.records .tbl th:nth-child(10), #page-records .card.records .tbl td:nth-child(10) { width: 7%; }
+#page-records .card.records .tbl th:nth-child(11), #page-records .card.records .tbl td:nth-child(11) { width: 7%; }
+#page-records .card.records .tbl th:nth-child(12), #page-records .card.records .tbl td:nth-child(12) { width: 6%; }
+#page-records .card.records .tbl th:nth-child(13), #page-records .card.records .tbl td:nth-child(13) { width: 7%; }
+
+/* T6: 明细/会话两表横向滚动容器 — 窄窗保持列宽可横向检查, 不缩到文字重叠;
+   不复用渠道明细表专用的 tbl-scroll (test_narrow_layout 防扩大锚: 仅出现一次) */
+.usage-scroll { flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; }
+#page-records .card.sessions .usage-scroll .tbl { min-width: 1000px; }
+#page-records .card.records .usage-scroll .tbl { min-width: 1120px; }
 
 /* 滚动条美化 (细 + 圆角 + 主题色) */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -482,9 +497,8 @@ html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
 /* section 本体不加 card (避免外层 card 再嵌 KPI cards 双层卡壳): KPI 卡直接铺在
    页面背景上, 与 stats-total-cards 同风格; 颜色/边框全部走主题 token */
 .codex-stats { margin-bottom: 12px; }
-/* KPI 两行各 6 卡: 固定 minmax tracks, 极窄窗口 3 列换行 */
+/* KPI 单行 6 卡: 固定 minmax tracks, 极窄窗口 3 列换行 */
 .codex-stats .kpi-row { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-.codex-stats .kpi-row + .kpi-row { margin-top: 0; }
 /* 数据表外层横向滚动, 不挤压窗口; 双表间距 */
 .codex-table-scroll { overflow-x: auto; margin-bottom: 4px; }
 .codex-table-scroll .tbl + .tbl { margin-top: 12px; }

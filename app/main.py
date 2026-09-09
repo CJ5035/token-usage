@@ -66,6 +66,32 @@ def _enable_taskbar_minimize(win) -> None:
     except Exception:  # noqa: BLE001
         pass
 
+
+def _setup_maximize_bounds(win) -> None:
+    """无边框窗口最大化支持: 动态维护 MaximizedBounds 为窗口当前所在屏工作区.
+
+    FormBorderStyle.None 的窗口最大化时 WinForms 未设 MaximizedBounds, 按整个
+    屏幕计算最大化区域, 会覆盖任务栏. 位置变化 (LocationChanged) 时按当时
+    所在屏刷新, 保证多显示器下拖到任一屏后最大化 (标题栏按钮或 Win+Up)
+    都不遮挡任务栏. WinForms 事件在 UI 线程触发, 与 js_api 工作线程无交叉.
+    """
+    try:
+        from System.Windows.Forms import Screen  # pythonnet, 随 pywebview winforms 后端加载
+
+        def _refresh(_sender=None, _args=None) -> None:
+            try:
+                from System.Windows.Forms import Screen as _Screen
+
+                native = win.native
+                native.MaximizedBounds = _Screen.FromHandle(native.Handle).WorkingArea
+            except Exception:  # noqa: BLE001
+                pass
+
+        _refresh()
+        win.native.LocationChanged += _refresh
+    except Exception:  # noqa: BLE001
+        pass
+
 _MAIN_LOG = os.path.join(tempfile.gettempdir(), "gousage_main.log")
 
 
@@ -308,7 +334,13 @@ class TrayIcon:
             win = self._win_getter()
             if win:
                 win.show()
-                win.restore()
+                # 仅最小化窗口需要 restore; 最大化窗口 restore 会退成普通窗口
+                # (WindowState.Normal), 最大化→托盘→显示后丢失最大化状态
+                try:
+                    if str(win.native.WindowState) == "Minimized":
+                        win.restore()
+                except Exception:  # noqa: BLE001
+                    win.restore()  # 状态读取失败时保持修复前行为
 
     def _quit(self, icon=None, item=None) -> None:
         global _quitting
@@ -357,6 +389,25 @@ class WindowApi:
             self._win.minimize()
         return True
 
+    def toggle_maximize(self) -> bool:
+        """最大化/还原切换 (自定义标题栏按钮).
+
+        状态以 WinForms WindowState 为单一事实源: Win+Up 等系统入口与按钮
+        走同一状态, 前端按钮图标据此推断, 后端不另记标志. maximize/restore
+        由 pywebview 内部 Invoke 封送到 UI 线程, js_api 工作线程不直接写
+        native 属性 (WinForms 跨线程写会抛 InvalidOperationException).
+        """
+        if not self._win:
+            return True
+        try:
+            if str(self._win.native.WindowState) == "Maximized":
+                self._win.restore()
+            else:
+                self._win.maximize()
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+
     def move_by(self, dx: float, dy: float) -> bool:
         """标题栏拖动(增量): dx/dy 为屏幕物理像素增量, 直接换算窗口位置.
 
@@ -372,6 +423,10 @@ class WindowApi:
         """
         try:
             native = self._win.native
+            # 最大化状态忽略拖动: 窗口占满工作区, 拖动只会挪出错位;
+            # WindowState 为单一事实源, Win+Up 旁路最大化同样被拦截
+            if str(native.WindowState) == "Maximized":
+                return True
             hwnd = int(native.Handle.ToInt32())
             with _move_lock:
                 rect = _RECT()
@@ -719,6 +774,8 @@ def main() -> None:
     def on_shown() -> None:
         # 窗口显示后 native 句柄才可用: 补 WS_MINIMIZEBOX, 修复任务栏点击不最小化
         _enable_taskbar_minimize(main_win)
+        # 无边框窗口最大化防遮挡任务栏: 动态维护 MaximizedBounds (含多显示器跟随)
+        _setup_maximize_bounds(main_win)
 
     def on_restored() -> None:
         # 窗口最小化->恢复过程中 WinForms 可能重建句柄导致样式丢失, 恢复后重新补上

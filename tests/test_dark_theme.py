@@ -46,6 +46,9 @@ _DARK_EXPECTED = {
 # :root 不可变锚允许的新增 token 白名单 (--up/--down: EVOLUTION-6; --ch-codex: T5 Codex 渠道色)
 _ROOT_ADDED_ALLOWED = {"--up", "--down", "--ch-codex"}
 
+# 20260907 Codex 渠道色换品红 (与 commandcode 撞色修复, 用户指定): :root/dark 改值豁免 + 新值锚定
+_ROOT_RECOLOR_ALLOWED = {"--ch-codex", "--ch-claudecode", "--ch-bai"}   # 20260908 三渠道终局配色
+
 
 # ---------------------------------------------------------------------------
 # 解析辅助
@@ -143,7 +146,7 @@ def test_dark_untouched_tokens_unchanged_from_head():
     token (--primary/--primary-strong/--shadow/--danger-soft/--ch-* 其余项) 与 HEAD 一致."""
     head = _dark_vars(_head_css())
     cur = _dark_vars(_css())
-    changed = set(_DARK_EXPECTED) | {"--up", "--down"}
+    changed = set(_DARK_EXPECTED) | {"--up", "--down", "--ch-codex", "--ch-claudecode", "--ch-bai"}   # 20260908 三渠道终局配色
     assert set(cur) - set(head) <= {"--up", "--down", "--ch-codex"}   # --ch-codex: T5 Codex 渠道色新增声明
     for token, value in head.items():
         if token in changed:
@@ -184,6 +187,8 @@ def test_root_tokens_unchanged_from_head():
         f":root 出现白名单外的新增声明: {set(cur) - set(head)}"
     )
     for token, value in head.items():
+        if token in _ROOT_RECOLOR_ALLOWED:
+            continue
         assert cur.get(token) == value, f":root 变量被改动: {token}: {value!r} -> {cur.get(token)!r}"
 
 
@@ -275,3 +280,16 @@ def test_badge_ok_dark_soft_bg_contrast():
 def test_plan_badge_dead_code_removed():
     assert "PLAN_BADGE" not in _js(), "app.js 仍存在 PLAN_BADGE 死代码"
     assert ".plan-badge.lite" not in _css(), "style.css 仍存在 .plan-badge.lite 死代码"
+
+
+def test_codex_channel_color_recolored_20260907():
+    """20260907-08 渠道配色终局: Codex 梅子紫 #c026d3/#d946ef; claudecode 品牌橙 #c2410c/#d97757;
+    bai 亮 #f59e0b 不变 / 暗金黄 #facc15 (全量审计见 artifacts/dark-theme-full-audit.html)."""
+    root = _root_vars(_css())
+    dark = _dark_vars(_css())
+    assert root["--ch-codex"] == "#c026d3"
+    assert dark["--ch-codex"] == "#d946ef"
+    assert root["--ch-claudecode"] == "#c2410c"
+    assert dark["--ch-claudecode"] == "#d97757"
+    assert root["--ch-bai"] == "#f59e0b"
+    assert dark["--ch-bai"] == "#facc15"

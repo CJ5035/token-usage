@@ -27,6 +27,7 @@
     </div>
     <span class="tb-sep"></span>
     <button class="tb-btn" id="tb-min" data-i18n-title="minimize"><svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg></button>
+    <button class="tb-btn" id="tb-max" data-i18n-title="maximize"><svg viewBox="0 0 12 12"><path d="M2.5 2.5h7v7h-7z"/></svg></button>
     <button class="tb-btn tb-close" id="tb-close" data-i18n-title="close"><svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg></button>
   </div>
 </header>
@@ -74,7 +75,7 @@
           <div class="card"><div class="card-h"><h3 data-i18n="donutTitle">渠道占比</h3></div><div class="chart-box" style="min-height:240px;position:relative"><canvas id="report-donut"></canvas><div class="zcode-chart-empty" id="report-donut-empty" hidden></div></div></div>
         </div>
         <div class="card"><div class="card-h"><h3 id="hourly-title"><span data-i18n="todayTrend">今日趋势</span> <span class="hint">24h</span></h3></div><div class="chart-box" style="height:250px"><canvas id="report-hourly"></canvas><div class="zcode-chart-empty" id="report-hourly-empty" hidden></div></div></div>
-        <div class="card"><div class="card-h"><h3 data-i18n="chTableTitle">渠道明细</h3></div><div class="tbl-scroll"><table class="tbl"><thead><tr><th data-i18n="channel">渠道</th><th class="num" data-i18n="totalTokens">Token</th><th class="num" data-i18n="input">输入</th><th class="num" data-i18n="output">输出</th><th class="num" data-i18n="colCacheRead">缓存读</th><th class="num" data-i18n="colRequests">请求</th><th class="num" data-i18n="colCost">费用</th><th data-i18n="dataSince">数据自</th></tr></thead><tbody id="report-table"></tbody></table></div></div>
+        <div class="card"><div class="card-h"><h3 data-i18n="chTableTitle">渠道明细</h3></div><div class="tbl-scroll"><table class="tbl"><thead><tr><th data-i18n="channel">渠道</th><th class="num" data-i18n="totalTokens">Token</th><th class="num" data-i18n="input">输入</th><th class="num" data-i18n="output">输出</th><th class="num" data-i18n="colCacheRead">缓存读</th><th class="num" data-i18n="colRequests">请求</th><th class="num" data-i18n="colCost">费用</th><th data-i18n="dataSince" data-i18n-title="dataSinceTip">数据起点</th></tr></thead><tbody id="report-table"></tbody></table></div></div>
       </div>
       <div id="report-single" hidden>
       <div class="usage-blocks" id="usage-blocks"></div>
@@ -173,23 +174,28 @@
       <div class="ph"><h2 class="ph-title" data-i18n="recordsPage">使用记录</h2></div>
       <div class="card sessions">
         <div class="card-h"><h3 data-i18n="sessionUsage">会话用量</h3><span class="hint" id="ses-count"></span></div>
+        <div class="usage-scroll">
         <table class="tbl">
-          <thead><tr><th data-i18n="colKey">Key 名称</th><th data-i18n="colSession">会话</th><th data-i18n="colLastUsed">最后使用</th><th class="num" data-i18n="colInput">输入</th><th class="num" data-i18n="colOutput">输出</th><th class="num" data-i18n="colReasoning">推理</th><th class="num" data-i18n="colRequests">请求</th><th class="num" data-i18n="colCost">成本</th></tr></thead>
+          <thead><tr><th data-i18n="colSource">来源</th><th data-i18n="colKey">Key 名称</th><th data-i18n="colSession">会话</th><th data-i18n="colLastUsed">最后使用</th><th class="num" data-i18n="colInput">输入</th><th class="num" data-i18n="colOutput">输出</th><th class="num" data-i18n="colReasoning">推理</th><th class="num" data-i18n="colCacheWrite">缓存写</th><th class="num" data-i18n="colTotal">总量</th><th class="num" data-i18n="colRequests">请求</th><th class="num" data-i18n="colSpeed">速度</th><th class="num" data-i18n="colCost">成本</th></tr></thead>
           <tbody id="sessions-body"></tbody>
         </table>
+        </div>
         <div class="pager"><button class="btn" id="ses-prev" data-i18n="prev">上一页</button><span class="pager-info" id="ses-pager"></span><button class="btn" id="ses-next" data-i18n="next">下一页</button></div>
       </div>
       <div class="card records">
         <div class="card-h"><h3 data-i18n="usageRecords">使用记录</h3>
           <div class="ph-right">
+            <select id="rec-source-filter" class="select"></select>
             <select id="rec-model-filter" class="select"><option value=""><span data-i18n="allModels">全部模型</span></option></select>
             <span class="hint" id="rec-count"></span>
           </div>
         </div>
+        <div class="usage-scroll">
         <table class="tbl">
-          <thead><tr><th data-i18n="colKey">Key 名称</th><th data-i18n="colTime">时间</th><th data-i18n="colModel">模型</th><th class="num" data-i18n="colInput">输入</th><th class="num" data-i18n="colOutput">输出</th><th class="num" data-i18n="colReasoning">推理</th><th class="num" data-i18n="colCacheRead">缓存读</th><th class="num" data-i18n="colCost">费用</th></tr></thead>
+          <thead><tr><th data-i18n="colSource">来源</th><th data-i18n="colKey">Key 名称</th><th data-i18n="colTime">时间</th><th data-i18n="colModel">模型</th><th data-i18n="channel">渠道</th><th class="num" data-i18n="colInput">输入</th><th class="num" data-i18n="colOutput">输出</th><th class="num" data-i18n="colReasoning">推理</th><th class="num" data-i18n="colCacheRead">缓存读</th><th class="num" data-i18n="colCacheWrite">缓存写</th><th class="num" data-i18n="colTotal">总量</th><th class="num" data-i18n="colSpeed">速度</th><th class="num" data-i18n="colCost">费用</th></tr></thead>
           <tbody id="records-body"></tbody>
         </table>
+        </div>
         <div class="pager"><button class="btn" id="pg-prev" data-i18n="prev">上一页</button><span class="pager-info" id="rec-pager"></span><button class="btn" id="pg-next" data-i18n="next">下一页</button></div>
       </div>
     </section>

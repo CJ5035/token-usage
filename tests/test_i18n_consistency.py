@@ -4,14 +4,14 @@
 契约手法 (.superpowers/sdd/20260906-evolution-plan-9 task-2-brief §断言清单):
 
 - 硬编码 tooltip 清零: index.html 中 11 个问题 title 属性零命中,
-  data-i18n-title= 恰 13 处;
+  data-i18n-title= 恰 14 处;
 - 机制存在: syncI18nTitles 函数 + [data-i18n-title] 遍历 + applyLang 函数域内
   syncI18nTitles()/syncTopBar( 调用;
 - applyLang 解耦防退化锚 (核心): applyLang 函数体内不含 renderAll( — 切语言仅刷
   顶栏, 勿全文件反向匹配 (loadDashboard 合法调用 renderAll);
 - 函数域锚定: userSwitchTip/userCountTip 归属 syncTopBar, syncFailTip 归属
   renderQuotaBar; title="同步失败" 属性模式零命中 (区别于 I18N 键值行);
-- I18N 契约: index.html data-i18n-title 实际引用的 13 键 + estimateBadge/
+- I18N 契约: index.html data-i18n-title 实际引用的 14 键 + estimateBadge/
   syncFailTip 在 zh/en 双语同时存在 (按实际键清单断言);
 - applyCurrency 早退: settings 上下文 return 位于 renderOverview 之前;
 - 回归锚: renderAll 主体 / tbl-scroll 防扩大锚 / :root 渠道色基线未变.
@@ -69,8 +69,8 @@ def test_hardcoded_titles_removed_from_html():
         assert title not in html, f"index.html 仍存在硬编码 tooltip: {title}"
 
 
-def test_data_i18n_title_count_is_13():
-    assert _html().count("data-i18n-title=") == 13
+def test_data_i18n_title_count_is_15():
+    assert _html().count("data-i18n-title=") == 15
 
 
 # ---------------------------------------------------------------------------
@@ -127,8 +127,8 @@ def test_no_hardcoded_sync_fail_title_attr_in_js():
 
 def test_i18n_contract_keys_in_both_langs():
     referenced = set(re.findall(r'data-i18n-title="([^"]+)"', _html()))
-    assert len(referenced) == 13, "data-i18n-title 引用键应为 13 个"
-    expected = referenced | {"estimateBadge", "syncFailTip"}
+    assert len(referenced) == 15, "data-i18n-title 引用键应为 15 个"
+    expected = referenced | {"estimateBadge", "syncFailTip", "restore"}
     for lang in ("zh", "en"):
         block = _i18n_block(_js(), lang)
         for key in sorted(expected):
@@ -172,7 +172,7 @@ def test_root_channel_colors_unchanged():
         "--ch-bai: #f59e0b;",
         "--ch-commandcode: #10b981;",
         "--ch-zcode: #6366f1;",
-        "--ch-claudecode: #fb7185;",
+        "--ch-claudecode: #c2410c;",   # 20260908: 鲑粉 → Claude 品牌橙 (用户指定)
         "--ch-dsh: #64748b;",
     ):
         assert line in css, f":root 渠道色基线变化: {line}"

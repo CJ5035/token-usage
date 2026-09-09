@@ -6,7 +6,7 @@ const $ = (id) => document.getElementById(id);
 /* ================= 国际化 ================= */
 const I18N = {
   zh: {
-    syncing: "同步中", themeDark: "暗色", themeLight: "亮色", refresh: "刷新", themeToggle: "切换主题", minimize: "最小化", close: "关闭",
+    syncing: "同步中", themeDark: "暗色", themeLight: "亮色", refresh: "刷新", themeToggle: "切换主题", minimize: "最小化", close: "关闭", maximize: "最大化", restore: "还原",
     homeTitle: "用量统计总览", navHome: "首页", today: "今天", d7: "近7天", d30: "近30天", all: "全部",
     overviewTitle: "用量概览", followRange: "数据跟随时间范围",
     todayTrend: "今日趋势", hours24: "24 小时",
@@ -23,6 +23,8 @@ const I18N = {
     checkingUpdate: "检查中…", updateFound: "发现新版本", updateNone: "已是最新版本", updateFailed: "检查更新失败", goDownload: "前往下载",
     colTime: "时间", colModel: "模型", colInput: "输入", colOutput: "输出",
     colReasoning: "推理", colCacheRead: "缓存读", colCost: "费用", colPlan: "PLAN",
+    colSource: "来源", colCacheWrite: "缓存写", colTotal: "总量", colSpeed: "速度",
+    allSources: "全部来源", srcOpencode: "OpenCode", srcZcode: "ZCode", srcClaudecode: "Claude Code", srcCodex: "Codex",
     prev: "上一页", next: "下一页",
     settingsTitle: "设置", setAccount: "OpenCode 账户", setLoginState: "登录状态",
     setWorkspace: "工作区", setLoginMethod: "登录方式",
@@ -120,12 +122,14 @@ const I18N = {
     accountsUnit: "账号", quotaBarTitle: "各渠道配额",
     stackTitle: "分渠道消耗趋势", donutTitle: "渠道占比", chTableTitle: "渠道明细", channel: "渠道",
     reportEmpty: "暂无数据", segTokens: "Token",
-    dataSinceToday: "仅今日", dataSince: "数据自",
+    dataSinceToday: "仅今日", dataSince: "数据起点",
+    dataSinceTip: "该渠道本地最早记录日期（历史覆盖起点），不随上方时间范围变化；「仅今日」表示该渠道无历史数据",
+    unusedChannelsHint: "本范围无用量渠道：{chs}",
     noUsageToday: "今日暂无用量", noDataInRange: "该范围暂无数据",
     cmpExcludesDsh: "涨跌百分比未含今日 DSH", statsScopeHint: "主区仅统计 OpenCode 渠道用量；ZCode / Claude Code / DSH / Codex 本地用量见下方独立区块（首页「今天」合计已并入今日 DSH 用量，涨跌百分比未含）",
   },
   en: {
-    syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh", themeToggle: "Toggle theme", minimize: "Minimize", close: "Close",
+    syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh", themeToggle: "Toggle theme", minimize: "Minimize", close: "Close", maximize: "Maximize", restore: "Restore",
     homeTitle: "Usage Overview", navHome: "Home", today: "Today", d7: "7 Days", d30: "30 Days", all: "All",
     overviewTitle: "Usage Overview", followRange: "Follows selected range",
     todayTrend: "Today's Trend", hours24: "24 Hours",
@@ -142,6 +146,8 @@ const I18N = {
     checkingUpdate: "Checking…", updateFound: "New Version Available", updateNone: "You're up to date", updateFailed: "Check failed", goDownload: "Go to Download",
     colTime: "Time", colModel: "Model", colInput: "Input", colOutput: "Output",
     colReasoning: "Reasoning", colCacheRead: "Cache Read", colCost: "Cost", colPlan: "PLAN",
+    colSource: "Source", colCacheWrite: "Cache Write", colTotal: "Total", colSpeed: "Speed",
+    allSources: "All Sources", srcOpencode: "OpenCode", srcZcode: "ZCode", srcClaudecode: "Claude Code", srcCodex: "Codex",
     prev: "Prev", next: "Next",
     settingsTitle: "Settings", setAccount: "OpenCode Account", setLoginState: "Login Status",
     setWorkspace: "Workspace", setLoginMethod: "Login Method",
@@ -239,7 +245,9 @@ const I18N = {
     accountsUnit: " acct", quotaBarTitle: "Channel Quotas",
     stackTitle: "Usage by Channel", donutTitle: "Channel Share", chTableTitle: "Channel Breakdown", channel: "Channel",
     reportEmpty: "No data yet", segTokens: "Tokens",
-    dataSinceToday: "Today only", dataSince: "Data since",
+    dataSinceToday: "Today only", dataSince: "Data start",
+    dataSinceTip: "Earliest local record date of this channel (history coverage start), unaffected by the range selector; 'Today only' means the channel has no history yet",
+    unusedChannelsHint: "No usage in this range: {chs}",
     noUsageToday: "No usage today", noDataInRange: "No data in this range",
     cmpExcludesDsh: "Trend % excludes today's DSH", statsScopeHint: "Main section covers OpenCode channels only; see the dedicated ZCode / Claude Code / DSH / Codex blocks below (today's homepage total includes today's DSH usage; the trend % does not)",
   },
@@ -260,7 +268,7 @@ let state = {
   syncTimer: null,
   quotaRetryTimer: null,
   ovRetryTimer: null,
-  records: { page: 1, pageSize: 7, total: 0, model: "" },
+  records: { page: 1, pageSize: 7, total: 0, model: "", source: "all" },
   sessions: { page: 1, pageSize: 7, total: 0 },
   settings: { sync_interval_sec: 300, window_days: 60, auto_sync: true },
   channel: "all",        // 首页渠道 tab; 冷启动强制 all (spec v2)
@@ -432,8 +440,26 @@ async function pywebviewApi() {
   try { if (window.pywebview && window.pywebview.api) return window.pywebview.api; } catch (e) { /* ignore */ }
   return null;
 }
+/* 最大化按钮状态: 不记标志, 每次 resize/初始化后以窗口实际尺寸推断
+   (Win+Up 系统旁路最大化也被覆盖); 切换图标时同步 data-i18n-title 属性,
+   保证 syncI18nTitles 切语言后 tooltip 仍与真实状态一致. */
+const MAX_SVG = '<svg viewBox="0 0 12 12"><path d="M2.5 2.5h7v7h-7z"/></svg>';
+const RESTORE_SVG = '<svg viewBox="0 0 12 12"><path d="M3.5 4.5h5v5h-5z"/><path d="M4.5 4.5v-2h5v5h-2"/></svg>';
+function isWindowMaximized() {
+  return Math.abs(window.outerWidth - screen.availWidth) <= 4
+    && Math.abs(window.outerHeight - screen.availHeight) <= 4;
+}
+function syncMaxBtn() {
+  const btn = $("tb-max");
+  if (!btn) return;
+  const max = isWindowMaximized();
+  btn.innerHTML = max ? RESTORE_SVG : MAX_SVG;
+  btn.setAttribute("data-i18n-title", max ? "restore" : "maximize");
+  btn.title = t(max ? "restore" : "maximize");
+}
 function bindTitlebar() {
   $("tb-min").addEventListener("click", async () => { const a = await pywebviewApi(); if (a) a.minimize(); });
+  $("tb-max").addEventListener("click", async () => { const a = await pywebviewApi(); if (a && a.toggle_maximize) a.toggle_maximize(); });
   $("tb-close").addEventListener("click", async () => { const a = await pywebviewApi(); if (a) a.close(); });
   $("tb-theme").addEventListener("click", () => applyDarkMode(document.documentElement.dataset.theme !== "dark"));
 
@@ -478,6 +504,7 @@ function bindTitlebar() {
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
     flushDrag();  // 释放残留增量, 避免窗口停在半路
   });
+  syncMaxBtn();   // 启动初始化一次 (窗口 1280x840 非最大化 -> 显示最大化图标)
 }
 
 /* ---------------- 主题 / 货币 ---------------- */
@@ -538,8 +565,8 @@ function renderSkeletons() {
   if (!$("stats-detail6").innerHTML) $("stats-detail6").innerHTML = `<div class="tc skeleton"><div class="sk-line w40"></div><div class="sk-line w50 lg"></div><div class="sk-line w30"></div></div>`.repeat(6);
 }
 /* 加载失败占位 (EVOLUTION-3): 写入 usage-blocks / overview-grid / stats-total-cards
-   三区——前两区为 renderSkeletons 无条件赋值, 重试可恢复; stats-total-cards 成功
-   路径 renderStatsTotal 无条件覆盖 innerHTML, 占位不影响数据渲染 (其 if(!innerHTML)
+   三区——前两区为 renderSkeletons 无条件赋值, 重试可恢复; stats-total-cards
+   占位不影响数据渲染 (其 if(!innerHTML)
    骨架守卫仅使重试加载期短暂显示旧占位而非骨架, 可接受), 该区为 grid 布局, 占位
    以 grid-column:1/-1 通栏; stats-detail6 维持清空; trend 区为 canvas + sk-box
    class 遮罩 (非 innerHTML), 移除 class 即可 */
@@ -1359,7 +1386,10 @@ function chartCodexTrend(daily7, noAnim) {
 function refreshCodexVisible() {
   if (state.page === "stats") loadCodexSummary().catch(() => {});
   else if (state.page === "home") loadDashboard(true);
-  else if (state.page === "records") Promise.all([loadRecords().catch(() => {}), loadSessions().catch(() => {})]);
+  else if (state.page === "records") {
+    state.records.page = 1; state.sessions.page = 1;   // 后台导入数据集变化: 回第 1 页
+    Promise.all([loadRecords().catch(() => {}), loadSessions().catch(() => {})]);
+  }
 }
 
 /* ---------------- 首页: 用量概览 6 格 ---------------- */
@@ -1554,21 +1584,42 @@ function chartTrend(trend, noAnim) {
 }
 
 /* ---------------- 会话用量 ---------------- */
+/* T6 统一来源: 一个共享来源下拉控制上下两表, 模型筛选同步应用;
+   默认"全部"并显式发送 source=all (需求 §5.3), 不做记住上次选择 */
+const SOURCE_OPTIONS = [
+  ["all", "allSources"], ["opencode", "srcOpencode"], ["bai", "sourceBai"],
+  ["commandcode", "sourceCommandcode"], ["zcode", "srcZcode"],
+  ["claudecode", "srcClaudecode"], ["codex", "srcCodex"]];
+function syncSourceFilter() {
+  const sel = $("rec-source-filter");
+  if (!sel) return;
+  sel.innerHTML = SOURCE_OPTIONS.map(([v, k]) => `<option value="${v}">${escapeHtml(t(k))}</option>`).join("");
+  sel.value = state.records.source || "all";
+}
+function sourceBadge(source) {
+  const opt = SOURCE_OPTIONS.find(([v]) => v === source);
+  return opt ? `<span class="src-badge">${escapeHtml(t(opt[1]))}</span>` : "—";
+}
+function fmtTps(v) {
+  return v == null ? "—" : Number(v).toFixed(1) + " tok/s";
+}
 let sesSeq = 0;
 async function loadSessions() {
   const seq = ++sesSeq;
   const body = $("sessions-body");
   try {
-    const q = new URLSearchParams({ page: state.sessions.page, page_size: 7 });
+    const q = new URLSearchParams({ page: state.sessions.page, page_size: 7, source: state.records.source });
+    if (state.records.model) q.set("model", state.records.model);
     const data = await api(`/api/usage/sessions?${q}`);
     if (seq !== sesSeq) return; // 丢弃过期响应 (快速切页/翻页时旧请求)
     state.sessions.total = data.total;
     $("ses-count").textContent = `${t("totalN")} ${fmtInt(data.total)} ${t("sessions")}`;
     if (!data.records.length) {
-      body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:20px">${t("noData")}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="12" style="text-align:center;color:var(--text3);padding:20px">${t("noData")}</td></tr>`;
     } else {
       let html = data.records.map((s) => `
-        <tr><td class="key-name">${escapeHtml(s.key_name || "—")}</td>
+        <tr><td>${sourceBadge(s.source)}</td>
+        <td class="key-name">${escapeHtml(s.key_name || "—")}</td>
         ${s.session_id
           ? `<td title="${escapeHtml(s.session_id)}">${escapeHtml(shortId(s.session_id))}</td>`
           : `<td class="unassigned">${t("unassigned")}</td>`}
@@ -1576,11 +1627,14 @@ async function loadSessions() {
         <td class="num">${fmtTokens(s.total_input_tokens)}</td>
         <td class="num">${fmtTokens(s.total_output_tokens)}</td>
         <td class="num">${fmtTokens(s.total_reasoning_tokens)}</td>
-        <td class="num">${fmtInt(s.request_count)} / ${fmtTokens(s.total_input_tokens + s.total_output_tokens + s.total_reasoning_tokens)}</td>
-        <td class="num">${fmtMoney(s.total_cost_usd)}</td></tr>`).join("");
+        <td class="num">${fmtTokens(s.cache_write_tokens)}</td>
+        <td class="num">${fmtTokens(s.total_tokens != null ? s.total_tokens : s.total_input_tokens + s.total_output_tokens + s.total_reasoning_tokens)}</td>
+        <td class="num">${fmtInt(s.request_count)} / ${fmtTokens(s.total_tokens != null ? s.total_tokens : s.total_input_tokens + s.total_output_tokens + s.total_reasoning_tokens)}</td>
+        <td class="num">${fmtTps(s.avg_tps)}</td>
+        <td class="num">${fmtOptionalMoney(s.total_cost_usd)}</td></tr>`).join("");
       // 固定 7 行, 不足补空行
       if (data.records.length < 7) {
-        html += ('<tr>' + '<td>&nbsp;</td>'.repeat(8) + '</tr>').repeat(7 - data.records.length);
+        html += ('<tr>' + '<td>&nbsp;</td>'.repeat(12) + '</tr>').repeat(7 - data.records.length);
       }
       body.innerHTML = html;
     }
@@ -1589,7 +1643,7 @@ async function loadSessions() {
     $("ses-prev").disabled = state.sessions.page <= 1;
     $("ses-next").disabled = state.sessions.page >= totalPages;
   } catch (e) {
-    if (seq === sesSeq) body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--red);padding:20px">${t("loadFailed")}: ${escapeHtml(e.message)}</td></tr>`;
+    if (seq === sesSeq) body.innerHTML = `<tr><td colspan="12" style="text-align:center;color:var(--red);padding:20px">${t("loadFailed")}: ${escapeHtml(e.message)}</td></tr>`;
   }
 }
 function shortId(id) {
@@ -1614,7 +1668,7 @@ async function loadRecords() {
   const seq = ++recSeq;
   const body = $("records-body");
   try {
-    const q = new URLSearchParams({ page: state.records.page, page_size: 7 });
+    const q = new URLSearchParams({ page: state.records.page, page_size: 7, source: state.records.source });
     if (state.records.model) q.set("model", state.records.model);
     const data = await api(`/api/usage/records?${q}`);
     if (seq !== recSeq) return; // 丢弃过期响应 (快速切页/翻页时旧请求)
@@ -1623,22 +1677,28 @@ async function loadRecords() {
     const cur = sel.value;
     sel.innerHTML = '<option value="">' + t("allModels") + '</option>' + data.models.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
     sel.value = state.records.model || cur || "";
+    syncSourceFilter();
     $("rec-count").textContent = `${t("totalN")} ${fmtInt(data.total)} ${t("items")}`;
     if (!data.records.length) {
-      body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:24px">${t("noData")}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="13" style="text-align:center;color:var(--text3);padding:24px">${t("noData")}</td></tr>`;
     } else {
       let html = data.records.map((r) => `
-        <tr><td class="key-name">${escapeHtml(r.key_name || "—")}</td>
-        <td>${fmtDateTime(r.created_at)}</td>
-        <td><span class="model-cell">${modelIcon(r.model)}${escapeHtml(r.model)}</span></td>
+        <tr><td>${sourceBadge(r.source)}</td>
+        <td class="key-name">${escapeHtml(r.key_name || "—")}</td>
+        <td>${fmtDateTime(r.started_at || r.created_at)}</td>
+        <td>${r.model ? `<span class="model-cell">${modelIcon(r.model)}${escapeHtml(r.model)}</span>` : escapeHtml(t("codexUnknownModel"))}</td>
+        <td>${escapeHtml(r.provider_id || "—")}</td>
         <td class="num">${fmtTokens(r.input_tokens)}</td>
         <td class="num">${fmtTokens(r.output_tokens)}</td>
         <td class="num">${fmtTokens(r.reasoning_tokens)}</td>
         <td class="num">${fmtTokens(r.cache_read_tokens)}</td>
-        <td class="num">${fmtMoney(r.cost_usd)}</td></tr>`).join("");
+        <td class="num">${fmtTokens(r.cache_write_tokens)}</td>
+        <td class="num">${fmtTokens(r.total_tokens)}</td>
+        <td class="num">${fmtTps(r.speed_tps)}</td>
+        <td class="num">${fmtOptionalMoney(r.cost_usd)}</td></tr>`).join("");
       // 固定 7 行, 不足补空行
       if (data.records.length < 7) {
-        html += ('<tr>' + '<td>&nbsp;</td>'.repeat(8) + '</tr>').repeat(7 - data.records.length);
+        html += ('<tr>' + '<td>&nbsp;</td>'.repeat(13) + '</tr>').repeat(7 - data.records.length);
       }
       body.innerHTML = html;
     }
@@ -1647,7 +1707,7 @@ async function loadRecords() {
     $("pg-prev").disabled = state.records.page <= 1;
     $("pg-next").disabled = state.records.page >= totalPages;
   } catch (e) {
-    if (seq === recSeq) body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--red);padding:24px">${t("loadFailed")}: ${escapeHtml(e.message)}</td></tr>`;
+    if (seq === recSeq) body.innerHTML = `<tr><td colspan="13" style="text-align:center;color:var(--red);padding:24px">${t("loadFailed")}: ${escapeHtml(e.message)}</td></tr>`;
   }
 }
 
@@ -2284,7 +2344,23 @@ function bindEvents() {
   $("pg-next").addEventListener("click", () => { state.records.page++; loadRecords(); });
   $("ses-prev").addEventListener("click", () => { if (state.sessions.page > 1) { state.sessions.page--; loadSessions(); } });
   $("ses-next").addEventListener("click", () => { state.sessions.page++; loadSessions(); });
-  $("rec-model-filter").addEventListener("change", (e) => { state.records.model = e.target.value; state.records.page = 1; loadRecords(); });
+  $("rec-model-filter").addEventListener("change", (e) => {
+    // 模型筛选同步应用两表 (T6): 两表各自回第 1 页并携同过滤重载
+    state.records.model = e.target.value;
+    state.records.page = 1;
+    state.sessions.page = 1;
+    loadRecords();
+    loadSessions();
+  });
+  $("rec-source-filter").addEventListener("change", (e) => {
+    // 切来源: 清空模型筛选, 两表各自回第 1 页; 切换账号不改变该选择
+    state.records.source = e.target.value || "all";
+    state.records.model = "";
+    state.records.page = 1;
+    state.sessions.page = 1;
+    loadRecords();
+    loadSessions();
+  });
 
   // 检查更新: 有新版 -> 弹窗 -> 打开浏览器前往 GitHub Releases 下载
   $("btn-check-update").addEventListener("click", async () => {
@@ -2476,7 +2552,7 @@ async function loadReportAll(quiet = false) {
       costHint.hidden = !incomplete;
     }
     renderQuotaBar(ov.accounts, zq);
-    renderChannelTable(rows.rows);
+    renderChannelTable(rows.rows, rows.summary);
     $("report-scope").textContent = t("scopeHint").replace("{n}", w.channel_count).replace("{m}", w.account_count);
     // 估算徽章: 仅 指标=费用 且 含估算渠道(bai/zcode/claudecode)时显示 (新R5 N24: 注释随 R6 est 集合更新)
     $("report-est").hidden = !(state.reportMetric === "cost" && rows.rows.some((r) => r.estimated));
@@ -2719,16 +2795,21 @@ function chartReportHourly(d, noAnim, emptyKey) {   // EVOLUTION-7: 第三参 em
   cHourly.resize();
 }
 
-function renderChannelTable(rows) {
+function renderChannelTable(rows, summary) {
   if (!rows.length) {
     $("report-table").innerHTML = `<tr><td colspan="8" class="empty-cell">${t("reportEmpty")}</td></tr>`;
     return;
   }
+  const rowChs = new Set(rows.map((r) => r.channel));
+  const missing = (summary || []).map((s) => s.channel).filter((ch) => !rowChs.has(ch));
+  const foot = missing.length
+    ? `<tr><td colspan="8" class="empty-cell">${t("unusedChannelsHint").replace("{chs}", missing.map((ch) => CH_LABEL[ch] || ch).join(", "))}</td></tr>`
+    : "";
   $("report-table").innerHTML = rows.map((r) => `<tr>
     <td style="color:${CH_COLOR[r.channel] || "#4f8ef7"}">${escapeHtml(CH_LABEL[r.channel] || r.channel)}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
     <td class="num">${fmtTokens(r.tokens)}</td><td class="num">${fmtTokens(r.input)}</td><td class="num">${fmtTokens(r.output)}</td>
     <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${fmtInt(r.requests)}</td><td class="num">${fmtOptionalMoney(r.cost)}</td>
-    <td>${r.channel === "dsh" ? t("dataSinceToday") : (r.data_since || "—")}</td></tr>`).join("");   // R6: dsh 仅今日; T5: 渠道名显示名映射+转义, 费用 NULL → —
+    <td>${r.channel === "dsh" ? t("dataSinceToday") : (r.data_since || "—")}</td></tr>`).join("") + foot;   // R6: dsh 仅今日; T5: 渠道名显示名映射+转义, 费用 NULL → —
 }
 
 /* ---------------- 自动同步 ---------------- */
@@ -2786,7 +2867,13 @@ let resizeTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
-    if (!document.getElementById("page-home").hidden) safeResize(cToday);
+    syncMaxBtn();   // 最大化/还原后同步按钮图标 (含 Win+Up 系统旁路)
+    if (!document.getElementById("page-home").hidden) {
+      safeResize(cToday);
+      safeResize(cStack);   // 全渠道报表: 分渠道消耗趋势
+      safeResize(cDonut);   // 全渠道报表: 渠道占比
+      safeResize(cHourly);  // 全渠道报表: 24 小时趋势
+    }
     if (!document.getElementById("page-stats").hidden) {
       safeResize(cModel);
       safeResize(cTrend);
