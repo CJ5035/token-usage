@@ -1179,6 +1179,7 @@ _DEFAULT_SETTINGS = {
     "window_days": 60,  # 同步范围: 30/60/90/180, None=所有
     "auto_sync": True,  # 自动增量同步开关
     "show_accounts_panel": False,  # 账户总览面板开关 (侧边栏入口显隐)
+    "theme": None,  # 主题偏好 (20260909): "light"/"dark", None=未设置
 }
 
 
@@ -1332,6 +1333,8 @@ def session_stats_page(
 def get_settings() -> dict[str, Any]:
     merged = dict(_DEFAULT_SETTINGS)
     merged.update({k: v for k, v in _raw_payload(get_db()).items() if k in _DEFAULT_SETTINGS})
+    if merged.get("theme") not in ("light", "dark", None):
+        merged["theme"] = None  # 历史损坏值按未设置对待 (20260909)
     return merged
 
 
@@ -1411,6 +1414,9 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
                             pass
                 elif key in ("auto_sync", "show_accounts_panel"):
                     current[key] = bool(payload[key])
+                elif key == "theme":
+                    if payload[key] in ("light", "dark"):   # 非法枚举保留当前值 (null 已被外层 is not None 拦截)
+                        current[key] = payload[key]
                 else:
                     current[key] = payload[key]
         # 写回时保留非白名单键 (key_names / active_account_id 等), 避免被整体覆盖丢失
