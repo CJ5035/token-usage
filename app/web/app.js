@@ -1643,7 +1643,7 @@ async function loadSessions() {
     $("ses-prev").disabled = state.sessions.page <= 1;
     $("ses-next").disabled = state.sessions.page >= totalPages;
   } catch (e) {
-    if (seq === sesSeq) body.innerHTML = `<tr><td colspan="12" style="text-align:center;color:var(--red);padding:20px">${t("loadFailed")}: ${escapeHtml(e.message)}</td></tr>`;
+    if (seq === sesSeq) body.innerHTML = `<tr><td colspan="12" style="text-align:center;color:var(--danger-text);padding:20px">${t("loadFailed")}: ${escapeHtml(e.message)}</td></tr>`;
   }
 }
 function shortId(id) {
@@ -1707,7 +1707,7 @@ async function loadRecords() {
     $("pg-prev").disabled = state.records.page <= 1;
     $("pg-next").disabled = state.records.page >= totalPages;
   } catch (e) {
-    if (seq === recSeq) body.innerHTML = `<tr><td colspan="13" style="text-align:center;color:var(--red);padding:24px">${t("loadFailed")}: ${escapeHtml(e.message)}</td></tr>`;
+    if (seq === recSeq) body.innerHTML = `<tr><td colspan="13" style="text-align:center;color:var(--danger-text);padding:24px">${t("loadFailed")}: ${escapeHtml(e.message)}</td></tr>`;
   }
 }
 

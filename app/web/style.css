@@ -37,6 +37,33 @@
   --ch-codex: #c026d3;          /* 渠道色演变: #0f766e 青 → 品红/正红多轮 → 20260908 定梅子紫 #c026d3 (fuchsia-600, claudecode 上橙后紫区唯一空缺) */
   --up: #16a34a;                /* 涨/成功语义色 (EVOLUTION-6 新增, 值=原 .wb-s .up 硬编码, 亮色逐像素不变) */
   --down: #dc2626;              /* 跌/失败语义色 (EVOLUTION-6 新增, 值=原 .wb-s .down/.sync-fail 硬编码, 亮色逐像素不变) */
+
+  /* ---- 20260909 界面优化 §3.2: 语义令牌 (亮色值 = 现状逐像素一致) ---- */
+  --button-primary-bg: #7c5cf6;
+  --button-primary-hover: #6a46ea;
+  --button-primary-text: #ffffff;
+  --refresh-hover-text: #ffffff;
+  --danger-text: #ef4444;
+  --danger-hover-bg: #ef4444;
+  --danger-hover-text: #ffffff;
+  --surface-popover: #ffffff;
+  --border-popover: #eae7f2;
+  --focus-ring: #7c5cf6;
+  --chart-input: #4f8ef7;
+  --chart-output: #22c55e;
+  --chart-reasoning: #a78bfa;
+  --chart-cache: #06b6d4;
+  --chart-cost: #d97706;
+  --chart-extra: #ec4899;
+  --account-1: #7c5cf6;
+  --account-2: #4f8ef7;
+  --account-3: #22c55e;
+  --account-4: #d97706;
+  --account-5: #06b6d4;
+  --account-6: #ec4899;
+  --chart-tooltip-bg: rgba(0, 0, 0, 0.8);
+  --chart-tooltip-text: #ffffff;
+  --chart-tooltip-border: rgba(0, 0, 0, 0);
 }
 html[data-theme="dark"] {
   /* EVOLUTION-6: 中性纯黑灰重定标 (灰阶无紫调), 层次 bg<sidebar<card<muted<hover<border 明度递进 */
@@ -66,6 +93,33 @@ html[data-theme="dark"] {
   --ch-claudecode: #d97757;     /* 20260908: Claude 品牌陶土橙 (亮配 #c2410c; 暗卡 5.57) */
   --ch-dsh: #94a3b8;
   --ch-codex: #d946ef;          /* 20260908: 定梅子紫 (fuchsia-500, 暗配 #c026d3; 暗卡 5.03, 距最近渠道 113) */
+
+  /* ---- 20260909 界面优化 §3.2: 深色语义令牌 (对比度由 test_dark_theme.py §8 程序化校验) ---- */
+  --button-primary-bg: #9d7cf8;
+  --button-primary-hover: #8b6cf6;
+  --button-primary-text: #111112;
+  --refresh-hover-text: #111112;
+  --danger-text: #f87171;
+  --danger-hover-bg: #ef4444;
+  --danger-hover-text: #111112;
+  --surface-popover: #262628;
+  --border-popover: #3d3d42;
+  --focus-ring: #c4b5fd;
+  --chart-input: #6ba3ff;
+  --chart-output: #4ade80;
+  --chart-reasoning: #c4b5fd;
+  --chart-cache: #22d3ee;
+  --chart-cost: #fbbf24;
+  --chart-extra: #f472b6;
+  --account-1: #9d7cf8;
+  --account-2: #6ba3ff;
+  --account-3: #4ade80;
+  --account-4: #fbbf24;
+  --account-5: #22d3ee;
+  --account-6: #f472b6;
+  --chart-tooltip-bg: #262628;
+  --chart-tooltip-text: #e8e8ea;
+  --chart-tooltip-border: #3d3d42;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; overflow: hidden; }
@@ -97,7 +151,7 @@ body { font-family: var(--font-sans); background: var(--bg); color: var(--text);
 .pill.small { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 999px; height: 28px; padding: 0 12px; font-size: 12px; color: var(--text2); background: transparent; transition: all .2s; }
 .pill.small:hover { border-color: var(--primary); color: var(--text); }
 .pill.small.refresh { border-color: var(--amber); color: var(--amber); }
-.pill.small.refresh:hover { background: var(--amber); color: #fff; }
+.pill.small.refresh:hover { background: var(--amber); color: var(--refresh-hover-text); }
 .chip { border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; font-size: 11px; color: var(--text3); background: var(--muted); white-space: nowrap; }
 .chip b { color: var(--text); font-weight: 600; }
 
@@ -358,7 +412,7 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
 .badge.ok { background: #e8f7ef; color: #16a34a; border-color: transparent; }
 /* EVOLUTION-6: 暗色改语义 token — 软底 #1a3325 上 var(--up)(#4ade80) WCAG 实测 7.80:1 (软徽标族口径 >=3.8:1 达标) */
 html[data-theme="dark"] .badge.ok { background: #1a3325; color: var(--up); }
-.badge.no { background: var(--danger-soft); color: var(--red); border-color: transparent; }
+.badge.no { background: var(--danger-soft); color: var(--danger-text); border-color: transparent; }
 /* 账号来源徽标 (BAI) */
 .src-badge { display: inline-flex; align-items: center; justify-content: center; border-radius: 99px; padding: 1px 8px; font-size: 10px; font-weight: 700; letter-spacing: .5px; background: #e0f2fb; color: #0891b2; border: 1px solid transparent; }
 html[data-theme="dark"] .src-badge { background: #123144; color: #67e8f9; }
@@ -388,10 +442,10 @@ html[data-theme="dark"] .src-badge { background: #123144; color: #67e8f9; }
 /* ---------- 按钮 / 控件 ---------- */
 .btn { border: 1px solid var(--border); background: var(--card); color: var(--text); padding: 6px 14px; border-radius: 8px; font-size: 12.5px; cursor: pointer; font-family: var(--font-sans); transition: all .15s; }
 .btn:hover { background: var(--muted); }
-.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
-.btn-primary:hover { background: var(--primary-strong); }
-.btn-danger { background: var(--danger-soft); border-color: transparent; color: var(--red); }
-.btn-danger:hover { background: var(--red); color: #fff; }
+.btn-primary { background: var(--button-primary-bg); border-color: var(--button-primary-bg); color: var(--button-primary-text); font-weight: 600; }
+.btn-primary:hover { background: var(--button-primary-hover); border-color: var(--button-primary-hover); }
+.btn-danger { background: var(--danger-soft); border-color: transparent; color: var(--danger-text); }
+.btn-danger:hover { background: var(--danger-hover-bg); color: var(--danger-hover-text); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn-lg { padding: 12px 44px; font-size: 15px; border-radius: 12px; }
 
@@ -507,7 +561,7 @@ html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
 .codex-stats .chart-box { min-height: 220px; }
 #codex-missing { margin: 8px 0 12px; padding: 12px 14px; font-size: 12px; color: var(--text2); background: var(--muted); border-radius: 10px; }
 /* 导入失败状态条 (role=status): 独立显示, 不清旧数据 */
-#codex-error { margin: 8px 0 10px; padding: 10px 14px; font-size: 12px; color: var(--red); background: var(--danger-soft); border-radius: 10px; }
+#codex-error { margin: 8px 0 10px; padding: 10px 14px; font-size: 12px; color: var(--danger-text); background: var(--danger-soft); border-radius: 10px; }
 @media (max-width: 1200px) {
   .codex-stats .kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }

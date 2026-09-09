@@ -43,8 +43,21 @@ _DARK_EXPECTED = {
     "--primary-soft": "#2a2440",
 }
 
-# :root 不可变锚允许的新增 token 白名单 (--up/--down: EVOLUTION-6; --ch-codex: T5 Codex 渠道色)
-_ROOT_ADDED_ALLOWED = {"--up", "--down", "--ch-codex"}
+# 20260909 界面优化 §3.2: 25 个语义令牌 (:root 值=现状逐像素一致, dark 值对比度见 §6 测试)
+_THEME_TOKENS = {
+    "--button-primary-bg", "--button-primary-hover", "--button-primary-text",
+    "--refresh-hover-text",
+    "--danger-text", "--danger-hover-bg", "--danger-hover-text",
+    "--surface-popover", "--border-popover", "--focus-ring",
+    "--chart-input", "--chart-output", "--chart-reasoning",
+    "--chart-cache", "--chart-cost", "--chart-extra",
+    "--account-1", "--account-2", "--account-3",
+    "--account-4", "--account-5", "--account-6",
+    "--chart-tooltip-bg", "--chart-tooltip-text", "--chart-tooltip-border",
+}
+
+# :root 不可变锚允许的新增 token 白名单 (--up/--down: EVOLUTION-6; --ch-codex: T5 Codex 渠道色; 25 语义令牌: 20260909)
+_ROOT_ADDED_ALLOWED = {"--up", "--down", "--ch-codex"} | _THEME_TOKENS
 
 # 20260907 Codex 渠道色换品红 (与 commandcode 撞色修复, 用户指定): :root/dark 改值豁免 + 新值锚定
 _ROOT_RECOLOR_ALLOWED = {"--ch-codex", "--ch-claudecode", "--ch-bai"}   # 20260908 三渠道终局配色
@@ -147,7 +160,7 @@ def test_dark_untouched_tokens_unchanged_from_head():
     head = _dark_vars(_head_css())
     cur = _dark_vars(_css())
     changed = set(_DARK_EXPECTED) | {"--up", "--down", "--ch-codex", "--ch-claudecode", "--ch-bai"}   # 20260908 三渠道终局配色
-    assert set(cur) - set(head) <= {"--up", "--down", "--ch-codex"}   # --ch-codex: T5 Codex 渠道色新增声明
+    assert set(cur) - set(head) <= {"--up", "--down", "--ch-codex"} | _THEME_TOKENS   # 20260909 语义令牌
     for token, value in head.items():
         if token in changed:
             continue
@@ -293,3 +306,114 @@ def test_codex_channel_color_recolored_20260907():
     assert dark["--ch-claudecode"] == "#d97757"
     assert root["--ch-bai"] == "#f59e0b"
     assert dark["--ch-bai"] == "#facc15"
+
+
+# ---------------------------------------------------------------------------
+# 8. 20260909 语义令牌: dark 固定值 + 亮色等于现状值 + WCAG 对比度 + 消费点
+# ---------------------------------------------------------------------------
+
+# dark 块 25 令牌固定值 (对比度: 按钮文字 6.00/5.01, 刷新hover 5.92, 危险 5.12/5.02,
+# 焦点环 9.41/10.22, tooltip 12.34 — 由下方测试程序化复核, 不凭此注释验收)
+_DARK_THEME_EXPECTED = {
+    "--button-primary-bg": "#9d7cf8",
+    "--button-primary-hover": "#8b6cf6",
+    "--button-primary-text": "#111112",
+    "--refresh-hover-text": "#111112",
+    "--danger-text": "#f87171",
+    "--danger-hover-bg": "#ef4444",
+    "--danger-hover-text": "#111112",
+    "--surface-popover": "#262628",
+    "--border-popover": "#3d3d42",
+    "--focus-ring": "#c4b5fd",
+    "--chart-input": "#6ba3ff",
+    "--chart-output": "#4ade80",
+    "--chart-reasoning": "#c4b5fd",
+    "--chart-cache": "#22d3ee",
+    "--chart-cost": "#fbbf24",
+    "--chart-extra": "#f472b6",
+    "--account-1": "#9d7cf8",
+    "--account-2": "#6ba3ff",
+    "--account-3": "#4ade80",
+    "--account-4": "#fbbf24",
+    "--account-5": "#22d3ee",
+    "--account-6": "#f472b6",
+    "--chart-tooltip-bg": "#262628",
+    "--chart-tooltip-text": "#e8e8ea",
+    "--chart-tooltip-border": "#3d3d42",
+}
+
+# :root 25 令牌亮色锚 (= 改动前生效值, 浅色逐像素不变的程序化保证)
+_ROOT_THEME_EXPECTED = {
+    "--button-primary-bg": "#7c5cf6",
+    "--button-primary-hover": "#6a46ea",
+    "--button-primary-text": "#ffffff",
+    "--refresh-hover-text": "#ffffff",
+    "--danger-text": "#ef4444",
+    "--danger-hover-bg": "#ef4444",
+    "--danger-hover-text": "#ffffff",
+    "--surface-popover": "#ffffff",
+    "--border-popover": "#eae7f2",
+    "--focus-ring": "#7c5cf6",
+    "--chart-input": "#4f8ef7",
+    "--chart-output": "#22c55e",
+    "--chart-reasoning": "#a78bfa",
+    "--chart-cache": "#06b6d4",
+    "--chart-cost": "#d97706",
+    "--chart-extra": "#ec4899",
+    "--account-1": "#7c5cf6",
+    "--account-2": "#4f8ef7",
+    "--account-3": "#22c55e",
+    "--account-4": "#d97706",
+    "--account-5": "#06b6d4",
+    "--account-6": "#ec4899",
+    "--chart-tooltip-bg": "rgba(0, 0, 0, 0.8)",
+    "--chart-tooltip-text": "#ffffff",
+    "--chart-tooltip-border": "rgba(0, 0, 0, 0)",
+}
+
+
+def test_theme_tokens_dark_fixed_values():
+    dark = _dark_vars(_css())
+    for token, expected in _DARK_THEME_EXPECTED.items():
+        assert dark.get(token) == expected, f"dark {token} 应为 {expected}, 实际 {dark.get(token)!r}"
+
+
+def test_theme_tokens_root_values_equal_legacy():
+    root = _root_vars(_css())
+    for token, expected in _ROOT_THEME_EXPECTED.items():
+        assert root.get(token) == expected, f":root {token} 应为 {expected} (=现状值), 实际 {root.get(token)!r}"
+
+
+def test_theme_tokens_dark_text_contrast():
+    """§3.1: 文字对实际承载面 >=4.5:1; 焦点环 >=3:1."""
+    # 运行时取值 = dark 覆盖 :root (--amber/--danger-soft 仅存在于 :root, 必须合并后取值)
+    merged = {**_root_vars(_css()), **_dark_vars(_css())}
+    text_cases = [
+        ("--button-primary-text", "--button-primary-bg"),
+        ("--button-primary-text", "--button-primary-hover"),
+        ("--refresh-hover-text", "--amber"),
+        ("--danger-text", "--danger-soft"),
+        ("--danger-hover-text", "--danger-hover-bg"),
+        ("--chart-tooltip-text", "--chart-tooltip-bg"),
+    ]
+    for fg, bg in text_cases:
+        ratio = _contrast(merged[fg], merged[bg])
+        assert ratio >= 4.5, f"dark {fg}={merged[fg]} on {bg}={merged[bg]}: {ratio:.2f}:1 < 4.5:1"
+    for surface in ("--card", "--bg"):
+        ratio = _contrast(merged["--focus-ring"], merged[surface])
+        assert ratio >= 3.0, f"dark --focus-ring on {surface}: {ratio:.2f}:1 < 3:1"
+
+
+def test_theme_tokens_consumers_use_var():
+    """§3.2 消费点契约: 按钮/危险/刷新全部改引新变量."""
+    css = _css()
+    assert ".btn-primary { background: var(--button-primary-bg); border-color: var(--button-primary-bg); color: var(--button-primary-text); font-weight: 600; }" in css
+    assert ".btn-primary:hover { background: var(--button-primary-hover); border-color: var(--button-primary-hover); }" in css
+    assert ".pill.small.refresh:hover { background: var(--amber); color: var(--refresh-hover-text); }" in css
+    assert ".btn-danger { background: var(--danger-soft); border-color: transparent; color: var(--danger-text); }" in css
+    assert ".btn-danger:hover { background: var(--danger-hover-bg); color: var(--danger-hover-text); }" in css
+    assert ".badge.no { background: var(--danger-soft); color: var(--danger-text); border-color: transparent; }" in css
+    assert "#codex-error { margin: 8px 0 10px; padding: 10px 14px; font-size: 12px; color: var(--danger-text); background: var(--danger-soft); border-radius: 10px; }" in css
+    js = _js()
+    assert js.count("color:var(--danger-text)") == 2, "两张记录表内联错误文字应使用 var(--danger-text)"
+
