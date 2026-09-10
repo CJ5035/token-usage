@@ -386,7 +386,7 @@ def test_theme_tokens_root_values_equal_legacy():
 
 def test_theme_tokens_dark_text_contrast():
     """§3.1: 文字对实际承载面 >=4.5:1; 焦点环 >=3:1."""
-    # 运行时取值 = dark 覆盖 :root (--amber/--danger-soft 仅存在于 :root, 必须合并后取值)
+    # 运行时取值 = dark 覆盖 :root (--amber 仅存在于 :root; --danger-soft 在 dark 块有覆盖 #3d2429, 合并后取值与运行时一致)
     merged = {**_root_vars(_css()), **_dark_vars(_css())}
     text_cases = [
         ("--button-primary-text", "--button-primary-bg"),

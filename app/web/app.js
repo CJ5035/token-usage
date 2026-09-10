@@ -278,6 +278,8 @@ let state = {
 /* 图表主题 (20260909 §3.3): Canvas 不能直接用 var(--x), 每次绘制经 cssVar 解析具体色
    (cssVar 自带 #8a94a8 已知回退); chartColors 读六个指标变量, chartThemeOptions 给
    legend/ticks/grid/tooltip 当前主题值; 各图合并时保留自有 callbacks/轴单位/多轴/事件. */
+    /* legendLabel/tick/gridColor 为规格 §3.3 契约字段: 当前十图 legend/ticks/grid 仍内联
+       cssVar(--text2/--text3/--grid) (取值相同), 暂无独立消费点, 保留供后续统一化 */
 function chartColors() {
   return {
     input: cssVar("--chart-input"),
