@@ -22,7 +22,9 @@ def test_dsh_range_ui_contract():
     nodes = _Nodes()
     nodes.feed(html)
 
-    assert {"dsh-kpis", "dsh-status", "dsh-error", "dsh-trend-chart", "dsh-trend-empty"} <= nodes.ids
+    # M6 §3.5: 两个三列容器 (ID 兼容) + 首页 dsh_status 状态条 (I3)
+    assert {"dsh-kpis-total", "dsh-kpis-today", "dsh-status", "dsh-error",
+            "dsh-trend-chart", "dsh-trend-empty", "home-dsh-status", "home-dsh-error"} <= nodes.ids
     assert "dsh-dim" not in html
     for stale in ("dshDim", "dsh-today-note", "dataSinceToday"):
         assert stale not in js
@@ -46,7 +48,7 @@ def test_dsh_refresh_scheduler_and_transport_error_contract():
     for marker in (
         "let dshTransportError = null;",
         "let dshRefreshTimer = null;",
-        "function scheduleDshRefresh(data)",
+        "function scheduleDshRefresh(status)",
         "function cancelDshRefresh()",
         "function renderDshTransportError()",
         "for (const controller of dshRequestControllers.values()) controller.abort();",
@@ -58,6 +60,46 @@ def test_dsh_refresh_scheduler_and_transport_error_contract():
         assert marker in js
     assert "box.hidden = false;" in js
     assert "if (state.page === \"stats\" && page !== \"stats\") { destroyDshTrend(); cancelDshRefresh(); }" in js
+
+
+def test_dsh_refresh_scheduler_rhythm_contract():
+    """I3 §3.4: 默认 15s 重取; scanning 时 1s 后查状态, 单轮快速查询累计 ≤30s;
+    失败退避 = retry_after_seconds (≤60s); 首页消费 windows/channel-overview 顶层
+    dsh_status 且只有一个调度入口; 隐藏页取消 timer。"""
+    js = (ROOT / "app/web/app.js").read_text(encoding="utf-8")
+    assert "const DSH_REFRESH_POLL_MS = 15_000;" in js
+    assert "const DSH_SCANNING_POLL_MS = 1_000;" in js
+    assert "const DSH_SCANNING_MAX_MS = 30_000;" in js
+    assert "const DSH_FAIL_BACKOFF_S = 60;" in js
+    assert "function dshSchedulerTarget()" in js     # 统计页或首页 all/dsh 可见时才活动
+    assert "function dshSchedulerTick(target)" in js
+    assert "dshRefreshTimer = setTimeout" in js       # 唯一自动刷新周期
+    assert js.count("dshRefreshTimer = setTimeout") == 1
+    assert "renderHomeDshStatus(w.dsh_status);" in js            # 首页 all: windows 顶层
+    assert "renderHomeDshStatus(totals.dsh_status);" in js       # 首页 dsh: channel-overview 顶层
+    assert "dshRetryButton(seconds)" in js
+    assert 'data-dsh-retry${seconds > 0 ? " disabled" : ""}' in js   # 退避未到时禁用重试
+
+
+def test_dsh_home_and_kpi_containers_contract():
+    """I2/M6 §3.5: 首页 DSH 六卡 (速度/步数替换命中量与请求数占位), 统计页双 KPI 容器;
+    I4: 纯 DSH 请求计数显示 — 与"已知请求数"提示。"""
+    js = (ROOT / "app/web/app.js").read_text(encoding="utf-8")
+    assert 'l: t("dshKpiAvgTps"), v: fmtTps(totals.avg_tps)' in js
+    assert 'l: t("dshKpiSteps"), v: fmtInt(totals.steps)' in js
+    assert 'v: dshUnavailableCell("dshCostUnavailable"), s: t("dshCostUnavailable")' in js
+    overview = js[js.index("function renderOverview("):js.index("/* ---------------- 首页: 今日趋势")]
+    assert 't("hitAmount")' not in overview.split("isDsh ? [")[1].split("] : [")[0]   # DSH 分支无重复命中量卡
+    assert '"dsh-kpis-total"' in js and '"dsh-kpis-today"' in js
+    assert 'const reqValue = dshPartial && !known ? "—"' in js
+    assert 't("dshRequestsPartial")' in js
+    assert 'const hintKey = metric === "requests" ? "reportRequestsIncomplete" : "reportCostIncomplete";' in js
+    html = (ROOT / "app/web/index.html").read_text(encoding="utf-8")
+    assert 'data-i18n="codexCostUnavailable"' not in html   # I4: 不再复用 Codex 专用键
+    assert 'data-i18n="reportCostIncomplete"' in html
+    # I6 §3.2: 诊断行展示数量 + token 用量, 并明示全部数据范围
+    assert "{undatedTokens}" in js and "{futureTokens}" in js
+    assert "全部数据范围" in js
 
 
 def test_hanging_dsh_request_times_out_and_allows_same_range_retry():
@@ -73,6 +115,9 @@ def test_hanging_dsh_request_times_out_and_allows_same_range_retry():
 
 def test_dsh_unknown_home_values_and_data_since_are_safe():
     js = (ROOT / "app/web/app.js").read_text(encoding="utf-8")
-    assert 'isDsh ? dshUnavailableCell("dshRequestsUnavailable")' in js
-    assert 'isDsh ? dshUnavailableCell("dshCostUnavailable")' in js
+    # M2: 比较排除提示读计划形态 compare.excluded_channels (仅 DSH 存在时由 server 附带)
+    assert 'w.compare.excluded_channels.includes("dsh")' in js
+    assert "dsh_excluded_from_compare" not in js
+    assert 'r.channel === "dsh" ? dshUnavailableCell("dshRequestsUnavailable")' in js
+    assert 'r.channel === "dsh" ? dshUnavailableCell("dshCostUnavailable")' in js
     assert "escapeHtml(r.data_since ||" in js

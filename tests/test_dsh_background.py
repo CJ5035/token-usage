@@ -1,5 +1,5 @@
 """dsh_api 后台化单测 (EVOLUTION-5 §1): TTL 过期返 stale + 后台重扫 / 防重入 /
-冷启动空态 / 失败退避 / 热态失败保 stale / scan_sync 语义 / degraded 边界.
+冷启动空态 / 失败退避 / 热态失败保 stale / scan_sync 语义 (§3.4 锁 + Condition 防重入).
 
 线程同步策略 (计划测试点 1 指定): monkeypatch threading.Thread 捕获 target,
 由测试手动执行或同步执行, 杜绝真实 daemon 线程的断言时序不稳定.
@@ -74,6 +74,7 @@ def _wipe() -> None:
     dsh_api._refreshing = False
     dsh_api._fail_count = 0
     dsh_api._last_fail_ts = 0.0
+    dsh_api._round_error = None
 
 
 def _expire_cache() -> None:
@@ -144,7 +145,7 @@ def test_cold_start_returns_empty_state_no_raise(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 4. 失败退避: 失败记 _last_fail_ts, 60s 内不再 spawn, 窗外恢复
+# 4. 失败退避: 失败记 _last_fail_ts, 60s 内不再 spawn, 窗外恢复; 无永久拦截
 # ---------------------------------------------------------------------------
 
 def test_fail_backoff_blocks_spawn_within_window(tmp_path, monkeypatch):
@@ -166,6 +167,25 @@ def test_fail_backoff_blocks_spawn_within_window(tmp_path, monkeypatch):
     dsh_api.get_dsh_usage()
     assert len(spawned) == 2
     assert dsh_api._fail_count == 2
+
+
+def test_no_permanent_gate_after_three_failures(tmp_path, monkeypatch):
+    """§3.4: 删除 `_fail_count >= 3` 永久拦截 — 连续 3 次失败后, 退避窗外仍恢复自动刷新."""
+    monkeypatch.setattr(dsh_api, "sessions_root", lambda: tmp_path)
+    fake = {"now": 2000.0}
+    monkeypatch.setattr(dsh_api.time, "time", lambda: fake["now"])
+    monkeypatch.setattr(dsh_api, "scan", _boom)
+    spawned = _install_fake_thread(monkeypatch, run_immediately=True)
+
+    for _ in range(3):          # 连续 3 次失败 (旧代码在此之后永久停止自动刷新)
+        fake["now"] += dsh_api._FAIL_BACKOFF_SECONDS
+        dsh_api.get_dsh_usage()
+    assert dsh_api._fail_count == 3
+    assert len(spawned) == 3
+
+    fake["now"] += dsh_api._FAIL_BACKOFF_SECONDS   # 无永久拦截: 退避窗外继续 spawn
+    dsh_api.get_dsh_usage()
+    assert len(spawned) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +244,6 @@ def test_scan_sync_success_resets_fail_state(tmp_path, monkeypatch):
     assert dsh_api._cache_ts > 0
     assert dsh_api._fail_count == 0            # 复位失败计数
     assert dsh_api._last_fail_ts == 0.0        # 退出退避窗
-    assert dsh_api.degraded() is False
 
 
 # ---------------------------------------------------------------------------
@@ -246,10 +265,142 @@ def test_scan_sync_failure_raises_without_cache_write(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 9. degraded() 边界: >=3 为真
+# 9. §3.4 并发防重入: scan_sync 与 worker 共用 Condition, 并发只一轮扫描
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("count,expected", [(0, False), (2, False), (3, True)])
-def test_degraded_boundary(count, expected):
-    dsh_api._fail_count = count
-    assert dsh_api.degraded() is expected
+def _trace_condition_wait(monkeypatch) -> threading.Event:
+    """包装 _scan_cond.wait, 返回在等待方真正进入 Condition 等待时置位的事件
+    (保证 gate 释放时等待方已挂起, 消除线程调度竞态)。"""
+    waiter_waiting = threading.Event()
+    original_wait = dsh_api._scan_cond.wait
+
+    def traced_wait(timeout=None):
+        waiter_waiting.set()
+        return original_wait(timeout)
+
+    monkeypatch.setattr(dsh_api._scan_cond, "wait", traced_wait)
+    return waiter_waiting
+
+
+def test_concurrent_scan_sync_waiters_run_exactly_one_scan(tmp_path, monkeypatch):
+    """V4 缺口闭合: scan_sync 与在途轮共用防重入 — 两个并发调用只执行一次扫描,
+    且双方都拿到同一发布快照。"""
+    monkeypatch.setattr(dsh_api, "sessions_root", lambda: tmp_path)
+    gate = threading.Event()
+    started = threading.Event()
+    waiter_waiting = _trace_condition_wait(monkeypatch)
+    calls = []
+
+    def gated_scan() -> dict:
+        calls.append(1)
+        started.set()
+        assert gate.wait(timeout=5)
+        return {"found": True, "updated_at": "sync", "sessions_count": 7,
+                "total": {}, "today": {}, "providers": [], "models": [], "unkeyed_steps": 0}
+
+    monkeypatch.setattr(dsh_api, "scan", gated_scan)
+
+    results = {}
+
+    def first_caller():
+        results["first"] = dsh_api.scan_sync()
+
+    first = threading.Thread(target=first_caller)
+    first.start()
+    assert started.wait(timeout=5)          # 第一轮扫描已在途 (scan_sync 自身执行)
+
+    def second_caller():
+        results["second"] = dsh_api.scan_sync()
+
+    second = threading.Thread(target=second_caller)
+    second.start()
+    assert waiter_waiting.wait(timeout=5)   # 第二个调用方已挂起等待在途轮
+    gate.set()                              # 放行在途轮
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert len(calls) == 1                  # 并发只一轮扫描
+    assert results["first"]["sessions_count"] == 7
+    assert results["second"]["sessions_count"] == 7   # 等待方拿到同一发布快照
+    assert dsh_api._refreshing is False
+    assert dsh_api._fail_count == 0
+
+
+def test_scan_sync_waits_for_in_flight_worker_round(tmp_path, monkeypatch):
+    """scan_sync 等待在途 worker 轮而非并行扫描: 成功时返回其发布快照, 不再自行扫描."""
+    monkeypatch.setattr(dsh_api, "sessions_root", lambda: tmp_path)
+    gate = threading.Event()
+    started = threading.Event()
+    waiter_waiting = _trace_condition_wait(monkeypatch)
+    calls = []
+
+    def gated_scan() -> dict:
+        calls.append(1)
+        started.set()
+        assert gate.wait(timeout=5)
+        return {"found": True, "updated_at": "worker", "sessions_count": 9,
+                "total": {}, "today": {}, "providers": [], "models": [], "unkeyed_steps": 0}
+
+    monkeypatch.setattr(dsh_api, "scan", gated_scan)
+
+    dsh_api._cache_payload = {"found": True, "updated_at": "old", "sessions_count": 1}
+    dsh_api._cache_ts = 1.0                 # 过期 → 后台 spawn 真实 worker 线程
+    dsh_api.get_dsh_usage()
+    assert dsh_api._refreshing is True
+    assert started.wait(timeout=5)          # worker 已在途 (卡在 gate)
+    assert dsh_api._cache_payload["updated_at"] == "old"   # 扫描被 gate 挡住, 尚未发布
+
+    outcome = {}
+
+    def sync_caller():
+        outcome["result"] = dsh_api.scan_sync()
+
+    waiter = threading.Thread(target=sync_caller)
+    waiter.start()
+    assert waiter_waiting.wait(timeout=5)   # scan_sync 已挂起等待 worker 轮
+    gate.set()                              # 放行 worker 轮
+    waiter.join(timeout=5)
+
+    assert len(calls) == 1                  # 等待方未启动第二次扫描
+    assert outcome["result"]["sessions_count"] == 9   # 拿到 worker 发布的新快照
+
+
+def test_scan_sync_waiter_raises_worker_round_failure(tmp_path, monkeypatch):
+    """§3.4: 在途轮失败时, 等待中的 scan_sync 抛出该轮错误 (完成或失败后返回/抛错)."""
+    monkeypatch.setattr(dsh_api, "sessions_root", lambda: tmp_path)
+    gate = threading.Event()
+    started = threading.Event()
+    waiter_waiting = _trace_condition_wait(monkeypatch)
+    calls = []
+
+    def gated_scan() -> dict:
+        calls.append(1)
+        started.set()
+        assert gate.wait(timeout=5)
+        raise RuntimeError("worker failed")
+
+    monkeypatch.setattr(dsh_api, "scan", gated_scan)
+
+    dsh_api._cache_payload = {"found": True, "updated_at": "old", "sessions_count": 1}
+    dsh_api._cache_ts = 1.0
+    dsh_api.get_dsh_usage()                 # 后台 spawn 真实 worker 线程
+    assert started.wait(timeout=5)
+
+    outcome = {}
+
+    def sync_caller():
+        try:
+            outcome["result"] = dsh_api.scan_sync()
+        except Exception as exc:  # noqa: BLE001
+            outcome["error"] = exc
+
+    waiter = threading.Thread(target=sync_caller)
+    waiter.start()
+    assert waiter_waiting.wait(timeout=5)   # scan_sync 已挂起等待 worker 轮
+    gate.set()                              # 放行失败的 worker 轮
+    waiter.join(timeout=5)
+
+    assert len(calls) == 1
+    assert isinstance(outcome.get("error"), RuntimeError)   # 失败轮错误向等待方抛出
+    assert dsh_api._fail_count == 1          # 热态失败保留 stale + 记退避
+    assert dsh_api._cache_payload["updated_at"] == "old"

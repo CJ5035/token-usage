@@ -74,6 +74,11 @@ def _bucket(tokens: int, *, tps: float | None = 10.0) -> dict:
     }
 
 
+def _zero_bucket() -> dict:
+    return {"steps": 0, "input": 0, "cache": 0, "cache_read": 0, "cache_write": 0,
+            "output": 0, "reasoning": 0, "tokens": 0, "seconds": 0.0, "tps": None}
+
+
 def _dsh_summary(range_: str, *, scanning: bool = False) -> dict:
     tokens = {"today": 0, "7d": 700, "30d": 3000, "all": 999}.get(range_, 0)
     totals = _bucket(tokens, tps=None if range_ == "all" else 10.0)
@@ -92,7 +97,9 @@ def _dsh_summary(range_: str, *, scanning: bool = False) -> dict:
         "data_since": today if tokens else None,
         "scanning": scanning, "stale": scanning, "refresh_error": False,
         "updated_at": "2026-09-10T12:00:00", "retry_after_seconds": 0,
-        "undated": 0, "future": 0, "provisional_steps": 0, "unkeyed_steps": 0,
+        # I6 §3.2: undated/future 为 totals 同构诊断桶
+        "undated": _zero_bucket(), "future": _zero_bucket(),
+        "provisional_steps": 0, "unkeyed_steps": 0,
     }
 
 
@@ -161,7 +168,11 @@ class _ApiFixture:
             "/api/codex/summary": {"db_found": False},
             "/api/accounts/overview": {"accounts": []},
             "/api/report/channels": {"rows": [], "summary": [], "dsh_status": {}},
-            "/api/report/windows": {"today": {}, "yesterday": {}, "7d": {}, "30d": {}, "channels": {}, "compare": {}, "channel_count": 0, "account_count": 0},
+            "/api/report/windows": {"today": {}, "yesterday": {}, "7d": {}, "30d": {}, "channels": {},
+                                    "compare": {}, "channel_count": 0, "account_count": 0,
+                                    "dsh_status": {"found": True, "scanning": False, "stale": False,
+                                                   "refresh_error": False, "updated_at": None,
+                                                   "retry_after_seconds": 0}},
             "/api/report/daily": {"labels": [], "series": {}, "granularity": "day", "unavailable_channels": []},
             "/api/report/hourly": {"buckets": [], "series": {}},
         }.get(path, {})
@@ -176,7 +187,7 @@ def _open_stats(page, url):
     page.goto(url)
     page.locator('.side-item[data-page="stats"]').click()
     page.locator("#dsh-stats").wait_for(state="visible")
-    page.locator("#dsh-kpis").wait_for()
+    page.locator("#dsh-kpis-today").wait_for()
 
 
 def test_dsh_real_page_ranges_race_states_and_tooltip(browser_page):
@@ -212,13 +223,13 @@ def test_dsh_real_page_ranges_race_states_and_tooltip(browser_page):
         page.wait_for_timeout(20)
     assert fixture.held_routes["7d"]
     page.locator('#stats-pills .pill[data-r="30d"]').click()
-    page.locator("#dsh-kpis").filter(has_text="3.0k").wait_for()
-    assert "3.0k" in page.locator("#dsh-kpis").inner_text()
+    page.locator("#dsh-kpis-today").filter(has_text="3.0k").wait_for()
+    assert "3.0k" in page.locator("#dsh-kpis-today").inner_text()
     page.locator('#stats-pills .pill[data-r="7d"]').click()
     assert fixture.held_routes["7d"], "returning to 7d must keep its original request usable"
     fixture.held_ranges.remove("7d")
     fixture.release("7d")
-    page.locator("#dsh-kpis").filter(has_text="700").wait_for()
+    page.locator("#dsh-kpis-today").filter(has_text="700").wait_for()
     active = page.evaluate("({ range: dshUsageLast.range, active: state.statsRange })")
     assert active == {"range": "7d", "active": "7d"}
 
@@ -231,12 +242,12 @@ def test_dsh_real_page_ranges_race_states_and_tooltip(browser_page):
     page.locator("#dsh-error").filter(has_text="刷新失败").wait_for()
 
     page.locator('#stats-pills .pill[data-r="today"]').click()
-    page.locator("#dsh-kpis").filter(has_text="0").wait_for()
-    assert "—" in page.locator("#dsh-kpis").inner_text()
+    page.locator("#dsh-kpis-today").filter(has_text="0").wait_for()
+    assert "—" in page.locator("#dsh-kpis-today").inner_text()
 
     page.locator('#stats-pills .pill[data-r="all"]').click()
-    page.locator("#dsh-kpis").filter(has_text="999").wait_for()
-    assert "—" in page.locator("#dsh-kpis").inner_text()
+    page.locator("#dsh-kpis-today").filter(has_text="999").wait_for()
+    assert "—" in page.locator("#dsh-kpis-today").inner_text()
     assert "799" in page.locator("#dsh-prov-body").inner_text()
     page.locator("#dsh-trend-chart").scroll_into_view_if_needed()
     tooltip_point = page.evaluate("""() => {
@@ -323,7 +334,7 @@ def test_dsh_local_mode_theme_language_hidden_lifecycle_and_narrow_layout(browse
     assert len(fixture.dsh_calls) == before_hide + 1
     fixture.held_ranges.remove("7d")
     fixture.release("7d")
-    page.locator("#dsh-kpis").wait_for()
+    page.locator("#dsh-kpis-today").wait_for()
     assert page.evaluate("!!Chart.getChart(document.querySelector('#dsh-trend-chart'))")
     for width, height in ((1280, 840), (900, 700)):
         page.set_viewport_size({"width": width, "height": height})

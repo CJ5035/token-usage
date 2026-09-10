@@ -83,13 +83,15 @@
     <section class="page" id="page-home">
       <div class="ph"><h2 class="ph-title" data-i18n="homeTitle">用量统计总览</h2><div class="ph-right"><div class="pill-row" id="channel-tabs"><button class="pill active" data-ch="all" data-i18n="channelAll">全部渠道</button></div><div class="pill-row" id="home-pills"><button class="pill active" data-r="today" data-i18n="today">今天</button><button class="pill" data-r="yesterday" data-i18n="yesterday">昨天</button><button class="pill" data-r="7d" data-i18n="d7">近7天</button><button class="pill" data-r="30d" data-i18n="d30">近30天</button><button class="pill" data-r="all" data-i18n="all">全部</button></div></div></div>
       <div class="scope-hint" id="report-scope" hidden></div>
+      <div class="dsh-status" id="home-dsh-status" role="status" hidden></div>
+      <div class="dsh-error" id="home-dsh-error" role="status" hidden></div>
       <div id="report-all" hidden>
         <div class="windows-bar" id="windows-bar"></div>
         <div class="kpi-row" id="report-range-kpis"></div>
         <div class="card quota-bar"><div class="card-h"><h3 data-i18n="quotaBarTitle">各渠道配额</h3></div><div id="quota-bar"></div></div>
         <div class="ph-right" style="padding:8px 0"><div class="seg" id="report-metric"><button class="active" data-m="tokens" data-i18n="segTokens">Token</button><button data-m="cost" data-i18n="cost">费用</button><button data-m="requests" data-i18n="colRequests">请求</button></div></div>
         <div class="two-col">
-          <div class="card"><div class="card-h"><h3 data-i18n="stackTitle">分渠道消耗趋势</h3><span class="hint" id="report-cost-hint" data-i18n="codexCostUnavailable" hidden></span><span class="est-badge" id="report-est" hidden title="" data-i18n-title="estimateTip">估</span></div><div class="chart-box" style="min-height:240px"><canvas id="report-stack"></canvas><div class="zcode-chart-empty" id="report-stack-empty" hidden></div></div></div>
+          <div class="card"><div class="card-h"><h3 data-i18n="stackTitle">分渠道消耗趋势</h3><span class="hint" id="report-cost-hint" data-i18n="reportCostIncomplete" hidden>部分渠道未提供费用</span><span class="est-badge" id="report-est" hidden title="" data-i18n-title="estimateTip">估</span></div><div class="chart-box" style="min-height:240px"><canvas id="report-stack"></canvas><div class="zcode-chart-empty" id="report-stack-empty" hidden></div></div></div>
           <div class="card"><div class="card-h"><h3 data-i18n="donutTitle">渠道占比</h3></div><div class="chart-box" style="min-height:240px;position:relative"><canvas id="report-donut"></canvas><div class="zcode-chart-empty" id="report-donut-empty" hidden></div></div></div>
         </div>
         <div class="card"><div class="card-h"><h3 id="hourly-title"><span data-i18n="todayTrend">今日趋势</span> <span class="hint">24h</span></h3></div><div class="chart-box" style="height:250px"><canvas id="report-hourly"></canvas><div class="zcode-chart-empty" id="report-hourly-empty" hidden></div></div></div>
@@ -155,7 +157,8 @@
         <div class="dsh-status" id="dsh-status" role="status" hidden></div>
         <div class="dsh-error" id="dsh-error" role="status" hidden></div>
         <div id="dsh-body">
-          <div class="kpi-row kpi6" id="dsh-kpis"></div>
+          <div class="kpi-row" id="dsh-kpis-total"></div>
+          <div class="kpi-row" id="dsh-kpis-today"></div>
           <div id="dsh-tables">
             <table class="tbl"><thead><tr id="dsh-prov-head"></tr></thead><tbody id="dsh-prov-body"></tbody></table>
             <table class="tbl"><thead><tr id="dsh-model-head"></tr></thead><tbody id="dsh-model-body"></tbody></table>

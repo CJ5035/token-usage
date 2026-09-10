@@ -444,9 +444,37 @@ class TestRangeQueries:
         assert today["totals"]["output"] == 20       # 13:00 is after captured now
         assert today["totals"]["tokens"] == 22
         assert today["sessions_count"] == 1            # relative session identity de-duplicates
-        assert [row["date"] for row in seven_days["trend"]] == ["2024-03-10", "2024-03-11"]
+        # 专用趋势补齐 7 个日历日; 仅有步骤的 2024-03-10/11 携带真实观测
+        trend = {row["date"]: row for row in seven_days["trend"]}
+        assert len(seven_days["trend"]) == 7
+        assert trend["2024-03-10"]["output"] == 10
+        assert trend["2024-03-11"]["output"] == 20
         assert len(today["hourly"]) == 24
         assert dsh_api.query_dsh_usage(snapshot, "7d", now)["hourly"] == []
+
+    def test_trend_zero_pads_selected_calendar_window(self, monkeypatch):
+        """§3.5: today/yesterday 单日、7d 7 个日期、30d 30 个日期、all 最早有效日到
+        今天逐日 (无有效日期为 []); 补齐空日为零值桶且 tps=null。"""
+        tz = ZoneInfo("UTC")
+        monkeypatch.setattr(dsh_api, "_local_timezone", lambda: tz)
+        now = datetime(2024, 3, 11, 12, tzinfo=tz)
+        ms = lambda day: int(datetime(2024, 3, day, 12, tzinfo=tz).timestamp() * 1000)
+        snapshot = _range_snapshot(_range_step(ms(5), output=10), _range_step(ms(9), output=20))
+
+        seven = dsh_api.query_dsh_usage(snapshot, "7d", now)
+        assert [row["date"] for row in seven["trend"]] == [
+            (datetime(2024, 3, day).date().isoformat()) for day in range(5, 12)]
+        padded = [row for row in seven["trend"] if row["steps"] == 0]
+        assert len(padded) == 5
+        assert all(row["tokens"] == 0 and row["tps"] is None for row in padded)
+        assert sum(row["tokens"] for row in seven["trend"]) == 34   # (2+10) + (2+20)
+        assert len(dsh_api.query_dsh_usage(snapshot, "today", now)["trend"]) == 1
+        assert len(dsh_api.query_dsh_usage(snapshot, "yesterday", now)["trend"]) == 1
+        assert len(dsh_api.query_dsh_usage(snapshot, "30d", now)["trend"]) == 30
+        all_range = dsh_api.query_dsh_usage(snapshot, "all", now)
+        assert [row["date"] for row in all_range["trend"]] == [
+            datetime(2024, 3, day).date().isoformat() for day in range(5, 12)]
+        assert dsh_api.query_dsh_usage(_range_snapshot(), "all", now)["trend"] == []
 
     def test_dst_day_boundary_uses_local_calendar_conversion(self, monkeypatch):
         tz = ZoneInfo("America/New_York")
@@ -519,10 +547,58 @@ class TestRangeQueries:
 
         result = dsh_api.query_dsh_usage(snapshot, "today", now)
         assert result["totals"]["steps"] == 1
-        assert result["future"] == 1
-        assert result["undated"] == 1
+        # §3.2: undated/future 为 totals 同构诊断桶 (seconds=0/tps=null), 不丢 token
+        assert result["future"]["steps"] == 1
+        assert result["future"]["tokens"] == 12
+        assert result["future"]["seconds"] == 0.0 and result["future"]["tps"] is None
+        assert result["undated"]["steps"] == 1
+        assert result["undated"]["tokens"] == 12
         assert result["provisional_steps"] == 1
         assert result["unkeyed_steps"] == 1
+        # 诊断桶是整个快照的, 不随所选范围变化
+        assert dsh_api.query_dsh_usage(snapshot, "all", now)["undated"] == result["undated"]
+        assert dsh_api.query_dsh_usage(snapshot, "all", now)["future"] == result["future"]
+
+    def test_invalid_range_falls_back_to_today(self, monkeypatch):
+        """M1: 非法 range 回退 today (计划 §3.2), 与 server 层一致。"""
+        selected, *_ = dsh_api._range_bounds("bogus", datetime.now().astimezone())
+        assert selected == "today"
+
+    def test_provider_and_model_sort_tie_breaks(self, monkeypatch):
+        """M3: 相等 output 时 provider 升序 / model 升序, 不依赖字典插入序。"""
+        now = datetime.now().astimezone()
+        now_ms = int(now.timestamp() * 1000)
+        snapshot = _range_snapshot(
+            _range_step(now_ms, session="ws/1", provider="p-b", model="m2", output=50),
+            _range_step(now_ms, session="ws/2", provider="p-a", model="m9", output=50),
+            _range_step(now_ms, session="ws/3", provider="p-a", model="m1", output=50),
+        )
+        result = dsh_api.query_dsh_usage(snapshot, "today", now)
+        assert [row["provider"] for row in result["providers"]] == ["p-a", "p-b"]
+        assert [(row["provider"], row["model"]) for row in result["models"]] == [
+            ("p-a", "m1"), ("p-a", "m9"), ("p-b", "m2")]
+
+    def test_tokens_include_reasoning_and_reconcile(self, monkeypatch):
+        """C1/V1: tokens = input+output+reasoning, 且 total = provider/model/daily 勾稽
+        (reasoning>0; 旧口径漏加 reasoning 属回归)。"""
+        now = datetime.now().astimezone()
+        now_ms = int(now.timestamp() * 1000)
+        snapshot = _range_snapshot(
+            _range_step(now_ms, session="ws/a", provider="p1", model="m1", output=100),
+            _range_step(now_ms, session="ws/b", provider="p2", model="m2", output=50),
+        )
+        for step in snapshot["_steps"]:
+            step["reasoning"] = 7
+            step["input"] = 3
+
+        result = dsh_api.query_dsh_usage(snapshot, "today", now)
+        expected = (3 + 100 + 7) + (3 + 50 + 7)
+        assert result["totals"]["tokens"] == expected
+        assert result["totals"]["tokens"] == (result["totals"]["input"]
+                                              + result["totals"]["output"] + result["totals"]["reasoning"])
+        assert sum(row["tokens"] for row in result["providers"]) == expected
+        assert sum(row["tokens"] for row in result["models"]) == expected
+        assert sum(row["tokens"] for row in result["trend"]) == expected
 
     def test_same_cached_snapshot_rebuckets_after_midnight_without_mutation(self, monkeypatch):
         tz = ZoneInfo("UTC")

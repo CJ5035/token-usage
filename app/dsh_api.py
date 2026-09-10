@@ -331,7 +331,7 @@ def stat_log(log_path: Path, sid: str) -> Optional[dict[str, Any]]:
 
 
 def _totals_row(bucket: dict[str, Any]) -> dict[str, Any]:
-    """total/today 输出行 (加权 tps = Σoutput ÷ Σ窗口秒, 无窗口时 0)."""
+    """total/today 输出行 (加权 tps = Σoutput ÷ Σ窗口秒, 无窗口时 null)."""
     seconds = bucket["seconds"]
     return {
         "steps": bucket["steps"],
@@ -341,7 +341,7 @@ def _totals_row(bucket: dict[str, Any]) -> dict[str, Any]:
         "cache_write": bucket["cache_write"],
         "output": bucket["output"],
         "reasoning": bucket["reasoning"],
-        "tokens": bucket["input"] + bucket["output"],
+        "tokens": bucket["input"] + bucket["output"] + bucket["reasoning"],
         "seconds": seconds,
         "tps": bucket["tps_output"] / seconds if seconds > 0 else None,
     }
@@ -357,7 +357,7 @@ def _bucket_row(bucket: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]
     row["cache_write"] = bucket["cache_write"]
     row["reasoning"] = bucket["reasoning"]
     row["output"] = bucket["output"]
-    row["tokens"] = bucket["input"] + bucket["output"]
+    row["tokens"] = bucket["input"] + bucket["output"] + bucket["reasoning"]
     row["seconds"] = bucket["seconds"]
     row["tps"] = bucket["tps_output"] / bucket["seconds"] if bucket["seconds"] > 0 else None
     return row
@@ -651,8 +651,8 @@ def _midnight_ms(day: Any, tz: Any) -> int:
 
 
 def _range_bounds(range_: str, now: datetime) -> tuple[str, int | None, int | None, int, Any]:
-    """规范化范围并返回 [start, end) 的本地自然日边界。"""
-    selected = range_ if range_ in _RANGES else "30d"
+    """规范化范围并返回 [start, end) 的本地自然日边界 (非法 range 回退 today)."""
+    selected = range_ if range_ in _RANGES else "today"
     local_now = _local_now(now)
     tz = local_now.tzinfo
     today = local_now.date()
@@ -705,7 +705,10 @@ def query_dsh_usage(snapshot: dict[str, Any], range_: str, now: datetime) -> dic
     daily: dict[str, dict[str, Any]] = {}
     hourly = [_new_public_bucket() for _ in range(24)] if selected in {"today", "yesterday"} else []
     session_ids: set[str] = set()
-    undated = future = provisional_steps = unkeyed_steps = 0
+    # undated/future 是整个快照的诊断桶 (totals 同构, seconds=0/tps=null, 不随范围变化)
+    undated = _new_public_bucket()
+    future = _new_public_bucket()
+    provisional_steps = unkeyed_steps = 0
     data_since_ms: int | None = None
 
     raw_steps = snapshot.get("_steps", [])
@@ -716,10 +719,10 @@ def query_dsh_usage(snapshot: dict[str, Any], range_: str, now: datetime) -> dic
             continue
         completed_ms = raw_step.get("completed_ms")
         if isinstance(completed_ms, bool) or not isinstance(completed_ms, int):
-            undated += 1
+            _append_step(undated, raw_step)
             continue
         if completed_ms > now_ms:
-            future += 1
+            _append_step(future, raw_step)
             continue
         if data_since_ms is None or completed_ms < data_since_ms:
             data_since_ms = completed_ms
@@ -748,21 +751,37 @@ def query_dsh_usage(snapshot: dict[str, Any], range_: str, now: datetime) -> dic
 
     provider_rows = [
         {"provider": provider, **_public_bucket(bucket)}
-        for provider, bucket in sorted(providers.items(), key=lambda item: item[1]["output"], reverse=True)
+        for provider, bucket in sorted(
+            providers.items(), key=lambda item: (-item[1]["output"], item[0]))
     ]
     model_rows = [
         {"provider": provider, "model": model, **_public_bucket(bucket)}
         for (provider, model), bucket in sorted(
-            models.items(), key=lambda item: (item[0][0], -item[1]["output"])
-        )
+            models.items(), key=lambda item: (item[0][0], -item[1]["output"], item[0][1]))
     ]
-    trend = [
-        {"date": day, **_public_bucket(bucket)}
-        for day, bucket in sorted(daily.items())
-    ]
+    # 专用日趋势补齐选定日历区间 (§3.5): today/yesterday 单日、7d 7 个日期、
+    # 30d 30 个日期、all 从最早有效日到今天逐日 (无有效日期为 []); 补齐的空日
+    # 为零值桶 (tps=null), 不能当成观测数据 (公共 daily 的 extra_rows 取 steps>0)
+    today = datetime.fromtimestamp(now_ms / 1000, tz).date()
+    if selected == "all":
+        first_day = min((datetime.fromisoformat(day).date() for day in daily), default=None)
+        calendar_days = ([] if first_day is None else
+                         [first_day + timedelta(days=i) for i in range((today - first_day).days + 1)])
+    else:
+        start_day = datetime.fromtimestamp((start_ms or end_ms) / 1000, tz).date()
+        end_day = start_day if selected == "yesterday" else today
+        calendar_days = [start_day + timedelta(days=i) for i in range((end_day - start_day).days + 1)]
+    trend = []
+    for day in calendar_days:
+        key = day.isoformat()
+        bucket = daily.get(key)
+        trend.append({"date": key,
+                      **(_public_bucket(bucket) if bucket is not None else _public_bucket(_new_public_bucket()))})
     hourly_rows = [
         {"hour": hour, **_public_bucket(bucket)} for hour, bucket in enumerate(hourly)
     ]
+    for bucket in (undated, future):
+        bucket["seconds"] = 0.0   # 诊断桶无测速窗口 (tps 恒为 null)
     data_since = (datetime.fromtimestamp(data_since_ms / 1000, tz).date().isoformat()
                   if data_since_ms is not None else None)
     return {
@@ -774,21 +793,24 @@ def query_dsh_usage(snapshot: dict[str, Any], range_: str, now: datetime) -> dic
         "hourly": hourly_rows,
         "sessions_count": len(session_ids),
         "data_since": data_since,
-        "undated": undated,
-        "future": future,
+        "undated": _public_bucket(undated),
+        "future": _public_bucket(future),
         "unkeyed_steps": unkeyed_steps,
         "provisional_steps": provisional_steps,
     }
 
 
 # 模块级 TTL 缓存 (scan 结果 + 时间戳) 与后台刷新状态 (_cache_payload 引用替换
-# 在 GIL 下原子, server 层只读透传严禁原地修改)
+# 在 GIL 下原子, server 层只读透传严禁原地修改)。_scan_cond (默认 RLock, 可重入)
+# 保护扫描启动/完成/发布状态 (§3.4): 锁内不解压, scan() 始终在锁外执行。
 _cache_payload: Optional[dict[str, Any]] = None
 _cache_ts: float = 0.0
-_refreshing = False           # 防重入标志 (对齐 server.py _quota_refreshing 惰性模式)
-_fail_count = 0               # 连续失败计数 (>=3 触发降级, 经 degraded() 判定)
-_FAIL_BACKOFF_SECONDS = 60.0  # 失败退避窗 (区别于正常 TTL 15s)
+_refreshing = False           # 是否有一轮扫描在运行 (worker 或 scan_sync)
+_fail_count = 0               # 连续失败计数 (供 refresh_error 状态与退避判定)
+_FAIL_BACKOFF_SECONDS = 60.0  # 失败退避窗 (区别于正常 TTL 15s; 无永久停止自动刷新的拦截)
 _last_fail_ts = 0.0           # 最近一次失败时刻 (退避判定基准)
+_round_error: Optional[BaseException] = None  # 最近一轮扫描的错误 (成功置 None)
+_scan_cond = threading.Condition()
 
 
 def _legacy_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -806,18 +828,24 @@ def _legacy_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def _snapshot_for_read() -> tuple[dict[str, Any], bool]:
-    """取得当前快照，并在过期时惰性触发刷新；返回值仍由模块私有。"""
-    global _refreshing
+    """取得当前快照，并在过期时惰性触发刷新；返回值仍由模块私有。
+
+    并发只启动一个 worker (§3.4): _refreshing 期间后续读方继续取已发布的
+    快照; 失败退避窗内不 spawn (窗口过后自动恢复, 无永久拦截)。
+    """
+    global _refreshing, _round_error
     now = time.time()
-    snapshot = _cache_payload
-    stale = snapshot is not None and now - _cache_ts >= CACHE_TTL_SECONDS
-    if (snapshot is None or stale) and not _refreshing and _fail_count < 3 and now - _last_fail_ts >= _FAIL_BACKOFF_SECONDS:
-        _refreshing = True
-        threading.Thread(target=_rescan_worker, daemon=True, name="gousage-dsh-rescan").start()
-        # 测试/某些极快调度器可能已同步完成 worker；仍只读取本次确定的缓存槽。
-        if snapshot is None:
-            snapshot = _cache_payload
-    return (snapshot if snapshot is not None else _empty_result()), stale
+    with _scan_cond:
+        snapshot = _cache_payload
+        stale = snapshot is not None and now - _cache_ts >= CACHE_TTL_SECONDS
+        if (snapshot is None or stale) and not _refreshing and now - _last_fail_ts >= _FAIL_BACKOFF_SECONDS:
+            _refreshing = True
+            _round_error = None
+            threading.Thread(target=_rescan_worker, daemon=True, name="gousage-dsh-rescan").start()
+            # 测试/某些极快调度器可能已同步完成 worker；仍只读取本次确定的缓存槽。
+            if snapshot is None:
+                snapshot = _cache_payload
+        return (snapshot if snapshot is not None else _empty_result()), stale
 
 
 def get_dsh_usage() -> dict[str, Any]:
@@ -834,17 +862,18 @@ def get_dsh_summaries(*ranges: str) -> dict[str, dict[str, Any]]:
     """在一次冻结快照上查询多个范围，供需要兼容范围字段的单个响应使用。"""
     captured_now = datetime.now().astimezone()
     snapshot, stale = _snapshot_for_read()
-    retry_after = 0
-    if _fail_count and _last_fail_ts:
-        retry_after = max(0, int(math.ceil(_FAIL_BACKOFF_SECONDS - (time.time() - _last_fail_ts))))
-    status = {
-        "found": bool(snapshot.get("found")),
-        "scanning": _refreshing,
-        "stale": stale,
-        "refresh_error": bool(_fail_count),
-        "updated_at": snapshot.get("updated_at"),
-        "retry_after_seconds": retry_after,
-    }
+    with _scan_cond:   # 刷新状态与快照发布同锁读出, 避免撕裂视图
+        retry_after = 0
+        if _fail_count and _last_fail_ts:
+            retry_after = max(0, int(math.ceil(_FAIL_BACKOFF_SECONDS - (time.time() - _last_fail_ts))))
+        status = {
+            "found": bool(snapshot.get("found")),
+            "scanning": _refreshing,
+            "stale": stale,
+            "refresh_error": bool(_fail_count),
+            "updated_at": snapshot.get("updated_at"),
+            "retry_after_seconds": retry_after,
+        }
     return {range_: {**status, **query_dsh_usage(snapshot, range_, captured_now)}
             for range_ in dict.fromkeys(ranges)}
 
@@ -854,40 +883,61 @@ def get_dsh_summary(range_: str) -> dict[str, Any]:
     return get_dsh_summaries(range_)[range_]
 
 
-def degraded() -> bool:
-    """连续后台扫描失败 >=3 次的降级判定; server 层经此判定, 勿直接读 _fail_count 私有变量."""
-    return _fail_count >= 3
-
-
 def scan_sync() -> dict[str, Any]:
-    """同步扫描 (降级路径: degraded() 为真时 server 层调用, 返回新对象).
+    """同步扫描 (测试/内部工具): 与后台 worker 共用防重入机制 (§3.4)。
 
-    成功: 复位失败计数/退避并写缓存; 失败: 异常向上抛 (server 层 500 兜底,
-    前端 toast), 缓存与计数均不变.
+    已有一轮扫描在运行时等待该轮结束: 成功返回其发布快照的公开副本, 失败
+    抛出该轮错误; 无在途轮时本线程同步执行一轮。成功: 复位失败计数/退避并
+    写缓存; 失败: 异常向上抛, 缓存与计数均不变。不得并行扫描或覆盖更新快照。
     """
-    global _cache_payload, _cache_ts, _fail_count, _last_fail_ts
-    payload = scan()
-    _cache_payload, _cache_ts = payload, time.time()
-    _fail_count = 0
-    _last_fail_ts = 0.0
+    global _cache_payload, _cache_ts, _refreshing, _fail_count, _last_fail_ts, _round_error
+    with _scan_cond:
+        if _refreshing:
+            while _refreshing:
+                _scan_cond.wait()
+            if _round_error is not None:
+                raise _round_error
+            return _legacy_payload(_cache_payload if _cache_payload is not None else _empty_result())
+        _refreshing = True
+        _round_error = None
+    try:
+        payload = scan()
+    except Exception:
+        with _scan_cond:
+            _refreshing = False
+            _scan_cond.notify_all()
+        raise
+    with _scan_cond:
+        _cache_payload, _cache_ts = payload, time.time()
+        _fail_count = 0
+        _last_fail_ts = 0.0
+        _refreshing = False
+        _scan_cond.notify_all()
     return _legacy_payload(payload)
 
 
 def _rescan_worker() -> None:
-    """后台重扫 (daemon 线程入口): 成功写缓存并复位计数; 失败记退避, 仅冷启动写空态."""
-    global _cache_payload, _cache_ts, _refreshing, _fail_count, _last_fail_ts
+    """后台重扫 (daemon 线程入口): 锁外解压, 锁内发布; 失败记退避, 仅冷启动写空态."""
+    global _cache_payload, _cache_ts, _refreshing, _fail_count, _last_fail_ts, _round_error
     try:
         payload = scan()
+    except Exception as exc:  # noqa: BLE001 失败不外抛线程, 记退避后继续供 stale (对齐
+        # _ensure_quota_async "失败也写缓存, 防前端无限刷新" 意图)
+        with _scan_cond:
+            _fail_count += 1
+            _last_fail_ts = time.time()
+            if _cache_payload is None:
+                # 仅冷启动失败写空态 (消解 payload=None 时 TTL 短路永不命中的退避漏洞);
+                # 热态失败【保留 stale 真数据】, 禁止用空态覆盖已持真数据
+                _cache_payload = _empty_result()
+            _round_error = exc
+            _refreshing = False
+            _scan_cond.notify_all()
+        return
+    print(f"[dsh] rescan ok: {payload.get('sessions_count')} sessions", flush=True)  # stale 仅日志
+    with _scan_cond:
         _cache_payload, _cache_ts, _fail_count = payload, time.time(), 0
         _last_fail_ts = 0.0  # 退出退避窗 (_fail_count=0 已放行, 此举语义更完整)
-        print(f"[dsh] rescan ok: {payload.get('sessions_count')} sessions", flush=True)  # stale 仅日志
-    except Exception:  # noqa: BLE001 失败不外抛线程, 记退避后继续供 stale (对齐
-        # _ensure_quota_async "失败也写缓存, 防前端无限刷新" 意图)
-        _fail_count += 1
-        _last_fail_ts = time.time()
-        if _cache_payload is None:
-            # 仅冷启动失败写空态 (消解 payload=None 时 TTL 短路永不命中的退避漏洞);
-            # 热态失败【保留 stale 真数据】, 禁止用空态覆盖已持真数据
-            _cache_payload = _empty_result()
-    finally:
+        _round_error = None
         _refreshing = False
+        _scan_cond.notify_all()

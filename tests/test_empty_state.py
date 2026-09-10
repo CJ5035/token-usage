@@ -170,8 +170,8 @@ def test_render_windows_zero_usage_branch_no_arrow():
 
 def test_render_windows_dsh_note_on_notes_push_line():
     body = _extract_fn(_src(), "renderWindows")
-    assert ('if (w.compare.pct != null && w.compare.dsh_excluded_from_compare === true)'
-            ' notes.push(t("cmpExcludesDsh"));' in body)   # wb-since 通栏标注行
+    assert ('if (w.compare.pct != null && Array.isArray(w.compare.excluded_channels)'
+            ' && w.compare.excluded_channels.includes("dsh")) notes.push(t("cmpExcludesDsh"));' in body)   # wb-since 通栏标注行 (M2: 计划形态 excluded_channels, 仅 DSH 存在时由 server 附带)
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +195,8 @@ def _seed_channels() -> None:
 
 
 def _mock_dsh(monkeypatch, found: bool, today: dict | None = None) -> None:
-    """mock dsh_api.get_dsh_usage (server 经 `from . import dsh_api` 引用同一模块对象)."""
+    """mock dsh_api.get_dsh_summaries (get_dsh_summary 内部委托同一入口, server 经
+    `from . import dsh_api` 引用同一模块对象)."""
     bucket = {"steps": 1, "input": 0, "cache": 0, "cache_read": 0, "cache_write": 0,
               "output": 0, "reasoning": 0, "tokens": 0, "seconds": 0.0, "tps": None}
     if today:
@@ -205,7 +206,8 @@ def _mock_dsh(monkeypatch, found: bool, today: dict | None = None) -> None:
                "updated_at": None, "retry_after_seconds": 0, "range": "all", "totals": bucket,
                "trend": [{"date": __import__("datetime").datetime.now().astimezone().date().isoformat(), **bucket}],
                "sessions_count": 0}
-    monkeypatch.setattr(dsh_api, "get_dsh_summary", lambda range_: payload)
+    monkeypatch.setattr(dsh_api, "get_dsh_summaries",
+                        lambda *ranges: {r: {**payload, "range": r} for r in dict.fromkeys(ranges)})
 
 
 def test_server_windows_dsh_today_tokens_marks_includes_true(tmp_report_db, monkeypatch):

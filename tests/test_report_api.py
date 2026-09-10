@@ -93,7 +93,9 @@ def _mock_dsh(monkeypatch, today_tokens=70):
                 "range": range_, "totals": dict(bucket), "trend": [{"date": today, **bucket}],
                 "hourly": hourly, "sessions_count": 2, "data_since": today}
 
-    monkeypatch.setattr(dsh_api, "get_dsh_summary", summary)
+    # get_dsh_summary 内部委托 get_dsh_summaries, 打点一处即覆盖全部 server 调用路径
+    monkeypatch.setattr(dsh_api, "get_dsh_summaries",
+                        lambda *ranges: {r: summary(r) for r in dict.fromkeys(ranges)})
 
 
 def _four_step_dsh_summary(range_):
@@ -573,19 +575,24 @@ def test_dsh_history_report_contract_uses_one_range_summary(tmp_report_db, monke
 
     calls = []
 
-    def summary(range_):
-        calls.append(range_)
-        return _four_step_dsh_summary(range_)
+    def summaries(*ranges):
+        calls.append(tuple(ranges))
+        return {r: _four_step_dsh_summary(r) for r in dict.fromkeys(ranges)}
 
-    monkeypatch.setattr(dsh_api, "get_dsh_summary", summary)
+    # get_dsh_summary 内部委托 get_dsh_summaries: 单次打点覆盖全部 server 调用路径
+    monkeypatch.setattr(dsh_api, "get_dsh_summaries", summaries)
     windows = server._report_windows_response(None)
     assert windows["today"]["tokens"] == 1550
     assert windows["yesterday"]["tokens"] == 200
     assert windows["7d"]["tokens"] == 1780
     assert windows["data_since"] == (datetime.now().astimezone().date() - timedelta(days=6)).isoformat()
     assert windows["compare"]["includes_dsh_today"] is True
-    assert windows["compare"]["dsh_excluded_from_compare"] is True
-    assert calls == ["all"]
+    # M2/I4: 比较排除按计划形态返回, 且仅在有 DSH 时出现; 合并窗口带请求数不可用渠道
+    assert windows["compare"]["excluded_channels"] == ["dsh"]
+    assert windows["today"]["request_unavailable_channels"] == ["dsh"]
+    assert windows["7d"]["request_unavailable_channels"] == ["dsh"]
+    assert windows["today"]["request_count_exact"] is False
+    assert calls[0] == ("today", "yesterday", "7d", "30d")   # I7: 一次快照供四窗口
 
     channels = server._report_channels_response("7d")
     dsh_row = next(row for row in channels["rows"] if row["channel"] == "dsh")
@@ -596,6 +603,7 @@ def test_dsh_history_report_contract_uses_one_range_summary(tmp_report_db, monke
     assert dashboard["totals"]["total_tokens"] == 1780
     assert dashboard["today"]["total_tokens"] == 1550
     assert dashboard["totals"]["request_count_exact"] is False
+    assert dashboard["totals"]["request_unavailable_channels"] == ["dsh"]
 
     daily = _api_payload("/api/report/daily", {"range": ["7d"], "metric": ["tokens"], "channel": ["dsh"]})
     assert sum(daily["series"]["dsh"]) == 1780 and daily["dsh_status"]["found"] is True
@@ -603,10 +611,12 @@ def test_dsh_history_report_contract_uses_one_range_summary(tmp_report_db, monke
     hourly = _api_payload("/api/report/hourly", {"date": ["today"], "channel": ["dsh"]})
     assert len(hourly["buckets"]) == 24 and sum(hourly["series"]["dsh"]) == 1550
     assert sum(bucket["requests"] for bucket in hourly["buckets"]) == 0
+    assert hourly["request_count_exact"] is False
+    assert hourly["request_unavailable_channels"] == ["dsh"]
 
     overview = _api_payload("/api/report/channel-overview", {"range": ["7d"], "channel": ["dsh"]})
     assert overview["steps"] == 4 and overview["session_count"] == 2 and overview["avg_tps"] == 10
-    assert overview["request_count"] is None and overview["total_cost_usd"] is None
+    assert overview["request_count"] == 0 and overview["total_cost_usd"] is None
 
     trend = _api_payload("/api/report/channel-trend", {"date": ["today"], "channel": ["dsh"]})
     assert len(trend) == 24 and sum(row["total_tokens"] for row in trend) == 1550
@@ -634,20 +644,16 @@ def test_fixed_dsh_snapshot_flows_through_query_and_report_adapters(tmp_report_d
                     step(stamp(10, 11), 50, 0, 0, 1000, 0, 0),
                     step(stamp(4, 12), 10, 0, 0, 20, 20, 2),
                 ]}
-    def summary(range_):
-        return {"found": True, "scanning": False, "stale": False, "refresh_error": False,
-                "updated_at": snapshot["updated_at"], "retry_after_seconds": 0,
-                **dsh_api.query_dsh_usage(snapshot, range_, fixed_now)}
-    class _FixedDateTime(datetime):
-        @classmethod
-        def now(cls, tzinfo=None):
-            return fixed_now if tzinfo else fixed_now.replace(tzinfo=None)
+    def summaries(*ranges):
+        return {r: {"found": True, "scanning": False, "stale": False, "refresh_error": False,
+                    "updated_at": snapshot["updated_at"], "retry_after_seconds": 0,
+                    **dsh_api.query_dsh_usage(snapshot, r, fixed_now)}
+                for r in dict.fromkeys(ranges)}
     monkeypatch.setattr(dsh_api, "_local_timezone", lambda: tz)
-    monkeypatch.setattr(dsh_api, "get_dsh_summary", summary)
-    monkeypatch.setattr(server, "datetime", _FixedDateTime)
+    monkeypatch.setattr(dsh_api, "get_dsh_summaries", summaries)
 
-    today = summary("today")
-    seven = summary("7d")
+    today = summaries("today")["today"]
+    seven = summaries("7d")["7d"]
     assert today["totals"]["tokens"] == 1550 and today["totals"]["input"] == 250
     assert today["totals"]["output"] == 1300 and today["totals"]["tps"] == 10
     assert seven["totals"]["tokens"] == 1780 and seven["sessions_count"] == 1
@@ -661,6 +667,10 @@ def test_fixed_dsh_snapshot_flows_through_query_and_report_adapters(tmp_report_d
     assert sum(daily["series"]["dsh"]) == 1780
     hourly = _api_payload("/api/report/hourly", {"date": ["today"], "channel": ["dsh"]})
     assert sum(row["total_tokens"] for row in hourly["buckets"]) == 1550
+    # M7/V5: 小时桶逐桶钉住 — 0 点步 (200+300) 与 11 点步 (50+1000), 错位即失败
+    assert hourly["buckets"][0]["total_tokens"] == 500
+    assert hourly["buckets"][11]["total_tokens"] == 1050
+    assert sum(bucket["total_tokens"] for bucket in hourly["buckets"]) == 1550
 
 
 def test_report_daily_formats_pure_dsh_rows_and_merged_all_span(tmp_report_db):
@@ -714,20 +724,27 @@ def test_other_channel_windows_request_does_not_query_dsh(tmp_report_db, monkeyp
     from app import dsh_api, server
 
     _seed_channels()
-    monkeypatch.setattr(dsh_api, "get_dsh_summary", lambda _: pytest.fail("unexpected DSH query"))
+    monkeypatch.setattr(dsh_api, "get_dsh_summaries", lambda *_: pytest.fail("unexpected DSH query"))
     response = server._report_windows_response("opencode")
     assert "dsh_status" not in response
 
 
 def test_dsh_range_preserves_valid_speed_and_usage_today_alias(tmp_report_db, monkeypatch):
     """A rejected speed sample must not turn the valid 10 tps aggregate into 100."""
-    from app import dsh_api, server
+    from app import dsh_api
 
-    today = datetime.now().astimezone().date()
-    rejected_sample_day = {"date": today.isoformat(), "steps": 2, "input": 0, "cache": 0,
-                           "cache_read": 0, "cache_write": 0, "output": 1000, "reasoning": 0,
-                           "tokens": 1000, "seconds": 10.0, "tps": 10.0}
-    assert server._dsh_range({"range": "all", "trend": [rejected_sample_day]}, "today")["totals"]["tps"] == 10.0
+    # 被拒样本 (output=1000, 有效分子 100/10s) 在纯查询下 tps 仍为 10, token 照计
+    local_now = datetime.now().astimezone()
+    completed = local_now - timedelta(seconds=1)
+    if completed.date() != local_now.date():   # 午夜前后运行时不把样本造到昨天
+        completed = local_now.replace(hour=12, minute=0, second=0, microsecond=0)
+    rejected = {"session_id": "ws/r", "step_key": "1:1", "completed_ms": int(completed.timestamp() * 1000),
+                "provider": "p", "model": "m", "input": 0, "cache": 0, "cache_read": 0,
+                "cache_write": 0, "output": 1000, "reasoning": 0, "valid_output": 100,
+                "valid_seconds": 10.0, "final": True, "unkeyed": False}
+    result = dsh_api.query_dsh_usage({"found": True, "_steps": [rejected]}, "today", local_now)
+    assert result["totals"]["tps"] == 10.0
+    assert result["totals"]["output"] == 1000
 
     def bucket(output):
         return {"steps": 1, "input": 2, "cache": 1, "cache_read": 1, "cache_write": 0,
@@ -749,6 +766,7 @@ def test_dsh_range_preserves_valid_speed_and_usage_today_alias(tmp_report_db, mo
                 "data_since": day, "undated": 0, "future": 0,
                 "provisional_steps": provisional, "unkeyed_steps": unkeyed}
 
+    today = datetime.now().astimezone().date()
     yesterday = summary("yesterday", (today - timedelta(days=1)).isoformat(), 20, "p-y", "m-y", 1, 1)
     today_summary = summary("today", today.isoformat(), 100, "p-t", "m-t", 0, 0)
     calls = []
@@ -758,7 +776,6 @@ def test_dsh_range_preserves_valid_speed_and_usage_today_alias(tmp_report_db, mo
         return {"yesterday": yesterday, "today": today_summary}
 
     monkeypatch.setattr(dsh_api, "get_dsh_summaries", summaries)
-    monkeypatch.setattr(dsh_api, "degraded", lambda: False)
     response = _api_payload("/api/dsh/usage", {"range": ["yesterday"]})
     assert calls == [("yesterday", "today")]
     assert response["range"] == "yesterday" and response["totals"]["tokens"] == 22
@@ -774,9 +791,12 @@ def test_hourly_dsh_status_is_present_even_without_usage(tmp_report_db, monkeypa
 
     status = {"found": True, "scanning": True, "stale": True, "refresh_error": True,
               "updated_at": "2026-09-10T12:00:00", "retry_after_seconds": 42}
-    monkeypatch.setattr(dsh_api, "get_dsh_summary", lambda range_: {
-        **status, "range": range_, "totals": {"steps": 0, "tokens": 0},
-        "trend": [], "hourly": [], "sessions_count": 0, "data_since": None})
+    monkeypatch.setattr(dsh_api, "get_dsh_summaries", lambda *ranges: {r: {
+        **status, "range": r, "totals": {"steps": 0, "tokens": 0},
+        "trend": [], "hourly": [], "sessions_count": 0, "data_since": None}
+        for r in dict.fromkeys(ranges)})
     payload = _api_payload("/api/report/hourly", {"date": ["today"], "channel": ["dsh"]})
     assert payload["dsh_status"] == status
     assert len(payload["buckets"]) == 24 and payload["series"] == {}
+    # 无入选 DSH 步骤: 不污染请求数精确度标志 (I4)
+    assert "dsh" not in (payload.get("request_unavailable_channels") or [])

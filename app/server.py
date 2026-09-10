@@ -1315,8 +1315,6 @@ def _codex_summary_payload(range_param: str) -> dict[str, Any]:
 
 _DSH_STATUS_FIELDS = ("found", "scanning", "stale", "refresh_error", "updated_at",
                       "retry_after_seconds")
-_DSH_BUCKET_FIELDS = ("steps", "input", "cache", "cache_read", "cache_write", "output",
-                      "reasoning", "tokens", "seconds")
 
 
 def _dsh_status(summary: dict[str, Any]) -> dict[str, Any]:
@@ -1327,33 +1325,12 @@ def _dsh_has_usage(bucket: dict[str, Any]) -> bool:
     return bool((bucket.get("steps") or 0) or (bucket.get("tokens") or 0))
 
 
-def _dsh_range(summary: dict[str, Any], range_: str) -> dict[str, Any]:
-    """Derive a range from one ``all`` query without re-reading the DSH cache."""
-    if summary.get("range") == range_:
-        return summary
-    now = datetime.now().astimezone().date()
-    days = {"today": 0, "yesterday": 1, "7d": 6, "30d": 29}
-    start = None if range_ == "all" else now - timedelta(days=days[range_])
-    end = now if range_ == "yesterday" else now + timedelta(days=1)
-    total = {field: 0 for field in _DSH_BUCKET_FIELDS}
-    valid_output = 0.0
-    for row in summary.get("trend", []):
-        try:
-            day = datetime.fromisoformat(row["date"]).date()
-        except (KeyError, TypeError, ValueError):
-            continue
-        if start is not None and (day < start or day >= end):
-            continue
-        for field in _DSH_BUCKET_FIELDS:
-            total[field] += row.get(field) or 0
-        seconds = row.get("seconds") or 0
-        tps = row.get("tps")
-        if seconds > 0 and isinstance(tps, (int, float)) and not isinstance(tps, bool):
-            # Task 2's public tps is valid-output / valid-seconds. Reconstitute that
-            # numerator rather than using total output, which includes rejected samples.
-            valid_output += tps * seconds
-    total["tps"] = valid_output / total["seconds"] if total["seconds"] else None
-    return {**summary, "range": range_, "totals": total}
+def _dsh_unavailable(channels: Any) -> list[str]:
+    """把 dsh 并入不可用渠道列表 (去重, 不修改原列表)。"""
+    merged = list(channels or [])
+    if "dsh" not in merged:
+        merged.append("dsh")
+    return merged
 
 
 def _dsh_window(bucket: dict[str, Any]) -> dict[str, Any]:
@@ -1372,6 +1349,7 @@ def _merge_dsh_window(base: dict[str, Any], bucket: dict[str, Any]) -> dict[str,
     if _dsh_has_usage(bucket):
         merged["request_count_exact"] = False
         merged["cost_partial"] = True
+        merged["request_unavailable_channels"] = _dsh_unavailable(base.get("request_unavailable_channels"))
         if not base.get("cost_available"):
             merged["cost"] = None
     return merged
@@ -1382,22 +1360,27 @@ def _merge_data_since(db_since: Any, dsh_since: Any) -> Any:
 
 
 def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
-    """GET /api/report/windows with one frozen DSH history snapshot per response."""
+    """GET /api/report/windows with one frozen DSH history snapshot per response.
+
+    §3.2: 一次快照 + 一次 now 供给四个窗口 (get_dsh_summaries), server 不再
+    自建范围过滤。"""
     payload = db.report_windows(channel)
     dsh_found = False
     if channel in (None, "dsh"):
-        snapshot = dsh_api.get_dsh_summary("all")
-        dsh_found = bool(snapshot.get("found"))
+        windows = dsh_api.get_dsh_summaries("today", "yesterday", "7d", "30d")
+        dsh_found = bool(windows["today"].get("found"))
         if dsh_found:
             for range_ in ("today", "yesterday", "7d", "30d"):
-                payload[range_] = _merge_dsh_window(payload[range_], _dsh_range(snapshot, range_)["totals"])
-            payload["channels"]["dsh"] = {"oldest": snapshot.get("data_since"),
-                                          "last_sync_at": snapshot.get("updated_at"), "ok": True}
-            payload["data_since"] = _merge_data_since(payload.get("data_since"), snapshot.get("data_since"))
+                payload[range_] = _merge_dsh_window(payload[range_], windows[range_]["totals"])
+            dsh_since = min((w.get("data_since") for w in windows.values() if w.get("data_since")),
+                            default=None)   # data_since 与所选范围无关, 合并取最早
+            payload["channels"]["dsh"] = {"oldest": dsh_since,
+                                          "last_sync_at": windows["today"].get("updated_at"), "ok": True}
+            payload["data_since"] = _merge_data_since(payload.get("data_since"), dsh_since)
+            payload["compare"]["excluded_channels"] = ["dsh"]
         payload["compare"]["includes_dsh_today"] = bool(
-            dsh_found and (_dsh_range(snapshot, "today")["totals"].get("tokens") or 0))
-        payload["compare"]["dsh_excluded_from_compare"] = True
-        payload["dsh_status"] = _dsh_status(snapshot)
+            dsh_found and (windows["today"]["totals"].get("tokens") or 0))
+        payload["dsh_status"] = _dsh_status(windows["today"])
     summary = db.list_channel_summary()
     # 新R2 N14: channel_count 语义 = 当前请求可见的渠道数
     if channel:                          # 单渠道请求: 可见渠道 = 该渠道自身 (dsh 需 found)
@@ -1442,6 +1425,7 @@ def _totals_merge_dsh(totals: dict[str, Any], dsh_totals: dict[str, Any]) -> dic
         out["cost_available"] = bool(totals.get("cost_available"))
         if not totals.get("cost_available"):
             out["total_cost_usd"] = None
+        out["request_unavailable_channels"] = _dsh_unavailable(out.get("request_unavailable_channels"))
         unavailable = list(out.get("cost_unavailable_channels") or [])
         if "dsh" not in unavailable:
             unavailable.append("dsh")
@@ -1453,22 +1437,22 @@ def _dashboard_all_payload(range_param: str) -> dict[str, Any]:
     """GET /api/dashboard?scope=all 数据组装 (显式全渠道分支, 需求 §5 公共报表).
 
     totals=report_totals(range)、today=report_totals(today), 全渠道聚合含
-    Codex; DSH 仅 range=today 并入 (无历史小时/日数据, 不谎称)。不伪装成
-    active account: 无 account/quota 键, 前端据此走公共报表分支。"""
+    Codex; DSH 各窗口按选定范围经一次快照一次 now 的 get_dsh_summaries 并入。
+    不伪装成 active account: 无 account/quota 键, 前端据此走公共报表分支。"""
     if range_param not in _RANGE_WHITELIST:
         range_param = "today"
     totals = db.report_totals(range_param)
     today = db.report_totals("today")
-    dsh = dsh_api.get_dsh_summary("all")
-    if dsh.get("found"):
-        totals = _totals_merge_dsh(totals, _dsh_range(dsh, range_param)["totals"])
-        today = _totals_merge_dsh(today, _dsh_range(dsh, "today")["totals"])
+    windows = dsh_api.get_dsh_summaries(range_param, "today")
+    if windows[range_param].get("found"):
+        totals = _totals_merge_dsh(totals, windows[range_param]["totals"])
+        today = _totals_merge_dsh(today, windows["today"]["totals"])
     return {
         "scope": "all",
         "range": range_param,
         "totals": totals,
         "today": today,
-        "dsh_status": _dsh_status(dsh),
+        "dsh_status": _dsh_status(windows[range_param]),
         "exchange_rate": {"usd_cny": _fetch_usd_cny(), "currency": "CNY"},
         "codex": _codex_state_snapshot(),
         "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1476,8 +1460,11 @@ def _dashboard_all_payload(range_param: str) -> dict[str, Any]:
 
 
 def _dsh_daily_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """公共 daily 的 DSH extra_rows: 仅取有观测数据的日期 (steps>0),
+    不把为专用图表补齐的空日当成有数据 (§3.2)。"""
     return [{"date": row["date"], "channel": "dsh", "value": row.get("tokens") or 0}
-            for row in summary.get("trend", []) if isinstance(row, dict) and row.get("date")]
+            for row in summary.get("trend", [])
+            if isinstance(row, dict) and row.get("date") and (row.get("steps") or 0) > 0]
 
 
 def _merge_dsh_hourly(payload: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
@@ -1498,6 +1485,9 @@ def _merge_dsh_hourly(payload: dict[str, Any], summary: dict[str, Any]) -> dict[
             bucket[target] += row.get(source) or 0
         series[hour] += row.get("tokens") or 0
     payload["series"] = {**payload["series"], "dsh": series}
+    # 有 DSH 步骤的范围请求数不完整 (§3.3): 顶层标志 + 不可用渠道, 不追加虚构值
+    payload["request_count_exact"] = False
+    payload["request_unavailable_channels"] = _dsh_unavailable(payload.get("request_unavailable_channels"))
     return payload
 
 
@@ -1509,7 +1499,7 @@ def _dsh_channel_overview(summary: dict[str, Any]) -> dict[str, Any]:
     uncached = max(0, input_tokens - cache_read)
     hit_rate = (cache_read / (cache_read + uncached + cache_write) * 100
                 if cache_read + uncached + cache_write else 0.0)
-    return {"request_count": None, "request_count_exact": False,
+    return {"request_count": 0, "request_count_exact": False,
             "session_count": summary.get("sessions_count") or 0,
             "steps": totals.get("steps") or 0,
             "avg_tps": totals.get("tps"),
@@ -1717,17 +1707,10 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
 
     if route == "/api/dsh/usage" and method == "GET":
         # 永远 200, 数据缺失由 found:false 表达; 范围查询包含刷新状态且不暴露扫描快照。
+        # §3.4: HTTP 不再走同步全扫描 — 所有请求一律只读统一摘要入口, 刷新由
+        # 后台 worker 完成 (扫描中/失败/退避经刷新状态字段透出)。
         range_ = query.get("range", ["all"])[0]
-        range_ = range_ if range_ in _RANGE_WHITELIST else "all"
-        if dsh_api.degraded():
-            # 连续 3 次后台扫描失败的降级: 同步重扫一次; 失败异常透传由外层 500
-            # 兜底, 前端 catch 后 toast 且保留旧内容
-            dsh_api.scan_sync()
-            summaries = dsh_api.get_dsh_summaries(range_, "today")
-            summary = summaries[range_]
-            _json_response(handler, {**summary, "total": summary.get("totals") or {},
-                                     "today": summaries["today"].get("totals") or {}})
-            return
+        range_ = range_ if range_ in _RANGE_WHITELIST else "today"
         summaries = dsh_api.get_dsh_summaries(range_, "today")
         summary = summaries[range_]
         _json_response(handler, {**summary, "total": summary.get("totals") or {},
