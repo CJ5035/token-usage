@@ -209,3 +209,122 @@ def test_version_delay_does_not_reset_theme(web_server, browser):
     page.wait_for_function("document.documentElement.dataset.theme === 'dark'", timeout=2000)
     page.close()
     ctx.close()
+
+
+# ---------------------------------------------------------------------------
+# B. 图表主题与视觉行为 (Task 11/12 实现前本组大部分失败)
+# ---------------------------------------------------------------------------
+
+_CHART_BUILDERS = """
+window.__built = [];
+function reg(name, inst) { window.__built.push([name, inst]); return inst; }
+reg('cToday', (chartToday([{hour:'00',input:5,output:3}], true), cToday));
+reg('cModel', (chartModel([{model:'gpt-5',uncached_input_tokens:10,total_output_tokens:5,total_cost_usd:0.01,request_count:3,hit_rate:50}], true), cModel));
+reg('cTrend', (chartTrend([{date:'2026-09-01',total_cost_usd:1,request_count:2,total_input_tokens:3,total_output_tokens:4,total_reasoning_tokens:5}], true), cTrend));
+reg('cZcodeTrend', (chartZcodeTrend([{date:'2026-09-01',total_input_tokens:1,total_output_tokens:1,total_reasoning_tokens:1,total_cost_usd:0.5}], true), cZcodeTrend));
+reg('cClaudecodeTrend', (chartClaudecodeTrend([{date:'2026-09-01',total_tokens:3,total_cost_usd:0.5}], true), cClaudecodeTrend));
+reg('cCodexTrend', (chartCodexTrend([{date:'2026-09-01',total_tokens:3,request_count:2}], true), cCodexTrend));
+reg('cOvTrendChart', (chartOvTrend([{daily7:[{date:'2026-09-01',total_cost_usd:1,request_count:1,total_input_tokens:1,total_output_tokens:1,total_reasoning_tokens:1}]}], true), cOvTrendChart));
+reg('cStack', (chartReportStack({labels:['2026-09-01'],series:{zcode:[5]},metric:'tokens'}, true), cStack));
+reg('cDonut', (chartReportDonut({labels:['2026-09-01'],series:{zcode:[5]},metric:'tokens'}, true), cDonut));
+reg('cHourly', (chartReportHourly({labels:[0],series:{zcode:[5]}}, true, 'noDataInRange'), cHourly));
+window.__built.length;
+"""
+
+
+def _expected_palette(page):
+    return page.evaluate("""() => {
+      const cs = getComputedStyle(document.body);
+      const v = (n) => cs.getPropertyValue(n).trim();
+      return { input: v('--chart-input'), output: v('--chart-output'), extra: v('--chart-extra'),
+               tooltipBg: v('--chart-tooltip-bg'), tooltipText: v('--chart-tooltip-text'),
+               tooltipBorder: v('--chart-tooltip-border') };
+    }""")
+
+
+def test_ten_charts_use_theme_palette_and_tooltip(web_server, browser):
+    ctx = browser.new_context()
+    ctx.add_init_script("try{localStorage.setItem('gousage-dark','1')}catch(e){}")
+    page = ctx.new_page()
+    page.goto(web_server)
+    page.wait_for_function("document.documentElement.dataset.theme === 'dark'")
+    page.wait_for_load_state("networkidle")   # 等 init/loadReportAll 落定, 防迟到空数据重绘销毁已建实例
+    exp = _expected_palette(page)
+    assert page.evaluate(_CHART_BUILDERS) == 10
+    report = page.evaluate("""() => window.__built.map(([name, c]) => ({
+      name,
+      firstBg: Array.isArray(c.data.datasets[0].backgroundColor) ? c.data.datasets[0].backgroundColor[0] : (c.data.datasets[0].backgroundColor || c.data.datasets[0].borderColor || null),
+      tooltipBg: c.options.plugins.tooltip && c.options.plugins.tooltip.backgroundColor || null,
+      tooltipText: c.options.plugins.tooltip && c.options.plugins.tooltip.bodyColor || null,
+      anim: c.options.animation === undefined ? 'default' : c.options.animation,
+      callbacksKept: !!(c.options.plugins.tooltip && c.options.plugins.tooltip.callbacks),
+    }))""")
+    by_name = {r["name"]: r for r in report}
+    # 指标色: chartToday 首系列 = --chart-input
+    assert by_name["cToday"]["firstBg"] == exp["input"]
+    # 模型环第六色 = --chart-extra ( palette[5] )
+    model_palette = page.evaluate("cModel.data.datasets[0].backgroundColor")
+    assert model_palette[5] == exp["extra"]
+    # 十图 tooltip 底色/文字色全部来自变量 (保留既有 callbacks 的图不得丢)
+    with_callbacks = {"cModel", "cTrend", "cZcodeTrend", "cClaudecodeTrend", "cCodexTrend", "cOvTrendChart"}
+    for name, r in by_name.items():
+        assert r["tooltipBg"] == exp["tooltipBg"], f"{name} tooltip 底色未走主题变量"
+        assert r["tooltipText"] == exp["tooltipText"], f"{name} tooltip 文字色未走主题变量"
+        assert r["anim"] is False, f"{name} noAnim 被破坏"
+        if name in with_callbacks:
+            assert r["callbacksKept"], f"{name} 丢失了既有 tooltip callbacks"
+    ctx.close()
+
+
+def test_hidden_page_chart_uses_current_theme(web_server, browser):
+    ctx = browser.new_context()
+    ctx.add_init_script("try{localStorage.setItem('gousage-dark','1')}catch(e){}")
+    page = ctx.new_page()
+    page.goto(web_server)
+    page.wait_for_function("document.documentElement.dataset.theme === 'dark'")
+    page.wait_for_load_state("networkidle")   # 先等首页加载链落定
+    page.evaluate("switchPage('stats')")
+    exp = _expected_palette(page)
+    # 单次 evaluate 原子完成建图+读色, 防 switchPage 触发的异步 loadDashboard 穿插覆盖 cTrend
+    first = page.evaluate("""() => {
+      chartTrend([{date:'2026-09-01',total_cost_usd:1,request_count:2,total_input_tokens:3,total_output_tokens:4,total_reasoning_tokens:5}], true);
+      return cTrend.data.datasets[0].borderColor;
+    }""")
+    assert first == exp["input"], "进入隐藏页后绘制的图表未按当前主题取色"
+    ctx.close()
+
+
+def test_icons_swap_in_place_on_theme_toggle(web_server, browser):
+    page = browser.new_page()
+    page.goto(web_server)
+    page.wait_for_selector("#tb-theme")
+    page.evaluate("""() => {
+      const body = document.getElementById('records-body');
+      body.innerHTML = '<img alt="gpt" src="icons/gpt.svg">';
+    }""")
+    expected_dark = page.evaluate("themedName('gpt', true)")
+    page.click("#tb-theme")
+    page.wait_for_function("document.documentElement.dataset.theme === 'dark'")
+    src = page.get_attribute("#records-body img", "src")
+    assert expected_dark in src, f"图标未原地换成深色变体: {src}"
+    page.close()
+
+
+def test_reduced_motion_toast_still_removed(web_server, browser):
+    ctx = browser.new_context(reduced_motion="reduce")
+    page = ctx.new_page()
+    page.goto(web_server)
+    page.wait_for_selector("#tb-theme")
+    page.evaluate("toast('probe', 'err')")
+    page.wait_for_selector(".toast.err", state="detached", timeout=6000)   # 定时删除不依赖动画
+    ctx.close()
+
+
+def test_sparkline_uses_css_var_not_snapshot(web_server, browser):
+    page = browser.new_page()
+    page.goto(web_server)
+    page.wait_for_selector("#tb-theme")
+    svg = page.evaluate("sparklineSvg([1, 3, 2], 'var(--account-1)')")
+    assert 'style="stroke:var(--account-1)"' in svg, "sparkline 未用 CSS var (缓存一次性颜色快照)"
+    assert 'style="fill:var(--account-1)"' in svg
+    page.close()
