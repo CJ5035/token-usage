@@ -43,3 +43,15 @@
 - 覆盖 hourly 空用量的完整六字段 `dsh_status`。
 - `pytest -q tests/test_report_api.py tests/test_empty_state.py tests/test_codex_server.py tests/test_dsh_api.py tests/test_dsh_background.py`：`125 passed, 3 skipped`。
 - `python -m compileall -q app/server.py tests/test_report_api.py` 与 `git diff --check`：通过。
+
+## Fix round 2
+
+- 新增 `dsh_api.get_dsh_summaries(*ranges)`：它只捕获一次 `now` 和缓存 snapshot，再对每个范围运行 Task 2 的纯 `query_dsh_usage`。`get_dsh_summary` 复用该实现，保持旧调用方契约。
+- `/api/dsh/usage` 现在在同一次快照查询中取得请求范围和 `today` 兼容别名。请求范围的 totals、providers、models、trend、hourly、sessions_count、future/undated/provisional/unkeyed 诊断均来自正确范围；兼容 `today` 仅来自同一批查询的 today totals。
+
+### Fix round 2 验证
+
+- 真实缓存快照回归：昨天 output `20`、今天 output `100`、两个不同会话，断言 `get_dsh_summaries` 的 provider/model、trend、session、provisional/unkeyed 和 24 小时桶都严格按范围隔离。
+- `/api/dsh/usage?range=yesterday` 回归：断言所有请求范围字段保持 yesterday，`today` 别名为 today totals，并且仅调用一次多范围摘要契约。
+- `pytest -q tests/test_report_api.py tests/test_dsh_api.py tests/test_dsh_background.py tests/test_empty_state.py tests/test_codex_server.py`：`126 passed, 3 skipped`。
+- `python -m compileall -q app/dsh_api.py app/server.py tests/test_dsh_api.py tests/test_report_api.py` 与 `git diff --check`：通过。

@@ -496,6 +496,35 @@ class TestRangeQueries:
         assert dsh_api.query_dsh_usage(snapshot, "today", after)["totals"]["output"] == 20
         assert snapshot == original
 
+    def test_multi_range_summary_uses_one_snapshot_with_range_scoped_fields(self, monkeypatch):
+        now = datetime.now().astimezone()
+        today_ms = int(now.timestamp() * 1000)
+        yesterday_ms = int((now - timedelta(days=1)).timestamp() * 1000)
+        snapshot = _range_snapshot(
+            _range_step(yesterday_ms, session="ws/yesterday", provider="p-y", model="m-y",
+                        output=20, final=False, unkeyed=True),
+            _range_step(today_ms, session="ws/today", provider="p-t", model="m-t", output=100),
+        )
+        monkeypatch.setattr(dsh_api, "_cache_payload", snapshot)
+        monkeypatch.setattr(dsh_api, "_cache_ts", time_mod.time())
+
+        summaries = dsh_api.get_dsh_summaries("yesterday", "today")
+        yesterday, today = summaries["yesterday"], summaries["today"]
+
+        assert yesterday["range"] == "yesterday" and yesterday["totals"]["output"] == 20
+        assert [row["provider"] for row in yesterday["providers"]] == ["p-y"]
+        assert [(row["provider"], row["model"]) for row in yesterday["models"]] == [("p-y", "m-y")]
+        assert [row["date"] for row in yesterday["trend"]] == [(now - timedelta(days=1)).date().isoformat()]
+        assert yesterday["sessions_count"] == 1 and yesterday["provisional_steps"] == 1
+        assert yesterday["unkeyed_steps"] == 1 and len(yesterday["hourly"]) == 24
+        assert sum(row["output"] for row in yesterday["hourly"]) == 20
+
+        assert today["range"] == "today" and today["totals"]["output"] == 100
+        assert [row["provider"] for row in today["providers"]] == ["p-t"]
+        assert today["sessions_count"] == 1 and today["provisional_steps"] == 0
+        assert today["unkeyed_steps"] == 0 and len(today["hourly"]) == 24
+        assert sum(row["output"] for row in today["hourly"]) == 100
+
     def test_summary_is_serializable_and_does_not_expose_cache_steps(self, monkeypatch):
         now = datetime.now().astimezone()
         now_ms = int(now.timestamp() * 1000)

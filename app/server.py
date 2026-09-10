@@ -1721,15 +1721,15 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             # 连续 3 次后台扫描失败的降级: 同步重扫一次; 失败异常透传由外层 500
             # 兜底, 前端 catch 后 toast 且保留旧内容
             dsh_api.scan_sync()
-            snapshot = dsh_api.get_dsh_summary("all")
-            summary = _dsh_range(snapshot, range_)
+            summaries = dsh_api.get_dsh_summaries(range_, "today")
+            summary = summaries[range_]
             _json_response(handler, {**summary, "total": summary.get("totals") or {},
-                                     "today": _dsh_range(snapshot, "today").get("totals") or {}})
+                                     "today": summaries["today"].get("totals") or {}})
             return
-        snapshot = dsh_api.get_dsh_summary("all")
-        summary = _dsh_range(snapshot, range_)
+        summaries = dsh_api.get_dsh_summaries(range_, "today")
+        summary = summaries[range_]
         _json_response(handler, {**summary, "total": summary.get("totals") or {},
-                                 "today": _dsh_range(snapshot, "today").get("totals") or {}})
+                                 "today": summaries["today"].get("totals") or {}})
         return
 
     if route == "/api/logout" and method == "POST":

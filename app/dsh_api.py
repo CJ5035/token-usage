@@ -830,22 +830,28 @@ def get_dsh_usage() -> dict[str, Any]:
     return _legacy_payload(snapshot)
 
 
-def get_dsh_summary(range_: str) -> dict[str, Any]:
-    """返回范围聚合和刷新状态；内部快照及路径、日志内容永不序列化。"""
+def get_dsh_summaries(*ranges: str) -> dict[str, dict[str, Any]]:
+    """在一次冻结快照上查询多个范围，供需要兼容范围字段的单个响应使用。"""
     captured_now = datetime.now().astimezone()
     snapshot, stale = _snapshot_for_read()
     retry_after = 0
     if _fail_count and _last_fail_ts:
         retry_after = max(0, int(math.ceil(_FAIL_BACKOFF_SECONDS - (time.time() - _last_fail_ts))))
-    return {
+    status = {
         "found": bool(snapshot.get("found")),
         "scanning": _refreshing,
         "stale": stale,
         "refresh_error": bool(_fail_count),
         "updated_at": snapshot.get("updated_at"),
         "retry_after_seconds": retry_after,
-        **query_dsh_usage(snapshot, range_, captured_now),
     }
+    return {range_: {**status, **query_dsh_usage(snapshot, range_, captured_now)}
+            for range_ in dict.fromkeys(ranges)}
+
+
+def get_dsh_summary(range_: str) -> dict[str, Any]:
+    """返回范围聚合和刷新状态；内部快照及路径、日志内容永不序列化。"""
+    return get_dsh_summaries(range_)[range_]
 
 
 def degraded() -> bool:
