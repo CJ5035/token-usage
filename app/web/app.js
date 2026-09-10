@@ -1085,6 +1085,7 @@ let dshRequestController = null;
 let dshInFlightRange = null;
 const DSH_REFRESH_POLL_MS = 1500;
 const DSH_REFRESH_MAX_MS = 60_000;
+const DSH_REQUEST_TIMEOUT_MS = 20_000;
 
 function dshStatsVisible() {
   return state.page === "stats" && !$("page-stats").hidden;
@@ -1122,6 +1123,8 @@ async function loadDshUsage() {
   dshRequestController = controller;
   dshInFlightRange = range;
   const seq = ++dshSumSeq;
+  let timedOut = false;
+  const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, DSH_REQUEST_TIMEOUT_MS);
   box.classList.add("swapping");
   try {
     const data = await api("/api/dsh/usage?range=" + encodeURIComponent(range), { signal: controller.signal });
@@ -1130,10 +1133,11 @@ async function loadDshUsage() {
     dshUsageLast = data;
     renderDsh(data);
   } catch (e) {
-    if (seq !== dshSumSeq || range !== state.statsRange || !dshStatsVisible() || controller.signal.aborted) return;
-    dshTransportError = { range, message: e.message || String(e) };
+    if (seq !== dshSumSeq || range !== state.statsRange || !dshStatsVisible() || (controller.signal.aborted && !timedOut)) return;
+    dshTransportError = { range, message: timedOut ? t("requestTimeout") : (e.message || String(e)) };
     renderDshTransportError();
   } finally {
+    clearTimeout(timeoutId);
     if (seq === dshSumSeq) {
       box.classList.remove("swapping");
       dshRequestController = null;

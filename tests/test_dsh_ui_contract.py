@@ -60,6 +60,16 @@ def test_dsh_refresh_scheduler_and_transport_error_contract():
     assert "if (state.page === \"stats\" && page !== \"stats\") { destroyDshTrend(); cancelDshRefresh(); }" in js
 
 
+def test_hanging_dsh_request_times_out_and_allows_same_range_retry():
+    """The DSH-specific AbortController retains the 20s API timeout guarantee."""
+    js = (ROOT / "app/web/app.js").read_text(encoding="utf-8")
+    assert "const DSH_REQUEST_TIMEOUT_MS = 20_000;" in js
+    assert "const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, DSH_REQUEST_TIMEOUT_MS);" in js
+    assert "controller.signal.aborted && !timedOut" in js
+    assert "clearTimeout(timeoutId);" in js
+    assert "dshInFlightRange = null;" in js
+
+
 def test_dsh_unknown_home_values_and_data_since_are_safe():
     js = (ROOT / "app/web/app.js").read_text(encoding="utf-8")
     assert 'isDsh ? dshUnavailableCell("dshRequestsUnavailable")' in js
