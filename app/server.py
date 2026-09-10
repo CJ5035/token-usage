@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, urlparse
@@ -1312,34 +1313,87 @@ def _codex_summary_payload(range_param: str) -> dict[str, Any]:
 # Report 聚合端点数据组装 (GET /api/report/*)
 # ---------------------------------------------------------------------------
 
-def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
-    """GET /api/report/windows 数据组装 (R6): db 四表 + dsh 今日并入。
+_DSH_STATUS_FIELDS = ("found", "scanning", "stale", "refresh_error", "updated_at",
+                      "retry_after_seconds")
+_DSH_BUCKET_FIELDS = ("steps", "input", "cache", "cache_read", "cache_write", "output",
+                      "reasoning", "tokens", "seconds")
 
-    DSH 无历史表, 仅贡献 today 的 tokens (requests/cost 不虚报); 合并走
-    db._win_merge 保持窗口行 11 键形状 (NULL 不是 0 语义不被 DSH 并入破坏)。"""
+
+def _dsh_status(summary: dict[str, Any]) -> dict[str, Any]:
+    return {field: summary.get(field) for field in _DSH_STATUS_FIELDS}
+
+
+def _dsh_has_usage(bucket: dict[str, Any]) -> bool:
+    return bool((bucket.get("steps") or 0) or (bucket.get("tokens") or 0))
+
+
+def _dsh_range(summary: dict[str, Any], range_: str) -> dict[str, Any]:
+    """Derive a range from one ``all`` query without re-reading the DSH cache."""
+    if summary.get("range") == range_:
+        return summary
+    now = datetime.now().astimezone().date()
+    days = {"today": 0, "yesterday": 1, "7d": 6, "30d": 29}
+    start = None if range_ == "all" else now - timedelta(days=days[range_])
+    end = now if range_ == "yesterday" else now + timedelta(days=1)
+    total = {field: 0 for field in _DSH_BUCKET_FIELDS}
+    speed_output = 0
+    for row in summary.get("trend", []):
+        try:
+            day = datetime.fromisoformat(row["date"]).date()
+        except (KeyError, TypeError, ValueError):
+            continue
+        if start is not None and (day < start or day >= end):
+            continue
+        for field in _DSH_BUCKET_FIELDS:
+            total[field] += row.get(field) or 0
+        if (row.get("seconds") or 0) > 0:
+            speed_output += row.get("output") or 0
+    total["tps"] = speed_output / total["seconds"] if total["seconds"] else None
+    return {**summary, "range": range_, "totals": total}
+
+
+def _dsh_window(bucket: dict[str, Any]) -> dict[str, Any]:
+    return {"tokens": bucket.get("tokens") or 0,
+            "input_tokens": bucket.get("input") or 0,
+            "output_tokens": bucket.get("output") or 0,
+            "cache_read_tokens": bucket.get("cache_read") or 0,
+            "cache_write_tokens": bucket.get("cache_write") or 0,
+            "reasoning_tokens": bucket.get("reasoning") or 0,
+            "requests": 0, "cost": None, "cost_available": False,
+            "cost_partial": _dsh_has_usage(bucket), "request_count_exact": False}
+
+
+def _merge_dsh_window(base: dict[str, Any], bucket: dict[str, Any]) -> dict[str, Any]:
+    merged = db._win_merge(base, _dsh_window(bucket))
+    if _dsh_has_usage(bucket):
+        merged["request_count_exact"] = False
+        merged["cost_partial"] = True
+        if not base.get("cost_available"):
+            merged["cost"] = None
+    return merged
+
+
+def _merge_data_since(db_since: Any, dsh_since: Any) -> Any:
+    return min(value for value in (db_since, dsh_since) if value) if db_since or dsh_since else None
+
+
+def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
+    """GET /api/report/windows with one frozen DSH history snapshot per response."""
     payload = db.report_windows(channel)
-    # 新R3 N17: 仅在可能用到 dsh 数据时才触发扫描 (账号渠道请求不扫 ~/.dsh)
-    dsh_found = dsh_api.get_dsh_usage().get("found") if channel in (None, "dsh") else False
-    if channel in (None, "dsh") and dsh_found:
-        dsh = dsh_api.get_dsh_usage()
-        t = dsh.get("today") or {}
-        dsh_in = t.get("input") or 0
-        dsh_out = t.get("output") or 0
-        dsh_rea = t.get("reasoning") or 0
-        dsh_win = {"tokens": dsh_in + dsh_out + dsh_rea,
-                   "input_tokens": dsh_in, "output_tokens": dsh_out,
-                   "cache_read_tokens": t.get("cache") or 0, "cache_write_tokens": 0,
-                   "reasoning_tokens": dsh_rea, "requests": 0,
-                   "cost": 0.0, "cost_available": False, "cost_partial": False,
-                   "request_count_exact": False}
-        payload["today"] = db._win_merge(payload["today"], dsh_win)
-        payload["compare"]["includes_dsh_today"] = bool(dsh_win["tokens"] > 0)
-        if channel == "dsh":
-            payload = {**payload, "yesterday": dict(dsh_win), "7d": dict(dsh_win),
-                       "30d": dict(dsh_win),
-                       "channels": {"dsh": {"oldest": None, "last_sync_at": dsh.get("updated_at"),
-                                            "ok": True}}}
-            payload["data_since"] = None
+    dsh_found = False
+    if channel in (None, "dsh"):
+        snapshot = dsh_api.get_dsh_summary("all")
+        dsh_found = bool(snapshot.get("found"))
+        if dsh_found:
+            for range_ in ("today", "yesterday", "7d", "30d"):
+                payload[range_] = _merge_dsh_window(payload[range_], _dsh_range(snapshot, range_)["totals"])
+            payload["channels"]["dsh"] = {"oldest": snapshot.get("data_since"),
+                                          "last_sync_at": snapshot.get("updated_at"), "ok": True}
+            payload["data_since"] = _merge_data_since(payload.get("data_since"), snapshot.get("data_since"))
+        payload["compare"]["includes_dsh_today"] = bool(
+            dsh_found and (_dsh_range(snapshot, "today")["totals"].get("tokens") or 0))
+        payload["compare"]["dsh_excluded_from_compare"] = True
+        payload["dsh_status"] = _dsh_status(snapshot)
     summary = db.list_channel_summary()
     # 新R2 N14: channel_count 语义 = 当前请求可见的渠道数
     if channel:                          # 单渠道请求: 可见渠道 = 该渠道自身 (dsh 需 found)
@@ -1352,39 +1406,42 @@ def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
 
 
 def _report_channels_response(range_: str) -> dict[str, Any]:
-    """GET /api/report/channels 数据组装 (R6): db 渠道行 (含 codex) + dsh 今日行
-    (仅 range=today); 渠道行固定字段与 db.report_channels 对齐。"""
+    """GET /api/report/channels with DSH range totals and source status."""
     rows = db.report_channels(range_)
     summary = db.list_channel_summary()
-    if range_ == "today":
-        dsh = dsh_api.get_dsh_usage()
-        if dsh.get("found"):
-            t = dsh.get("today") or {}
-            # 明细行与 db.report_channels「当前范围无数据不出行」对齐; summary 保留 (渠道 tab 接入可见性)
-            if (t.get("input") or 0) + (t.get("output") or 0) + (t.get("reasoning") or 0) > 0:
-                rows = rows + [{"channel": "dsh", "tokens": (t.get("input") or 0) + (t.get("output") or 0)
-                                + (t.get("reasoning") or 0),
-                                "input": t.get("input") or 0, "output": t.get("output") or 0,
-                                "cache_read": t.get("cache") or 0, "cache_write": 0,
-                                "reasoning": t.get("reasoning") or 0, "requests": 0, "cost": 0.0,
-                                "cost_available": False, "cost_partial": False,
-                                "request_count_exact": False,
-                                "data_since": None, "estimated": False}]
-            summary = summary + [{"channel": "dsh", "accounts": 0}]
-    return {"rows": rows, "summary": summary}
+    dsh = dsh_api.get_dsh_summary(range_)
+    if dsh.get("found"):
+        totals = dsh["totals"]
+        if _dsh_has_usage(totals):
+            rows.append({"channel": "dsh", "tokens": totals.get("tokens") or 0,
+                         "input": totals.get("input") or 0, "output": totals.get("output") or 0,
+                         "cache_read": totals.get("cache_read") or 0,
+                         "cache_write": totals.get("cache_write") or 0,
+                         "reasoning": totals.get("reasoning") or 0, "requests": None,
+                         "cost": None, "cost_available": False, "cost_partial": True,
+                         "request_count_exact": False, "data_since": dsh.get("data_since"),
+                         "estimated": False})
+        summary.append({"channel": "dsh", "accounts": 0})
+    return {"rows": rows, "summary": summary, "dsh_status": _dsh_status(dsh)}
 
 
-def _totals_merge_dsh_today(totals: dict[str, Any], dsh_today: dict[str, Any]) -> dict[str, Any]:
-    """DSH 仅贡献 today (无历史表): tokens=input+output+reasoning, requests/cost
-    不虚报 (与 _report_windows_response 口径对齐)。"""
-    d_in = dsh_today.get("input") or 0
-    d_out = dsh_today.get("output") or 0
-    d_rea = dsh_today.get("reasoning") or 0
+def _totals_merge_dsh(totals: dict[str, Any], dsh_totals: dict[str, Any]) -> dict[str, Any]:
+    """Merge DSH tokens while preserving its unknown request and cost semantics."""
     out = dict(totals)
-    out["total_tokens"] = (totals["total_tokens"] or 0) + d_in + d_out + d_rea
-    out["total_input_tokens"] = (totals["total_input_tokens"] or 0) + d_in
-    out["total_output_tokens"] = (totals["total_output_tokens"] or 0) + d_out
-    out["cache_hit_tokens"] = (totals["cache_hit_tokens"] or 0) + (dsh_today.get("cache") or 0)
+    out["total_tokens"] = (totals["total_tokens"] or 0) + (dsh_totals.get("tokens") or 0)
+    out["total_input_tokens"] = (totals["total_input_tokens"] or 0) + (dsh_totals.get("input") or 0)
+    out["total_output_tokens"] = (totals["total_output_tokens"] or 0) + (dsh_totals.get("output") or 0)
+    out["cache_hit_tokens"] = (totals["cache_hit_tokens"] or 0) + (dsh_totals.get("cache_read") or 0)
+    if _dsh_has_usage(dsh_totals):
+        out["request_count_exact"] = False
+        out["cost_partial"] = True
+        out["cost_available"] = bool(totals.get("cost_available"))
+        if not totals.get("cost_available"):
+            out["total_cost_usd"] = None
+        unavailable = list(out.get("cost_unavailable_channels") or [])
+        if "dsh" not in unavailable:
+            unavailable.append("dsh")
+        out["cost_unavailable_channels"] = unavailable
     return out
 
 
@@ -1398,21 +1455,68 @@ def _dashboard_all_payload(range_param: str) -> dict[str, Any]:
         range_param = "today"
     totals = db.report_totals(range_param)
     today = db.report_totals("today")
-    if range_param == "today":
-        dsh = dsh_api.get_dsh_usage()
-        if dsh.get("found"):
-            t = dsh.get("today") or {}
-            totals = _totals_merge_dsh_today(totals, t)
-            today = _totals_merge_dsh_today(today, t)
+    dsh = dsh_api.get_dsh_summary("all")
+    if dsh.get("found"):
+        totals = _totals_merge_dsh(totals, _dsh_range(dsh, range_param)["totals"])
+        today = _totals_merge_dsh(today, _dsh_range(dsh, "today")["totals"])
     return {
         "scope": "all",
         "range": range_param,
         "totals": totals,
         "today": today,
+        "dsh_status": _dsh_status(dsh),
         "exchange_rate": {"usd_cny": _fetch_usd_cny(), "currency": "CNY"},
         "codex": _codex_state_snapshot(),
         "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+def _dsh_daily_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{"date": row["date"], "channel": "dsh", "value": row.get("tokens") or 0}
+            for row in summary.get("trend", []) if isinstance(row, dict) and row.get("date")]
+
+
+def _merge_dsh_hourly(payload: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
+    """Keep report-hourly's existing 24 bucket shape while adding DSH token fields."""
+    totals = summary.get("totals") or {}
+    if not summary.get("found") or not _dsh_has_usage(totals):
+        return payload
+    series = [0] * 24
+    for row in summary.get("hourly", []):
+        hour = row.get("hour")
+        if not isinstance(hour, int) or not 0 <= hour < 24:
+            continue
+        bucket = payload["buckets"][hour]
+        for source, target in (("input", "input_tokens"), ("output", "output_tokens"),
+                               ("cache_read", "cache_read_tokens"),
+                               ("cache_write", "cache_write_tokens"),
+                               ("reasoning", "reasoning_tokens"), ("tokens", "total_tokens")):
+            bucket[target] += row.get(source) or 0
+        series[hour] += row.get("tokens") or 0
+    payload["series"] = {**payload["series"], "dsh": series}
+    return payload
+
+
+def _dsh_channel_overview(summary: dict[str, Any]) -> dict[str, Any]:
+    totals = summary.get("totals") or {}
+    input_tokens = totals.get("input") or 0
+    cache_read = totals.get("cache_read") or 0
+    cache_write = totals.get("cache_write") or 0
+    uncached = max(0, input_tokens - cache_read)
+    hit_rate = (cache_read / (cache_read + uncached + cache_write) * 100
+                if cache_read + uncached + cache_write else 0.0)
+    return {"request_count": None, "request_count_exact": False,
+            "session_count": summary.get("sessions_count") or 0,
+            "steps": totals.get("steps") or 0,
+            "avg_tps": totals.get("tps"),
+            "total_input_tokens": input_tokens, "uncached_input_tokens": uncached,
+            "total_output_tokens": totals.get("output") or 0,
+            "total_reasoning_tokens": totals.get("reasoning") or 0,
+            "cache_hit_tokens": cache_read, "cache_write_tokens": cache_write,
+            "total_cost_usd": None, "cost_available": False, "cost_partial": _dsh_has_usage(totals),
+            "cost_unavailable_channels": ["dsh"] if _dsh_has_usage(totals) else [],
+            "hit_rate": round(hit_rate, 2), "today_only": False,
+            "dsh_status": _dsh_status(summary)}
 
 
 def _accounts_overview_payload() -> dict[str, Any]:
@@ -1606,15 +1710,20 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         return
 
     if route == "/api/dsh/usage" and method == "GET":
-        # 永远 200, 数据缺失由 found:false 表达; TTL 缓存在 dsh_api 模块内部 (15s).
-        # get_dsh_usage() 返回模块缓存对象本体, 此处只读透传, 严禁原地修改
-        # (scan_sync 降级路径返回新对象, 同样只读透传).
+        # 永远 200, 数据缺失由 found:false 表达; 范围查询包含刷新状态且不暴露扫描快照。
+        range_ = query.get("range", ["all"])[0]
+        range_ = range_ if range_ in _RANGE_WHITELIST else "all"
         if dsh_api.degraded():
             # 连续 3 次后台扫描失败的降级: 同步重扫一次; 失败异常透传由外层 500
             # 兜底, 前端 catch 后 toast 且保留旧内容
-            _json_response(handler, dsh_api.scan_sync())
+            dsh_api.scan_sync()
+            summary = dsh_api.get_dsh_summary(range_)
+            _json_response(handler, {**summary, "total": summary.get("totals") or {},
+                                     "today": _dsh_range(summary, "today").get("totals") or {}})
             return
-        _json_response(handler, dsh_api.get_dsh_usage())
+        summary = dsh_api.get_dsh_summary(range_)
+        _json_response(handler, {**summary, "total": summary.get("totals") or {},
+                                 "today": _dsh_range(summary, "today").get("totals") or {}})
         return
 
     if route == "/api/logout" and method == "POST":
@@ -1802,7 +1911,21 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         channel = query.get("channel", [""])[0] or None
         if channel in (None, "codex"):
             _maybe_trigger_codex_import()
-        _json_response(handler, db.report_daily(range_, channel, metric))
+        dsh = None
+        extra_rows: list[dict[str, Any]] = []
+        unavailable_sources: list[str] = []
+        if channel in (None, "dsh"):
+            dsh = dsh_api.get_dsh_summary(range_)
+            if dsh.get("found"):
+                if metric == "tokens":
+                    extra_rows = _dsh_daily_rows(dsh)
+                else:
+                    unavailable_sources = ["dsh"]
+        payload = db.report_daily(range_, channel, metric, extra_rows=extra_rows,
+                                  unavailable_sources=unavailable_sources)
+        if dsh is not None:
+            payload["dsh_status"] = _dsh_status(dsh)
+        _json_response(handler, payload)
         return
 
     if route == "/api/report/hourly" and method == "GET":
@@ -1811,7 +1934,10 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         channel = query.get("channel", [""])[0] or None
         if channel in (None, "codex"):
             _maybe_trigger_codex_import()
-        _json_response(handler, db.report_hourly(date_, channel))
+        payload = db.report_hourly(date_, channel)
+        if channel in (None, "dsh"):
+            payload = _merge_dsh_hourly(payload, dsh_api.get_dsh_summary(date_))
+        _json_response(handler, payload)
         return
 
     if route == "/api/report/channels" and method == "GET":
@@ -1827,16 +1953,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         channel = query.get("channel", [""])[0] or "opencode"
         if channel == "codex":
             _maybe_trigger_codex_import()
-        if channel == "dsh":   # R6: dsh 无历史表, 仅今日口径 (键对齐 db.totals, 供 renderOverview)
-            dsh = dsh_api.get_dsh_usage()
-            t = (dsh.get("today") or {}) if dsh.get("found") else {}
-            _json_response(handler, {
-                "request_count": 0, "session_count": 0,
-                "total_input_tokens": t.get("input", 0), "uncached_input_tokens": t.get("input", 0),
-                "total_output_tokens": t.get("output", 0), "total_reasoning_tokens": t.get("reasoning", 0),
-                "cache_hit_tokens": 0, "cache_write_tokens": 0,
-                "total_cost_usd": 0.0, "hit_rate": 0.0,
-                "today_only": True})   # 新R1 N13: 前端据此在范围≠今天时提示"仅今日"
+        if channel == "dsh":
+            _json_response(handler, _dsh_channel_overview(dsh_api.get_dsh_summary(range_)))
             return
         _json_response(handler, db.channel_totals(range_, channel))
         return
@@ -1847,7 +1965,21 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         channel = query.get("channel", [""])[0] or "opencode"
         if channel == "codex":
             _maybe_trigger_codex_import()
-        _json_response(handler, db.channel_trend(date_, channel))   # dsh 由 db 层返回 [] (R6)
+        if channel == "dsh":
+            dsh = dsh_api.get_dsh_summary(date_)
+            _json_response(handler, [
+                {"hour": row["hour"], "input": row.get("input") or 0,
+                 "output": row.get("output") or 0,
+                 "total_input_tokens": row.get("input") or 0,
+                 "total_output_tokens": row.get("output") or 0,
+                 "total_reasoning_tokens": row.get("reasoning") or 0,
+                 "total_tokens": row.get("tokens") or 0,
+                 "cache_read_tokens": row.get("cache_read") or 0,
+                 "cache_write_tokens": row.get("cache_write") or 0}
+                for row in dsh.get("hourly", [])
+            ])
+            return
+        _json_response(handler, db.channel_trend(date_, channel))
         return
 
     if route == "/api/usage/sessions" and method == "GET":

@@ -2432,12 +2432,17 @@ def _daily_unavailable_channels(metric: str, channel: Optional[str]) -> list[str
     return ["codex"] if metric == "cost" and channel in (None, "codex") else []
 
 
-def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str = "tokens") -> dict[str, Any]:
+def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str = "tokens", *,
+                 extra_rows: Optional[list[dict[str, Any]]] = None,
+                 unavailable_sources: Optional[list[str]] = None) -> dict[str, Any]:
     """按自然日 × 渠道堆叠序列 (R6: usage_records + zcode_usage + claudecode_usage
     + codex_usage 四表 UNION); range=all 时粒度自适应 (>60 天按周 / >180 天按月)。
     Codex 费用未知: metric=cost 省略 codex series 并追加 unavailable_channels。"""
     exprs = _report_metric_exprs(metric)
     unavailable = _daily_unavailable_channels(metric, channel)
+    for source in unavailable_sources or []:
+        if source not in unavailable:
+            unavailable.append(source)
     include_records = channel is None or channel in ("opencode", "bai", "commandcode")
     include_zcode = channel is None or channel == "zcode"
     include_cc = channel is None or channel == "claudecode"
@@ -2479,38 +2484,36 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
             f" {exprs['codex']} AS v FROM codex_usage x"
             f" WHERE {range_sql} GROUP BY b")
         params.extend(range_params)
-    if not segs:
-        return {"granularity": "day", "labels": [], "series": {}, "metric": metric,
-                "unavailable_channels": unavailable}
-    union = " UNION ALL ".join(segs)
-    # 粒度自适应: 四表最大跨度
-    span = get_db().execute(
-        "SELECT MAX(lo) lo, MAX(hi) hi FROM ("
-        " SELECT MIN(substr(datetime(created_at,'localtime'),1,10)) lo, MAX(substr(datetime(created_at,'localtime'),1,10)) hi FROM usage_records"
-        " UNION ALL SELECT MIN(substr(datetime(started_at,'localtime'),1,10)), MAX(substr(datetime(started_at,'localtime'),1,10)) FROM zcode_usage"
-        " UNION ALL SELECT MIN(substr(datetime(started_at,'localtime'),1,10)), MAX(substr(datetime(started_at,'localtime'),1,10)) FROM claudecode_usage"
-        " UNION ALL SELECT MIN(substr(datetime(started_at,'localtime'),1,10)), MAX(substr(datetime(started_at,'localtime'),1,10)) FROM codex_usage)"
-    ).fetchone()
+    raw_rows: list[tuple[str, str, Any]] = []
+    if segs:
+        union = " UNION ALL ".join(segs)
+        raw_rows.extend((r["b"], r["ch"], r["v"] or 0) for r in get_db().execute(
+            f"SELECT b, ch, v FROM ({union})", params
+        ).fetchall())
+    for row in extra_rows or []:
+        day = row.get("date")
+        source = row.get("channel")
+        if (isinstance(day, str) and isinstance(source, str)
+                and (channel is None or channel == source)):
+            raw_rows.append((day, source, row.get("value") or 0))
+
+    # 额外来源与 SQL 原始日行先合并，再依完整源跨度选择 all 粒度；这也让纯
+    # server 来源 (例如 DSH) 走与数据库行相同的格式化路径。
     granularity = "day"
-    if range_ == "all" and span["lo"] and span["hi"]:
-        days = (date.fromisoformat(span["hi"]) - date.fromisoformat(span["lo"])).days + 1
+    days_in_source = [day for day, _, _ in raw_rows]
+    if range_ == "all" and days_in_source:
+        days = (date.fromisoformat(max(days_in_source)) - date.fromisoformat(min(days_in_source))).days + 1
         granularity = "month" if days > 180 else ("week" if days > 60 else "day")
-    # UNION 段的 b 已是日粒度日期文本, 周/月对外层 b 再分组 (b 直接作为 datetime 输入)
-    if granularity == "day":
-        final_sql, final_params = f"SELECT b AS b2, ch, v FROM ({union}) ORDER BY b2", params
-    else:
-        fn = "strftime('%Y-W%W', b)" if granularity == "week" else "substr(b,1,7)"
-        final_sql = f"SELECT {fn} AS b2, ch, SUM(v) FROM ({union}) GROUP BY b2, ch ORDER BY b2"
-        final_params = params
-    rows = get_db().execute(final_sql, final_params).fetchall()
-    labels: list[str] = []
-    series: dict[str, dict[str, Any]] = {}
-    for r in rows:
-        if r["b2"] not in labels:
-            labels.append(r["b2"])
-        series.setdefault(r["ch"], {})[r["b2"]] = r["v"]
+    values: dict[str, dict[str, Any]] = {}
+    for day, source, value in raw_rows:
+        bucket = day if granularity == "day" else (
+            date.fromisoformat(day).strftime("%Y-W%W") if granularity == "week" else day[:7]
+        )
+        source_values = values.setdefault(source, {})
+        source_values[bucket] = source_values.get(bucket, 0) + value
+    labels = sorted({bucket for source in values.values() for bucket in source})
     return {"granularity": granularity, "labels": labels,
-            "series": {ch: [s.get(b, 0) for b in labels] for ch, s in series.items()},
+            "series": {ch: [s.get(b, 0) for b in labels] for ch, s in values.items()},
             "metric": metric,
             "unavailable_channels": unavailable}
 

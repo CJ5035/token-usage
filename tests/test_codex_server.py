@@ -63,23 +63,23 @@ def _batch(path, rows, warnings=None, **over):
 
 def _mock_dsh_absent(monkeypatch):
     """DSH 缓存注入 found=false (不触发真实 ~/.dsh 扫描)."""
-    monkeypatch.setattr(dsh_api, "_cache_payload", {
-        "found": False, "updated_at": None, "sessions_count": 0,
-        "total": {}, "today": {}, "providers": [], "models": []})
-    monkeypatch.setattr(dsh_api, "_cache_ts", time.time())
+    monkeypatch.setattr(dsh_api, "get_dsh_summary", lambda range_: {
+        "found": False, "scanning": False, "stale": False, "refresh_error": False,
+        "updated_at": None, "retry_after_seconds": 0, "range": range_, "totals": {},
+        "trend": [], "hourly": [], "sessions_count": 0, "data_since": None})
 
 
 def _mock_dsh_today(monkeypatch, today_tokens=70):
     """DSH 缓存注入 found=true (仅 today 口径, 无历史)."""
-    monkeypatch.setattr(dsh_api, "_cache_payload", {
-        "found": True, "updated_at": "2026-09-04T10:00:00", "sessions_count": 2,
-        "total": {"input": today_tokens, "cache": 0, "output": today_tokens,
-                  "reasoning": 0, "seconds": 60, "tps": 1.0},
-        "today": {"input": today_tokens // 2, "cache": 0,
-                  "output": today_tokens - today_tokens // 2,
-                  "reasoning": 0, "seconds": 30, "tps": 1.0},
-        "providers": [], "models": []})
-    monkeypatch.setattr(dsh_api, "_cache_ts", time.time())
+    today = __import__("datetime").datetime.now().astimezone().date().isoformat()
+    bucket = {"steps": 1, "input": today_tokens // 2, "cache": 0, "cache_read": 0,
+              "cache_write": 0, "output": today_tokens - today_tokens // 2, "reasoning": 0,
+              "tokens": today_tokens, "seconds": 1.0, "tps": float(today_tokens)}
+    monkeypatch.setattr(dsh_api, "get_dsh_summary", lambda range_: {
+        "found": True, "scanning": False, "stale": False, "refresh_error": False,
+        "updated_at": "2026-09-04T10:00:00", "retry_after_seconds": 0, "range": range_,
+        "totals": dict(bucket), "trend": [{"date": today, **bucket}], "hourly": [],
+        "sessions_count": 2, "data_since": today})
 
 
 # ---------------------------------------------------------------------------
@@ -481,7 +481,7 @@ def test_dashboard_scope_all_dsh_contributes_only_today(tmp_codex_db, codex_row,
     assert d_today["totals"]["total_tokens"] == 130 + 70
     assert d_today["today"]["total_tokens"] == 130 + 70
     d_7d = api_call("/api/dashboard?scope=all&range=7d")["data"]
-    assert d_7d["totals"]["total_tokens"] == 130   # 7d 不含 DSH (无历史)
+    assert d_7d["totals"]["total_tokens"] == 130 + 70
 
 
 def test_account_switch_keeps_scope_all(tmp_codex_db, codex_row, monkeypatch, api_call):

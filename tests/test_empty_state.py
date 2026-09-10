@@ -196,10 +196,16 @@ def _seed_channels() -> None:
 
 def _mock_dsh(monkeypatch, found: bool, today: dict | None = None) -> None:
     """mock dsh_api.get_dsh_usage (server 经 `from . import dsh_api` 引用同一模块对象)."""
-    payload = {"found": found}
-    if today is not None:
-        payload["today"] = today
-    monkeypatch.setattr(dsh_api, "get_dsh_usage", lambda: payload)
+    bucket = {"steps": 1, "input": 0, "cache": 0, "cache_read": 0, "cache_write": 0,
+              "output": 0, "reasoning": 0, "tokens": 0, "seconds": 0.0, "tps": None}
+    if today:
+        bucket.update(today)
+        bucket["tokens"] = sum(bucket.get(key) or 0 for key in ("input", "output", "reasoning"))
+    payload = {"found": found, "scanning": False, "stale": False, "refresh_error": False,
+               "updated_at": None, "retry_after_seconds": 0, "range": "all", "totals": bucket,
+               "trend": [{"date": __import__("datetime").datetime.now().astimezone().date().isoformat(), **bucket}],
+               "sessions_count": 0}
+    monkeypatch.setattr(dsh_api, "get_dsh_summary", lambda range_: payload)
 
 
 def test_server_windows_dsh_today_tokens_marks_includes_true(tmp_report_db, monkeypatch):
@@ -222,7 +228,7 @@ def test_server_windows_no_dsh_key_when_not_found(tmp_report_db, monkeypatch):
     _seed_channels()
     _mock_dsh(monkeypatch, found=False)
     resp = server._report_windows_response(None)
-    assert "includes_dsh_today" not in resp["compare"]
+    assert resp["compare"]["includes_dsh_today"] is False
 
 
 # ---------------------------------------------------------------------------
