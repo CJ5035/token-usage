@@ -150,17 +150,17 @@
       </div>
       <div class="card dsh-stats" id="dsh-stats" hidden>
         <div class="card-h"><h3 data-i18n="dshStatsTitle">DSH 本地用量</h3>
-          <span class="hint" id="dsh-tps-hint"></span>
-          <div class="seg" id="dsh-dim"><button class="active" data-d="total" data-i18n="dshSegTotal">总量</button><button data-d="today" data-i18n="dshSegToday">今日</button></div></div>
+          <span class="hint" data-i18n="followRange">数据跟随时间范围</span></div>
         <div class="zcode-missing" id="dsh-missing" data-i18n="dshStatsMissing" hidden>未检测到 DSH 本地数据（~/.dsh/sessions）</div>
+        <div class="dsh-status" id="dsh-status" role="status" hidden></div>
+        <div class="dsh-error" id="dsh-error" role="status" hidden></div>
         <div id="dsh-body">
-          <div class="kpi-row" id="dsh-kpis-total"></div>
-          <div class="kpi-row" id="dsh-kpis-today"></div>
+          <div class="kpi-row kpi6" id="dsh-kpis"></div>
           <div id="dsh-tables">
-            <div class="zcode-missing" id="dsh-today-note" data-i18n="dshTodayTableNote" hidden>渠道/模型明细仅提供总量口径</div>
             <table class="tbl"><thead><tr id="dsh-prov-head"></tr></thead><tbody id="dsh-prov-body"></tbody></table>
             <table class="tbl"><thead><tr id="dsh-model-head"></tr></thead><tbody id="dsh-model-body"></tbody></table>
           </div>
+          <div class="chart-box" id="dsh-trend-box" style="min-height:220px"><canvas id="dsh-trend-chart"></canvas><div class="zcode-chart-empty" id="dsh-trend-empty" hidden></div></div>
         </div>
       </div>
       <div class="card zcode-stats" id="claudecode-stats" hidden>

@@ -545,8 +545,19 @@ html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
 .zcode-stats .chart-box { margin-top: 10px; }
 .zcode-missing { margin: 12px 16px 14px; padding: 12px 14px; font-size: 12px; color: var(--text2); background: var(--muted); border-radius: 10px; }
 .zcode-chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text3); font-size: 12px; }
+.dsh-stats { margin-bottom: 12px; padding-bottom: 12px; }
+.dsh-stats .kpi-row { padding: 12px 14px 0; margin-bottom: 4px; }
+.dsh-stats .tbl + .tbl { margin-top: 12px; }
+.dsh-stats .tbl td { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.dsh-stats .chart-box { margin: 12px 14px 0; }
+.kpi-row.kpi6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.dsh-status, .dsh-error { margin: 8px 14px; padding: 9px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5; }
+.dsh-status { color: var(--text2); background: var(--muted); }
+.dsh-error { color: var(--danger-text); background: var(--danger-soft); }
+.dsh-error .pill { margin-left: 8px; }
 @media (max-width: 1200px) {
   .kpi-row.kpi5 { grid-template-columns: repeat(3, 1fr); }
+  .kpi-row.kpi6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 /* ---------- Codex 本地用量 (统计页) ---------- */

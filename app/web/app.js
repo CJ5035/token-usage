@@ -100,12 +100,11 @@ const I18N = {
     zcodeNoData: "暂无数据", zcodeTimes: "次",
     dshStatsTitle: "DSH 本地用量",
     dshStatsMissing: "未检测到 DSH 本地数据（~/.dsh/sessions）",
-    dshSegTotal: "总量", dshSegToday: "今日",
-    dshTpsHint: "平均 {tps} tok/s",
-    dshTodayTableNote: "渠道/模型明细仅提供总量口径",
-    dshKpiSessions: "会话数", dshKpiInput: "总输入(含缓存)", dshKpiOutput: "总输出",
-    dshKpiTodayInput: "今日输入(含缓存)", dshKpiTodayOutput: "今日输出", dshKpiTodaySpeed: "今日秒速",
-    dshColSteps: "步数", dshColTps: "平均 tok/s",
+    dshKpiSessions: "会话数", dshKpiInput: "计费输入", dshKpiOutput: "输出", dshKpiTotal: "总 Token", dshKpiSteps: "步数", dshKpiAvgTps: "平均输出 tok/s",
+    dshColSteps: "步数", dshColTps: "平均 tok/s", dshTrend: "每日 DSH 趋势",
+    dshStatusScanning: "正在扫描 DSH 本地会话", dshStatusStale: "显示上次扫描的数据，正在刷新", dshStatusUpdated: "更新于 {time}",
+    dshRefreshError: "DSH 刷新失败，保留上次数据", dshRetryAfter: "将在 {seconds} 秒后重试", dshDiagnostics: "诊断：未定时 {undated} · 未来时间 {future} · 未归属 {unkeyed} · 暂定 {provisional}",
+    dshCostUnavailable: "DSH 不提供费用", dshRequestsUnavailable: "DSH 不提供请求数", reportCostIncomplete: "部分渠道未提供费用", reportRequestsApprox: "部分渠道未提供精确请求数",
     claudecodeStatsTitle: "Claude Code 本地用量",
     claudecodeStatsMissing: "未检测到 Claude Code 本地数据（~/.claude/projects）",
     claudecodeCostHint: "费用为按量价目估算值（订阅套餐实际不按此扣费），未收录定价的模型按 0 计算",
@@ -122,11 +121,11 @@ const I18N = {
     accountsUnit: "账号", quotaBarTitle: "各渠道配额",
     stackTitle: "分渠道消耗趋势", donutTitle: "渠道占比", chTableTitle: "渠道明细", channel: "渠道",
     reportEmpty: "暂无数据", segTokens: "Token",
-    dataSinceToday: "仅今日", dataSince: "数据起点",
-    dataSinceTip: "该渠道本地最早记录日期（历史覆盖起点），不随上方时间范围变化；「仅今日」表示该渠道无历史数据",
+    dataSince: "数据起点",
+    dataSinceTip: "该渠道本地最早记录日期（历史覆盖起点），不随上方时间范围变化",
     unusedChannelsHint: "本范围无用量渠道：{chs}",
     noUsageToday: "今日暂无用量", noDataInRange: "该范围暂无数据",
-    cmpExcludesDsh: "涨跌百分比未含今日 DSH", statsScopeHint: "主区仅统计 OpenCode 渠道用量；ZCode / Claude Code / DSH / Codex 本地用量见下方独立区块（首页「今天」合计已并入今日 DSH 用量，涨跌百分比未含）",
+    cmpExcludesDsh: "涨跌比较未含 DSH", statsScopeHint: "主区仅统计 OpenCode 渠道用量；ZCode / Claude Code / DSH / Codex 本地用量见下方独立区块，且均跟随当前范围。",
   },
   en: {
     syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh", themeToggle: "Toggle theme", themeSaveFailed: "Theme not saved, retrying", minimize: "Minimize", close: "Close", maximize: "Maximize", restore: "Restore",
@@ -223,12 +222,11 @@ const I18N = {
     zcodeNoData: "No data", zcodeTimes: "times",
     dshStatsTitle: "DSH Local Usage",
     dshStatsMissing: "DSH local data not found (~/.dsh/sessions)",
-    dshSegTotal: "Total", dshSegToday: "Today",
-    dshTpsHint: "Avg {tps} tok/s",
-    dshTodayTableNote: "Channel/model details are totals only",
-    dshKpiSessions: "Sessions", dshKpiInput: "Total Input (incl. cache)", dshKpiOutput: "Total Output",
-    dshKpiTodayInput: "Today Input (incl. cache)", dshKpiTodayOutput: "Today Output", dshKpiTodaySpeed: "Today Speed",
-    dshColSteps: "Steps", dshColTps: "Avg tok/s",
+    dshKpiSessions: "Sessions", dshKpiInput: "Billed Input", dshKpiOutput: "Output", dshKpiTotal: "Total Tokens", dshKpiSteps: "Steps", dshKpiAvgTps: "Avg Output tok/s",
+    dshColSteps: "Steps", dshColTps: "Avg tok/s", dshTrend: "Daily DSH Trend",
+    dshStatusScanning: "Scanning local DSH sessions", dshStatusStale: "Showing the previous scan while refreshing", dshStatusUpdated: "Updated {time}",
+    dshRefreshError: "DSH refresh failed; previous data is retained", dshRetryAfter: "Retrying in {seconds}s", dshDiagnostics: "Diagnostics: undated {undated} · future {future} · unkeyed {unkeyed} · provisional {provisional}",
+    dshCostUnavailable: "DSH does not provide cost", dshRequestsUnavailable: "DSH does not provide request counts", reportCostIncomplete: "Some channels do not provide cost", reportRequestsApprox: "Some channels do not provide exact request counts",
     claudecodeStatsTitle: "Claude Code Local Usage",
     claudecodeStatsMissing: "Claude Code local data not found (~/.claude/projects)",
     claudecodeCostHint: "Costs are pay-as-you-go estimates (subscriptions are not actually billed this way); models without pricing are counted as 0",
@@ -245,11 +243,11 @@ const I18N = {
     accountsUnit: " acct", quotaBarTitle: "Channel Quotas",
     stackTitle: "Usage by Channel", donutTitle: "Channel Share", chTableTitle: "Channel Breakdown", channel: "Channel",
     reportEmpty: "No data yet", segTokens: "Tokens",
-    dataSinceToday: "Today only", dataSince: "Data start",
-    dataSinceTip: "Earliest local record date of this channel (history coverage start), unaffected by the range selector; 'Today only' means the channel has no history yet",
+    dataSince: "Data start",
+    dataSinceTip: "Earliest local record date of this channel (history coverage start), unaffected by the range selector",
     unusedChannelsHint: "No usage in this range: {chs}",
     noUsageToday: "No usage today", noDataInRange: "No data in this range",
-    cmpExcludesDsh: "Trend % excludes today's DSH", statsScopeHint: "Main section covers OpenCode channels only; see the dedicated ZCode / Claude Code / DSH / Codex blocks below (today's homepage total includes today's DSH usage; the trend % does not)",
+    cmpExcludesDsh: "Comparison excludes DSH", statsScopeHint: "Main section covers OpenCode channels only; the dedicated ZCode / Claude Code / DSH / Codex blocks below follow the selected range.",
   },
 };
 let lang = "zh";
@@ -260,7 +258,6 @@ let state = {
   range: "today",
   statsRange: "7d",
   modelDim: "input",
-  dshDim: "total",
   data: null,
   exchangeRate: 7.0,
   currency: "CNY",
@@ -424,7 +421,7 @@ function applyLang(l) {
   // ZCode 区块随语言即时重渲染 (复用已拉取数据, 不重发请求)
   if (zcodeQuotaLast && state.page === "home" && state.channel === "zcode") renderZcodeQuota(zcodeQuotaLast);
   if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);
-  if (dshUsageLast) renderDsh(dshUsageLast);
+  if (dshUsageLast && dshUsageLast.range === state.statsRange) renderDsh(dshUsageLast);
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);
   if (codexSummaryLast) renderCodexSummary(codexSummaryLast);   // Codex 区块随语言即时重渲染 (复用已拉取数据)
 }
@@ -597,6 +594,7 @@ function applyCurrency(cur) {
 
 /* ---------------- 页面路由 ---------------- */
 function switchPage(page) {
+  if (state.page === "stats" && page !== "stats") destroyDshTrend();
   state.page = page;
   document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
   $("page-" + page).hidden = false;
@@ -682,7 +680,7 @@ async function loadDashboard(quiet = false) {
       const chAccounts = ov.accounts.filter((a) => a.source === state.channel);
       renderQuotaSingle(chAccounts);
       const rangeHint = document.querySelector(".overview .hint");   // 新R1 N13: dsh 仅今日口径提示
-      if (rangeHint) rangeHint.textContent = totals.today_only ? t("dataSinceToday") : t("followRange");
+      if (rangeHint) rangeHint.textContent = t("followRange");
       renderOverview(totals, state.channel);          // 概览 6 格: channel_totals 键与 db.totals 对齐 (T5)
       chartToday(trend);                              // 24h input/output 双系列 (spec v8)
       const isCc = state.channel === "commandcode";
@@ -1075,92 +1073,120 @@ function chartZcodeTrend(daily7, noAnim) {
 }
 
 /* ---------------- 统计页: DSH 本地用量区块 ---------------- */
-/* 数据源 /api/dsh/usage (后端 dsh_api 模块 TTL 缓存 + 后台刷新, 降级时端点同步扫描);
-   found=false → 显示空态文案; fetch 异常 → 保留旧内容 + toast (EVOLUTION-5 降级路径:
-   不再静默隐藏整块; 若本就无旧内容即冷启动失败, 容器维持初始 hidden 兜底);
-   loadDshUsage 不加序号守卫: 降级同步扫描期间并发请求后到胜出 (renderDsh 全量重渲幂等);
-   注意: 后端返回模块缓存对象本体, 只读消费, 严禁原地修改;
-   providers/models 仅总量口径: today 档保持总量数据并显示口径说明 (dshTodayTableNote) */
+/* DSH usage follows the selected stats range.  The response includes a cached
+   snapshot's refresh state, diagnostics, provider/model aggregates, and daily trend. */
 let dshUsageLast = null;
+let dshSumSeq = 0;
+let cDshTrend = null;
 async function loadDshUsage() {
+  const seq = ++dshSumSeq;
+  const range = state.statsRange;
   const box = $("dsh-stats");
   if (!box) return;
-  box.classList.add("swapping");                       // 请求前加载态 (复用 .swapping)
+  box.classList.add("swapping");
   try {
-    const data = await api("/api/dsh/usage");
-    dshUsageLast = data;   // 存活赋值: 语言切换重渲与 #dsh-dim 档位 seg 重渲的唯一数据源, 勿丢
+    const data = await api("/api/dsh/usage?range=" + encodeURIComponent(range));
+    if (seq !== dshSumSeq || range !== state.statsRange) return;
+    dshUsageLast = data;
     renderDsh(data);
-    box.classList.remove("swapping");
   } catch (e) {
-    box.classList.remove("swapping");
-    // 失败保留旧内容 (不清空/隐藏): 置 dshUsageLast = null 会使保留的旧 DOM 与缓存脱钩
-    // (语言切换后新旧语言混杂), 旧静默隐藏语义已随 EVOLUTION-5 废弃
-    toast(t("loadFailed") + ": " + e);
+    if (seq !== dshSumSeq) return;
+    const error = $("dsh-error");
+    if (error) {
+      error.hidden = false;
+      error.innerHTML = `${escapeHtml(t("dshRefreshError"))}: ${escapeHtml(e.message || String(e))} <button class="pill" data-dsh-retry>${escapeHtml(t("retry"))}</button>`;
+      const retry = error.querySelector("[data-dsh-retry]");
+      if (retry) retry.addEventListener("click", loadDshUsage);
+    }
+  } finally {
+    if (seq === dshSumSeq) box.classList.remove("swapping");
   }
 }
 function dshRenderHeads() {
   $("dsh-prov-head").innerHTML = `
     <th>${t("zcodeChannel")}</th><th class="num">${t("dshColSteps")}</th>
-    <th class="num">${t("input")}(${t("inclCache")})</th><th class="num">${t("output")}</th>
+    <th class="num">${t("dshKpiInput")}</th><th class="num">${t("output")}</th>
+    <th class="num">${t("colCacheRead")}</th><th class="num">${t("colCacheWrite")}</th><th class="num">${t("colReasoning")}</th>
     <th class="num">${t("dshColTps")}</th>`;
   $("dsh-model-head").innerHTML = `
     <th>${t("zcodeChannel")}</th><th>${t("zcodeModel")}</th><th class="num">${t("dshColSteps")}</th>
-    <th class="num">${t("input")}(${t("inclCache")})</th><th class="num">${t("output")}</th>
+    <th class="num">${t("dshKpiInput")}</th><th class="num">${t("output")}</th>
+    <th class="num">${t("colCacheRead")}</th><th class="num">${t("colCacheWrite")}</th><th class="num">${t("colReasoning")}</th>
     <th class="num">${t("dshColTps")}</th>`;
 }
 function renderDsh(data) {
   const box = $("dsh-stats");
   if (!box) return;
-  const missing = $("dsh-missing");
-  const body = $("dsh-body");
+  const missing = $("dsh-missing"), body = $("dsh-body"), status = $("dsh-status"), error = $("dsh-error");
   if (!data || data.found === false) {
-    // 未检测到 DSH 本地数据: 仅显示引导文案, 隐藏 KPI/表格
-    box.hidden = false;
-    missing.hidden = false;
-    body.hidden = true;
+    box.hidden = false; missing.hidden = false; body.hidden = true;
+    renderDshStatus(data);
+    destroyDshTrend();
     return;
   }
-  box.hidden = false;
-  missing.hidden = true;
-  body.hidden = false;
+  box.hidden = false; missing.hidden = true; body.hidden = false;
+  if (error) error.hidden = true;
   dshRenderHeads();
-  const tt = data.total || {};
-  const td = data.today || {};
-  $("dsh-tps-hint").textContent = t("dshTpsHint").replace("{tps}", (Number(tt.tps) || 0).toFixed(1));
-  const kpi = (cls, l, v) => `<div class="card kpi ${cls}"><div class="kpi-l">${l}</div><div class="kpi-v">${v}</div></div>`;
-  $("dsh-kpis-total").innerHTML = [
+  const totals = data.totals || data.total || {};
+  const kpi = (cls, label, value) => `<div class="card kpi ${cls}"><div class="kpi-l">${escapeHtml(label)}</div><div class="kpi-v">${escapeHtml(value)}</div></div>`;
+  $("dsh-kpis").innerHTML = [
     kpi("c-blue", t("dshKpiSessions"), fmtInt(data.sessions_count)),
-    kpi("c-green", t("dshKpiInput"), fmtTokens(tt.input)),
-    kpi("c-violet", t("dshKpiOutput"), fmtTokens(tt.output)),
+    kpi("c-green", t("dshKpiInput"), fmtTokens(totals.input)),
+    kpi("c-violet", t("dshKpiOutput"), fmtTokens(totals.output)),
+    kpi("c-cyan", t("dshKpiTotal"), fmtTokens(totals.tokens)),
+    kpi("c-amber", t("dshKpiSteps"), fmtInt(totals.steps)),
+    kpi("c-blue", t("dshKpiAvgTps"), fmtTps(totals.tps)),
   ].join("");
-  $("dsh-kpis-today").innerHTML = [
-    kpi("c-blue", t("dshKpiTodayInput"), fmtTokens(td.input)),
-    kpi("c-green", t("dshKpiTodayOutput"), fmtTokens(td.output)),
-    kpi("c-amber", t("dshKpiTodaySpeed"), (Number(td.tps) || 0).toFixed(1) + " tok/s"),
-  ].join("");
-  // 渠道/模型明细仅总量口径: 两档都渲染总量数字, today 档显示口径说明
-  const provs = data.providers || [];
-  $("dsh-prov-body").innerHTML = provs.length ? provs.map((p) => `
-    <tr><td>${escapeHtml(p.provider || "—")}</td>
-    <td class="num">${fmtInt(p.steps)}</td>
-    <td class="num">${fmtTokens(p.input)}</td>
-    <td class="num">${fmtTokens(p.output)}</td>
-    <td class="num">${(Number(p.tps) || 0).toFixed(1)}</td></tr>`).join("")
-    : `<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
-  const models = data.models || [];
-  $("dsh-model-body").innerHTML = models.length ? models.map((m) => `
-    <tr><td>${escapeHtml(m.provider || "—")}</td>
-    <td><span class="model-cell">${modelIcon(m.model)}${escapeHtml(m.model || "—")}</span></td>
-    <td class="num">${fmtInt(m.steps)}</td>
-    <td class="num">${fmtTokens(m.input)}</td>
-    <td class="num">${fmtTokens(m.output)}</td>
-    <td class="num">${(Number(m.tps) || 0).toFixed(1)}</td></tr>`).join("")
-    : `<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
-  const note = $("dsh-today-note");
-  if (note) note.hidden = state.dshDim !== "today";
-  updateStatsScopeHint();   // EVOLUTION-7: 成功路径末尾刷新口径 hint (失败路径保留旧缓存, 不加)
+  const row = (item, model) => `<tr><td>${escapeHtml(item.provider || "—")}</td>${model ? `<td><span class="model-cell">${modelIcon(item.model)}${escapeHtml(item.model || "—")}</span></td>` : ""}<td class="num">${fmtInt(item.steps)}</td><td class="num">${fmtTokens(item.input)}</td><td class="num">${fmtTokens(item.output)}</td><td class="num">${fmtTokens(item.cache_read)}</td><td class="num">${fmtTokens(item.cache_write)}</td><td class="num">${fmtTokens(item.reasoning)}</td><td class="num">${fmtTps(item.tps)}</td></tr>`;
+  const providers = data.providers || [], models = data.models || [];
+  $("dsh-prov-body").innerHTML = providers.length ? providers.map((item) => row(item, false)).join("") : `<tr><td colspan="8" class="empty-cell">${escapeHtml(t("zcodeNoData"))}</td></tr>`;
+  $("dsh-model-body").innerHTML = models.length ? models.map((item) => row(item, true)).join("") : `<tr><td colspan="9" class="empty-cell">${escapeHtml(t("zcodeNoData"))}</td></tr>`;
+  renderDshStatus(data);
+  if (state.page === "stats" && !$("page-stats").hidden) chartDshTrend(data.trend || []);
+  else destroyDshTrend();
+  updateStatsScopeHint();
 }
 
+function renderDshStatus(data) {
+  const status = $("dsh-status");
+  if (!status) return;
+  const parts = [];
+  if (data.scanning) parts.push(t("dshStatusScanning"));
+  if (data.stale) parts.push(t("dshStatusStale"));
+  if (data.updated_at) parts.push(t("dshStatusUpdated").replace("{time}", fmtDateTime(data.updated_at)));
+  const values = { undated: Number(data.undated) || 0, future: Number(data.future) || 0, unkeyed: Number(data.unkeyed_steps) || 0, provisional: Number(data.provisional_steps) || 0 };
+  if (Object.values(values).some(Boolean)) parts.push(t("dshDiagnostics").replace("{undated}", values.undated).replace("{future}", values.future).replace("{unkeyed}", values.unkeyed).replace("{provisional}", values.provisional));
+  status.textContent = parts.join(" · "); status.hidden = !parts.length;
+  const error = $("dsh-error");
+  if (error && data.refresh_error) {
+    const seconds = Number(data.retry_after_seconds) || 0;
+    error.hidden = false;
+    error.innerHTML = `${escapeHtml(t("dshRefreshError"))}${seconds ? ` · ${escapeHtml(t("dshRetryAfter").replace("{seconds}", seconds))}` : ""} <button class="pill" data-dsh-retry>${escapeHtml(t("retry"))}</button>`;
+    const retry = error.querySelector("[data-dsh-retry]"); if (retry) retry.addEventListener("click", loadDshUsage);
+  } else if (error) error.hidden = true;
+}
+
+function destroyDshTrend() { if (cDshTrend) { cDshTrend.destroy(); cDshTrend = null; } }
+function chartDshTrend(rows, noAnim) {
+  const canvas = $("dsh-trend-chart"), empty = $("dsh-trend-empty");
+  if (!canvas || $("page-stats").hidden) return;
+  destroyDshTrend();
+  if (!rows.length) { if (empty) { empty.textContent = t("noDataInRange"); empty.hidden = false; } return; }
+  if (empty) empty.hidden = true;
+  const cc = chartColors();
+  cDshTrend = new Chart(canvas, { type: "bar", data: { labels: rows.map((row) => row.date.slice(5)), datasets: [
+    { label: t("dshKpiInput"), data: rows.map((row) => row.input || 0), backgroundColor: cc.input, borderRadius: 2 },
+    { label: t("output"), data: rows.map((row) => row.output || 0), backgroundColor: cc.output, borderRadius: 2 },
+    { label: t("colReasoning"), data: rows.map((row) => row.reasoning || 0), backgroundColor: cc.reasoning, borderRadius: 2 },
+  ]}, options: { responsive: false, maintainAspectRatio: false, animation: noAnim ? false : undefined, interaction: { mode: "index", intersect: false }, plugins: { title: { display: true, text: t("dshTrend"), color: cssVar("--text2"), font: { size: 12 } }, legend: { labels: { usePointStyle: true, boxWidth: 8, color: cssVar("--text2") } }, tooltip: { ...chartThemeOptions().tooltip, callbacks: { title: (items) => items[0] ? rows[items[0].dataIndex].date : "", label: (item) => ` ${item.dataset.label}: ${fmtTokens(item.parsed.y)}` } } }, scales: { x: { stacked: true, grid: { display: false }, ticks: { color: cssVar("--text3") } }, y: { stacked: true, grid: { color: cssVar("--grid") }, ticks: { color: cssVar("--text3"), callback: (value) => fmtTokens(value) } } } } });
+  cDshTrend.resize();
+}
+
+
+/* ---------------- 统计页: Claude Code 本地用量区块 ---------------- */
+/* 数据源 /api/claudecode/summary?range=<statsRange> (与 loadDashboard 统计页 range 同源);
+   db_found=false → 仅显示引导文案; fetch 异常 → 整块隐藏 (照 ZCode 容错);
+   渠道名导入时已落中文名/hostname, 直接渲染 channel 字段, 无需前端映射 */
 /* ---------------- 统计页: Claude Code 本地用量区块 ---------------- */
 /* 数据源 /api/claudecode/summary?range=<statsRange> (与 loadDashboard 统计页 range 同源);
    db_found=false → 仅显示引导文案; fetch 异常 → 整块隐藏 (照 ZCode 容错);
@@ -1285,6 +1311,7 @@ function chartClaudecodeTrend(daily7, noAnim) {
   });
   cClaudecodeTrend.resize();
 }
+
 
 /* ---------------- 统计页: Codex 本地用量区块 ---------------- */
 /* 数据源 /api/codex/summary?range=<statsRange> (与 loadDashboard 统计页 range 同源,
@@ -2385,6 +2412,7 @@ function bindEvents() {
   document.querySelectorAll("#stats-pills .pill").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll("#stats-pills .pill").forEach((x) => x.classList.remove("active"));
     b.classList.add("active"); state.statsRange = b.dataset.r; loadDashboard();
+    loadDshUsage();
     loadZcodeSummary();  // ZCode 区块跟随 range 切换
     loadClaudecodeSummary();  // Claude Code 区块跟随 range 切换
     loadCodexSummary();  // Codex 区块跟随 range 切换
@@ -2394,12 +2422,6 @@ function bindEvents() {
     document.querySelectorAll("#mr-dim button").forEach((x) => x.classList.remove("active"));
     b.classList.add("active"); state.modelDim = b.dataset.dim;
     if (state.data) chartModel(state.data.models);
-  });
-  $("dsh-dim").addEventListener("click", (e) => {
-    const b = e.target.closest("button"); if (!b) return;
-    document.querySelectorAll("#dsh-dim button").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active"); state.dshDim = b.dataset.d;
-    if (dshUsageLast) renderDsh(dshUsageLast);  // seg 切换: 复用已拉取数据重渲, 不重新请求
   });
   $("tb-refresh").addEventListener("click", () => startSync("incremental"));
   $("btn-full-sync").addEventListener("click", () => {
@@ -2719,7 +2741,7 @@ function renderWindows(w, hasEst = false) {
   const notes = [];
   if (w.data_since) notes.push(`${t("dataSince")} ${w.data_since}`);
   if (hasEst) notes.push(`<span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>`);
-  if (w.compare.pct != null && w.compare.includes_dsh_today === true) notes.push(t("cmpExcludesDsh"));   // EVOLUTION-7: 今日涨跌含 DSH 口径标注 (wb-since 通栏行)
+  if (w.compare.pct != null && w.compare.dsh_excluded_from_compare === true) notes.push(t("cmpExcludesDsh"));
   if (notes.length) $("windows-bar").insertAdjacentHTML("beforeend", `<div class="wb-since">${notes.join(" · ")}</div>`);
   // 点击格 -> 页头 pill 联动 (spec v4/v5 单向映射)
   document.querySelectorAll("#windows-bar .wb-cell").forEach((c) => c.addEventListener("click", () => {
@@ -2744,8 +2766,8 @@ function renderReportTotals(totals) {
     escapeHtml(label) + '</div><div class="kpi-v">' +
     escapeHtml(value) + '</div></div>').join("");
   $("report-range-kpis").title = [
-    totals.cost_partial ? t("codexCostUnavailable") : "",
-    reqMark ? t("codexApproxRequests") : ""
+    totals.cost_partial ? t("reportCostIncomplete") : "",
+    reqMark ? t("reportRequestsApprox") : ""
   ].filter(Boolean).join(" · ");
 }
 
@@ -2860,6 +2882,10 @@ function chartReportHourly(d, noAnim, emptyKey) {   // EVOLUTION-7: 第三参 em
   cHourly.resize();
 }
 
+function dshUnavailableCell(key) {
+  const tip = escapeHtml(t(key));
+  return `<span title="${tip}" aria-label="${tip}">—</span>`;
+}
 function renderChannelTable(rows, summary) {
   if (!rows.length) {
     $("report-table").innerHTML = `<tr><td colspan="8" class="empty-cell">${t("reportEmpty")}</td></tr>`;
@@ -2873,8 +2899,8 @@ function renderChannelTable(rows, summary) {
   $("report-table").innerHTML = rows.map((r) => `<tr>
     <td style="color:${CH_COLOR[r.channel] || "#4f8ef7"}">${escapeHtml(CH_LABEL[r.channel] || r.channel)}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
     <td class="num">${fmtTokens(r.tokens)}</td><td class="num">${fmtTokens(r.input)}</td><td class="num">${fmtTokens(r.output)}</td>
-    <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${fmtInt(r.requests)}</td><td class="num">${fmtOptionalMoney(r.cost)}</td>
-    <td>${r.channel === "dsh" ? t("dataSinceToday") : (r.data_since || "—")}</td></tr>`).join("") + foot;   // R6: dsh 仅今日; T5: 渠道名显示名映射+转义, 费用 NULL → —
+    <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshRequestsUnavailable") : fmtInt(r.requests)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshCostUnavailable") : fmtOptionalMoney(r.cost)}</td>
+    <td>${r.data_since || "—"}</td></tr>`).join("") + foot;
 }
 
 /* ---------------- 自动同步 ---------------- */
@@ -2917,6 +2943,7 @@ function rerenderCharts() {
     if (zcodeSummaryLast) chartZcodeTrend(zcodeSummaryLast.daily7, true);
     if (claudecodeSummaryLast) chartClaudecodeTrend(claudecodeSummaryLast.daily7, true);
     if (codexSummaryLast) chartCodexTrend(codexSummaryLast.daily7, true);
+    if (dshUsageLast && dshUsageLast.range === state.statsRange) chartDshTrend(dshUsageLast.trend || [], true);
   }
   refreshIcons();   // 图标变体原地换 src + chartModel 重渲 (唯一入口)
 }
@@ -2945,6 +2972,7 @@ window.addEventListener("resize", () => {
       safeResize(cZcodeTrend);  // ZCode 趋势图窗口缩放跟随
       safeResize(cClaudecodeTrend);  // Claude Code 趋势图窗口缩放跟随
       safeResize(cCodexTrend);  // Codex 趋势图窗口缩放跟随
+      safeResize(cDshTrend);
     }
     if (!document.getElementById("page-overview").hidden) safeResize(cOvTrendChart);
   }, 250);

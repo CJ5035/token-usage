@@ -170,7 +170,7 @@ def test_render_windows_zero_usage_branch_no_arrow():
 
 def test_render_windows_dsh_note_on_notes_push_line():
     body = _extract_fn(_src(), "renderWindows")
-    assert ('if (w.compare.pct != null && w.compare.includes_dsh_today === true)'
+    assert ('if (w.compare.pct != null && w.compare.dsh_excluded_from_compare === true)'
             ' notes.push(t("cmpExcludesDsh"));' in body)   # wb-since 通栏标注行
 
 
