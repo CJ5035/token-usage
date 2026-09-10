@@ -197,11 +197,18 @@ def test_each_new_intent_gets_fresh_retry_budget(web_server, browser):
     _Handler.fail_puts_remaining = 2       # 第一轮意图: 首试+重试双失败 -> retried 残留 true
     page.click("#tb-theme")
     _wait_put(page, 2)
-    time.sleep(0.3)
+    toast1 = page.wait_for_selector(".toast.err", timeout=8000)           # 先确认意图 #1 的失败 toast 已出现
+    assert "主题未保存" in toast1.inner_text()
+    page.wait_for_selector(".toast.err", state="detached", timeout=8000)  # 等它按 3.2s 定时删除; 此后 err toast 必属意图 #2
     _Handler.fail_next_put = True          # 第二轮意图: 修复后应 toast+重试成功 (累计 4 次 PUT)
     page.click("#tb-theme")
     _wait_put(page, 4)
-    assert _puts()[-1] == {"theme": "light"}
+    time.sleep(0.5)                        # 等重试响应落定, 再核对精确序列 (防后续流量垫高计数)
+    assert _puts() == [{"theme": "dark"}, {"theme": "dark"}, {"theme": "light"},
+                       {"theme": "light"}], \
+        f"每个新意图须各自享有一次重试 (dark 双失败 + light 首试失败后重试成功): {_puts()}"
+    toast2 = page.wait_for_selector(".toast.err", timeout=8000)           # 意图 #2 失败 toast 一次 (§3.4)
+    assert "主题未保存" in toast2.inner_text()
     page.close()
 
 
