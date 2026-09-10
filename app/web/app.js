@@ -422,6 +422,7 @@ function applyLang(l) {
   if (zcodeQuotaLast && state.page === "home" && state.channel === "zcode") renderZcodeQuota(zcodeQuotaLast);
   if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);
   if (dshUsageLast && dshUsageLast.range === state.statsRange) renderDsh(dshUsageLast);
+  else if (dshTransportError && dshTransportError.range === state.statsRange) renderDshTransportError();
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);
   if (codexSummaryLast) renderCodexSummary(codexSummaryLast);   // Codex 区块随语言即时重渲染 (复用已拉取数据)
 }
@@ -594,7 +595,7 @@ function applyCurrency(cur) {
 
 /* ---------------- 页面路由 ---------------- */
 function switchPage(page) {
-  if (state.page === "stats" && page !== "stats") destroyDshTrend();
+  if (state.page === "stats" && page !== "stats") { destroyDshTrend(); cancelDshRefresh(); }
   state.page = page;
   document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
   $("page-" + page).hidden = false;
@@ -1078,28 +1079,66 @@ function chartZcodeTrend(daily7, noAnim) {
 let dshUsageLast = null;
 let dshSumSeq = 0;
 let cDshTrend = null;
+let dshTransportError = null;
+let dshRefreshTimer = null;
+let dshRequestController = null;
+let dshInFlightRange = null;
+const DSH_REFRESH_POLL_MS = 1500;
+const DSH_REFRESH_MAX_MS = 60_000;
+
+function dshStatsVisible() {
+  return state.page === "stats" && !$("page-stats").hidden;
+}
+function clearDshRefreshTimer() {
+  if (dshRefreshTimer !== null) { clearTimeout(dshRefreshTimer); dshRefreshTimer = null; }
+}
+function cancelDshRefresh() {
+  clearDshRefreshTimer();
+  dshSumSeq++;
+  if (dshRequestController) dshRequestController.abort();
+  dshRequestController = null;
+  dshInFlightRange = null;
+}
+function scheduleDshRefresh(data) {
+  clearDshRefreshTimer();
+  if (!data || !dshStatsVisible() || data.range !== state.statsRange) return;
+  if (!data.scanning && !data.refresh_error) return;
+  const retrySeconds = Number(data.retry_after_seconds) || 0;
+  const delay = Math.min(DSH_REFRESH_MAX_MS, Math.max(DSH_REFRESH_POLL_MS, retrySeconds * 1000));
+  const range = state.statsRange;
+  dshRefreshTimer = setTimeout(() => {
+    dshRefreshTimer = null;
+    if (dshStatsVisible() && range === state.statsRange) loadDshUsage();
+  }, delay);
+}
 async function loadDshUsage() {
-  const seq = ++dshSumSeq;
   const range = state.statsRange;
   const box = $("dsh-stats");
-  if (!box) return;
+  if (!box || !dshStatsVisible()) return;
+  if (dshInFlightRange === range) return;
+  clearDshRefreshTimer();
+  if (dshRequestController) dshRequestController.abort();
+  const controller = new AbortController();
+  dshRequestController = controller;
+  dshInFlightRange = range;
+  const seq = ++dshSumSeq;
   box.classList.add("swapping");
   try {
-    const data = await api("/api/dsh/usage?range=" + encodeURIComponent(range));
-    if (seq !== dshSumSeq || range !== state.statsRange) return;
+    const data = await api("/api/dsh/usage?range=" + encodeURIComponent(range), { signal: controller.signal });
+    if (seq !== dshSumSeq || range !== state.statsRange || !dshStatsVisible()) return;
+    dshTransportError = null;
     dshUsageLast = data;
     renderDsh(data);
   } catch (e) {
-    if (seq !== dshSumSeq) return;
-    const error = $("dsh-error");
-    if (error) {
-      error.hidden = false;
-      error.innerHTML = `${escapeHtml(t("dshRefreshError"))}: ${escapeHtml(e.message || String(e))} <button class="pill" data-dsh-retry>${escapeHtml(t("retry"))}</button>`;
-      const retry = error.querySelector("[data-dsh-retry]");
-      if (retry) retry.addEventListener("click", loadDshUsage);
-    }
+    if (seq !== dshSumSeq || range !== state.statsRange || !dshStatsVisible() || controller.signal.aborted) return;
+    dshTransportError = { range, message: e.message || String(e) };
+    renderDshTransportError();
   } finally {
-    if (seq === dshSumSeq) box.classList.remove("swapping");
+    if (seq === dshSumSeq) {
+      box.classList.remove("swapping");
+      dshRequestController = null;
+      dshInFlightRange = null;
+    }
   }
 }
 function dshRenderHeads() {
@@ -1117,7 +1156,7 @@ function dshRenderHeads() {
 function renderDsh(data) {
   const box = $("dsh-stats");
   if (!box) return;
-  const missing = $("dsh-missing"), body = $("dsh-body"), status = $("dsh-status"), error = $("dsh-error");
+  const missing = $("dsh-missing"), body = $("dsh-body");
   if (!data || data.found === false) {
     box.hidden = false; missing.hidden = false; body.hidden = true;
     renderDshStatus(data);
@@ -1125,7 +1164,6 @@ function renderDsh(data) {
     return;
   }
   box.hidden = false; missing.hidden = true; body.hidden = false;
-  if (error) error.hidden = true;
   dshRenderHeads();
   const totals = data.totals || data.total || {};
   const kpi = (cls, label, value) => `<div class="card kpi ${cls}"><div class="kpi-l">${escapeHtml(label)}</div><div class="kpi-v">${escapeHtml(value)}</div></div>`;
@@ -1157,13 +1195,44 @@ function renderDshStatus(data) {
   const values = { undated: Number(data.undated) || 0, future: Number(data.future) || 0, unkeyed: Number(data.unkeyed_steps) || 0, provisional: Number(data.provisional_steps) || 0 };
   if (Object.values(values).some(Boolean)) parts.push(t("dshDiagnostics").replace("{undated}", values.undated).replace("{future}", values.future).replace("{unkeyed}", values.unkeyed).replace("{provisional}", values.provisional));
   status.textContent = parts.join(" · "); status.hidden = !parts.length;
+  renderDshError(data);
+  scheduleDshRefresh(data);
+}
+
+function renderDshError(data) {
   const error = $("dsh-error");
-  if (error && data.refresh_error) {
+  if (!error) return;
+  const transport = dshTransportError && dshTransportError.range === state.statsRange ? dshTransportError : null;
+  if (transport) {
+    error.hidden = false;
+    error.innerHTML = `${escapeHtml(t("dshRefreshError"))}: ${escapeHtml(transport.message)} <button class="pill" data-dsh-retry>${escapeHtml(t("retry"))}</button>`;
+  } else if (data && data.refresh_error) {
     const seconds = Number(data.retry_after_seconds) || 0;
     error.hidden = false;
     error.innerHTML = `${escapeHtml(t("dshRefreshError"))}${seconds ? ` · ${escapeHtml(t("dshRetryAfter").replace("{seconds}", seconds))}` : ""} <button class="pill" data-dsh-retry>${escapeHtml(t("retry"))}</button>`;
-    const retry = error.querySelector("[data-dsh-retry]"); if (retry) retry.addEventListener("click", loadDshUsage);
-  } else if (error) error.hidden = true;
+  } else {
+    error.hidden = true;
+    return;
+  }
+  const retry = error.querySelector("[data-dsh-retry]");
+  if (retry) retry.addEventListener("click", loadDshUsage);
+}
+
+function renderDshTransportError() {
+  if (!dshStatsVisible()) return;
+  const box = $("dsh-stats");
+  if (!box) return;
+  box.hidden = false;
+  const cached = dshUsageLast && dshUsageLast.range === state.statsRange && dshUsageLast.found !== false;
+  if (cached) {
+    renderDsh(dshUsageLast);
+    return;
+  }
+  $("dsh-missing").hidden = true;
+  $("dsh-body").hidden = true;
+  $("dsh-status").hidden = true;
+  destroyDshTrend();
+  renderDshError(null);
 }
 
 function destroyDshTrend() { if (cDshTrend) { cDshTrend.destroy(); cDshTrend = null; } }
@@ -1484,6 +1553,7 @@ function refreshCodexVisible() {
 /* ---------------- 首页: 用量概览 6 格 ---------------- */
 function renderOverview(totals, source) {
   const isEst = ["bai", "zcode", "claudecode"].includes(source);   // R6: 费用估算徽章扩展至本地渠道
+  const isDsh = source === "dsh";
   /* T5 codex: 后端提供显式 total_tokens (缓存读/reasoning 是子项不二次相加),
      优先采用; 其余渠道无该键走原 input+output+reasoning 和式 (行为不变) */
   const totalTokens = totals.total_tokens != null ? totals.total_tokens
@@ -1494,8 +1564,8 @@ function renderOverview(totals, source) {
     { cls: "c-blue", l: t("totalTokens"), v: fmtTokens(totalTokens), s: totals.total_tokens != null
       ? `${t("input")} ${fmtTokens(totals.total_input_tokens)} · ${t("output")} ${fmtTokens(totals.total_output_tokens)}`   // 拆分展示: 输入含缓存读、输出含 reasoning, 不再次相加
       : t("inclCache") },
-    { cls: "c-slate", l: t("totalRequests"), v: fmtInt(totals.request_count), s: t("currentRange") },
-    { cls: "c-amber", l: t("totalCost") + (isEst ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: fmtOptionalMoney(totals.total_cost_usd), s: totals.total_cost_usd == null ? t("codexCostUnavailable") : `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
+    { cls: "c-slate", l: t("totalRequests"), v: isDsh ? dshUnavailableCell("dshRequestsUnavailable") : fmtInt(totals.request_count), s: isDsh ? t("dshRequestsUnavailable") : t("currentRange") },
+    { cls: "c-amber", l: t("totalCost") + (isEst ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: isDsh ? dshUnavailableCell("dshCostUnavailable") : fmtOptionalMoney(totals.total_cost_usd), s: isDsh ? t("dshCostUnavailable") : (totals.total_cost_usd == null ? t("codexCostUnavailable") : `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}`) },
     { cls: "c-violet", l: t("sessions"), v: fmtInt(totals.session_count), s: t("dedup") },
   ];
   $("overview-grid").innerHTML = cards.map((c) => `
@@ -2900,7 +2970,7 @@ function renderChannelTable(rows, summary) {
     <td style="color:${CH_COLOR[r.channel] || "#4f8ef7"}">${escapeHtml(CH_LABEL[r.channel] || r.channel)}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
     <td class="num">${fmtTokens(r.tokens)}</td><td class="num">${fmtTokens(r.input)}</td><td class="num">${fmtTokens(r.output)}</td>
     <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshRequestsUnavailable") : fmtInt(r.requests)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshCostUnavailable") : fmtOptionalMoney(r.cost)}</td>
-    <td>${r.data_since || "—"}</td></tr>`).join("") + foot;
+    <td>${escapeHtml(r.data_since || "—")}</td></tr>`).join("") + foot;
 }
 
 /* ---------------- 自动同步 ---------------- */

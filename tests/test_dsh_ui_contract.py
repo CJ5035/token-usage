@@ -39,3 +39,29 @@ def test_dsh_chart_and_status_use_cached_range_data():
     assert "safeResize(cDshTrend)" in js
     assert "dshUsageLast.range === state.statsRange" in js
     assert "fmtTps(totals.tps)" in js
+
+
+def test_dsh_refresh_scheduler_and_transport_error_contract():
+    js = (ROOT / "app/web/app.js").read_text(encoding="utf-8")
+    for marker in (
+        "let dshTransportError = null;",
+        "let dshRefreshTimer = null;",
+        "function scheduleDshRefresh(data)",
+        "function cancelDshRefresh()",
+        "function renderDshTransportError()",
+        "dshRequestController.abort()",
+        "data.refresh_error",
+        "data.scanning",
+        "renderDshError(data);",
+        "else if (dshTransportError && dshTransportError.range === state.statsRange) renderDshTransportError();",
+    ):
+        assert marker in js
+    assert "box.hidden = false;" in js
+    assert "if (state.page === \"stats\" && page !== \"stats\") { destroyDshTrend(); cancelDshRefresh(); }" in js
+
+
+def test_dsh_unknown_home_values_and_data_since_are_safe():
+    js = (ROOT / "app/web/app.js").read_text(encoding="utf-8")
+    assert 'isDsh ? dshUnavailableCell("dshRequestsUnavailable")' in js
+    assert 'isDsh ? dshUnavailableCell("dshCostUnavailable")' in js
+    assert "escapeHtml(r.data_since ||" in js
