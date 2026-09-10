@@ -445,6 +445,24 @@ class TestRangeQueries:
         assert getattr(tz, "key", None) == "America/New_York"
         assert end_ms - start_ms == 25 * 60 * 60 * 1000
 
+    def test_complete_windows_mapping_handles_unlisted_dst_and_non_dst_keys(self, monkeypatch):
+        assert len(dsh_api._WINDOWS_ZONE_TO_IANA) == 139
+        assert all(dsh_api._zoneinfo_from_key(key) is not None
+                   for key in dsh_api._WINDOWS_ZONE_TO_IANA)
+
+        monkeypatch.setenv("TZ", "Cuba Standard Time")
+        cuba = dsh_api._local_timezone()
+        now = datetime(2024, 11, 4, 12, tzinfo=cuba)
+        _, start_ms, end_ms, _, _ = dsh_api._range_bounds("yesterday", now)
+        assert getattr(cuba, "key", None) == "America/Havana"
+        assert end_ms - start_ms == 25 * 60 * 60 * 1000
+
+        monkeypatch.setenv("TZ", "Russian Standard Time")
+        russia = dsh_api._local_timezone()
+        assert getattr(russia, "key", None) == "Europe/Moscow"
+        assert datetime(2024, 1, 1, tzinfo=russia).utcoffset() == \
+            datetime(2024, 7, 1, tzinfo=russia).utcoffset()
+
     def test_future_undated_and_provisional_steps_are_diagnostics(self, monkeypatch):
         tz = ZoneInfo("UTC")
         monkeypatch.setattr(dsh_api, "_local_timezone", lambda: tz)

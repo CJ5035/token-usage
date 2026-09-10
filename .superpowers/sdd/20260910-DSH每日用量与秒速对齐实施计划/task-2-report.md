@@ -44,3 +44,16 @@
 - `pytest -q tests/test_dsh_api.py::TestRangeQueries::test_timezone_discovery_maps_windows_key_to_transition_aware_zone tests/test_dsh_api.py::TestRangeQueries::test_summary_is_serializable_and_does_not_expose_cache_steps tests/test_dsh_api.py::TestRangeQueries::test_legacy_accessors_copy_unkeyed_steps_without_exposing_steps tests/test_codex_server.py`：`42 passed in 3.90s`。
 - 直接发现路径检查：`dst-discovery-ok`（`TZ=Eastern Standard Time` 映射到 `America/New_York`，昨天范围为 `90,000,000` 毫秒）。
 - `python -m compileall -q app/dsh_api.py tests/test_dsh_api.py` 与 `git diff --check`：通过。
+
+## Round 2 review fixes
+
+- Windows 时区发现改为随代码发布的完整 Windows Time Zone ID → IANA 映射，共 139 项；映射与 `tzlocal.windows_tz.tz_names` 的当前权威表逐项一致，但运行时不依赖该第三方模块。
+- 因而任何有效的 Windows `TimeZoneKeyName` 都会先转换为 `zoneinfo.ZoneInfo`，而非在未列示键上退化成当前固定 offset。保留原有 IANA `TZ`、`tzinfo.key`、系统名称和最终固定-offset 的非 Windows/损坏环境安全回退。
+
+### Round 2 验证
+
+- `pytest -q tests/test_dsh_api.py tests/test_dsh_background.py`：`42 passed in 0.33s`。
+- `pytest -q tests/test_dsh_api.py::TestRangeQueries::test_complete_windows_mapping_handles_unlisted_dst_and_non_dst_keys tests/test_dsh_api.py::TestRangeQueries::test_timezone_discovery_maps_windows_key_to_transition_aware_zone tests/test_dsh_api.py::TestRangeQueries::test_legacy_accessors_copy_unkeyed_steps_without_exposing_steps tests/test_dsh_background.py tests/test_codex_server.py`：`53 passed in 4.01s`。
+- 完整性核对：`windows-zone-map=139 exact`（与权威映射逐项相等）。
+- 新测试：未列示的 `Cuba Standard Time` 解析为 `America/Havana`，其 DST 结束自然日为 25 小时；`Russian Standard Time` 解析为 `Europe/Moscow`，现代冬夏 offset 相同。`unkeyed_steps` 兼容性测试继续通过。
+- `python -m compileall -q app/dsh_api.py tests/test_dsh_api.py` 与 `git diff --check`：通过。
