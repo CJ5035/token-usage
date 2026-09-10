@@ -550,6 +550,7 @@ const themeSaveQueue = { pending: null, running: false, retried: false };
 function setThemePreference(on) {
   applyDarkMode(on);
   themeSaveQueue.pending = on;
+  themeSaveQueue.retried = false;   // 重试预算按意图计 (20260910 评审修复: 新意图重置, 防上轮失败残留静默吞掉本轮重试)
   if (!themeSaveQueue.running) _drainThemeSaveQueue();
 }
 async function _drainThemeSaveQueue() {
@@ -560,7 +561,6 @@ async function _drainThemeSaveQueue() {
       themeSaveQueue.pending = null;
       try {
         await api("/api/settings", { method: "PUT", body: JSON.stringify({ theme: target ? "dark" : "light" }) });
-        themeSaveQueue.retried = false;
       } catch (e) {
         if (themeSaveQueue.pending === null && !themeSaveQueue.retried) {
           themeSaveQueue.retried = true;

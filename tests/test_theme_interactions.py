@@ -45,6 +45,7 @@ def _fixture(path: str):
 class _Handler(SimpleHTTPRequestHandler):
     api_log: list = []          # [(method, path, body_bytes|None)]
     fail_next_put = False
+    fail_puts_remaining = 0     # 连续失败计数 (评审回归: 复现"首试+重试双失败"让 retried 残留)
     version_delay_sec = 0.0
 
     def log_message(self, *args):
@@ -54,6 +55,7 @@ class _Handler(SimpleHTTPRequestHandler):
     def reset(cls):
         cls.api_log = []
         cls.fail_next_put = False
+        cls.fail_puts_remaining = 0
         cls.version_delay_sec = 0.0
 
     def _json(self, obj, code=200):
@@ -82,6 +84,10 @@ class _Handler(SimpleHTTPRequestHandler):
         body = self.rfile.read(length)
         type(self).api_log.append(("PUT", self.path, body))
         if self.path.startswith("/api/settings"):
+            if type(self).fail_puts_remaining > 0:
+                type(self).fail_puts_remaining -= 1
+                self._json({"ok": False, "error": "boom"}, 500)
+                return
             if type(self).fail_next_put:
                 type(self).fail_next_put = False
                 self._json({"ok": False, "error": "boom"}, 500)
@@ -171,6 +177,31 @@ def test_failed_save_toasts_and_retries_once(web_server, browser):
     toast = page.wait_for_selector(".toast.err", timeout=8000)
     assert "主题未保存" in toast.inner_text()
     page.wait_for_selector(".toast.err", state="detached", timeout=8000)   # toast 仍按原定时删除
+    page.close()
+
+
+def test_each_new_intent_gets_fresh_retry_budget(web_server, browser):
+    """评审回归 (20260910): retried 不得跨意图残留 — 每个新意图首试失败都必须重试一次.
+
+    复现条件: 第一轮"首试+重试"双失败后 retried 残留 true;
+    第二轮意图首试失败时, 缺陷形态下被静默吞掉 (累计仅 3 次 PUT, 本用例等第 4 次超时).
+    注意: fail_next_put(失败一次即恢复)无法复现 — 首轮重试成功会把 retried 重置回 false
+    (已用 Node 仿真证实), 所以先在 Step 1a 加 fail_puts_remaining 设施.
+    """
+    page = browser.new_page()
+    page.goto(web_server)
+    page.wait_for_selector("#tb-theme")
+    page.wait_for_load_state("networkidle")   # 等 init 迁移 PUT 落定, 防其垫高计数器
+    time.sleep(0.5)
+    _Handler.api_log.clear()
+    _Handler.fail_puts_remaining = 2       # 第一轮意图: 首试+重试双失败 -> retried 残留 true
+    page.click("#tb-theme")
+    _wait_put(page, 2)
+    time.sleep(0.3)
+    _Handler.fail_next_put = True          # 第二轮意图: 修复后应 toast+重试成功 (累计 4 次 PUT)
+    page.click("#tb-theme")
+    _wait_put(page, 4)
+    assert _puts()[-1] == {"theme": "light"}
     page.close()
 
 
