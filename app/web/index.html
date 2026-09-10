@@ -4,6 +4,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GoGauge</title>
+<script>
+/* 首屏主题 bootstrap (20260909 §3.4): 服务端 seed → 旧 localStorage 键 → 默认 light.
+   只设置根元素主题与 color-scheme, 不依赖正文 DOM/Chart/桌面桥接/网络;
+   必须在主样式链接之前执行, 非法旧值或读取异常走默认. */
+(function () {
+  var pref = document.documentElement.getAttribute("data-theme-preference");
+  var theme = "light";
+  if (pref === "dark" || pref === "light") {
+    theme = pref;
+  } else {
+    try {
+      if (localStorage.getItem("gousage-dark") === "1") theme = "dark";
+    } catch (e) { /* 读取异常走默认 light */ }
+  }
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
+})();
+</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -273,7 +291,7 @@
       <div class="card set-card">
         <h3 data-i18n="aboutLinks">链接</h3>
         <p class="thanks">
-          GitHub: <a class="ext-link" href="https://github.com/yphyphyph/opencode-go-gauge" target="_blank">github.com/yphyphyph/opencode-go-gauge</a><br>
+          GitHub: <a class="ext-link" href="https://github.com/CJ5035/token-usage" target="_blank">github.com/CJ5035/token-usage</a><br>
           CSDN: <a class="ext-link" href="https://blog.csdn.net/Ying_ph" target="_blank">blog.csdn.net/Ying_ph</a>
         </p>
       </div>
