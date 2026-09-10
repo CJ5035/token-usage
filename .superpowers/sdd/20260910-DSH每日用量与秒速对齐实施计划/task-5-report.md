@@ -8,7 +8,7 @@
 
 ## 本次改动
 
-- `tests/test_dsh_ui_playwright.py`：真实 `app/web` 静态服务 + 全 API 拦截的 Playwright 覆盖。测试设 5 秒默认超时，实际启动本机 Chromium，不依赖登录或真实日志；旧 7d 请求会被路由保持未决，30d 新响应先渲染，释放旧响应后 UI 仍保持 30d。
+- `tests/test_dsh_ui_playwright.py`：真实 `app/web` 静态服务 + 全 API 拦截的 Playwright 覆盖。测试设 5 秒默认超时，实际启动本机 Chromium，不依赖登录或真实日志；旧 7d 请求会被路由保持未决，30d 新响应先渲染，用户回到 7d 后释放原请求并验证 UI 切回 7d。
 - `tests/test_dsh_api.py`：验证同一 TTL 内 `today/yesterday/7d/30d/all` 共用冻结快照，范围切换不会再次解压日志。
 - `tests/test_report_api.py`：补齐 `all` 的 180/181 天粒度门槛、跨年 `W00` 标签及单渠道隔离；固定 Asia/Shanghai 时间的四步骤快照经 `query_dsh_usage` 后进入 windows、dashboard、daily、hourly 适配器。
 - `app/web/app.js`：补页面可见性处理和按范围管理的在途 DSH 请求。统计页进入后台时销毁图表并取消所有在途请求/轮询；回到前台立即按当前范围刷新。`/api/state` 也暴露 `dsh_found`，让无远程账户、无 Codex 的纯 DSH 本地模式解除登录遮罩。
@@ -28,7 +28,7 @@
 | V5 | 固定 Asia/Shanghai 四步骤快照（缓存输入、零秒无效测速、同会话）经实际范围查询后覆盖 windows、dashboard、daily/hourly | 通过 |
 | V6 | 纯 DSH、合并跨度、180/181 天、跨年 `W00`、单渠道隔离测试 | 通过 |
 | V7 | 费用/请求未知、空范围、比较排除 DSH、其他渠道不查询 DSH 测试 | 通过 |
-| V8 | Playwright 实际点击四个统计档位、五个首页档位、保持未决旧 7d 响应并在新 30d 渲染后释放、零/无速度/扫描/失败状态；真实 Canvas tooltip 悬停断言日期及数值 | 通过（Chromium） |
+| V8 | Playwright 实际点击四个统计档位、五个首页档位、保持未决旧 7d 响应、让 30d 先渲染、回到 7d 后释放原响应并断言 7d KPI、零/无速度/扫描/失败状态；真实 Canvas tooltip 悬停断言日期及数值 | 通过（Chromium） |
 | V9 | Playwright 无远程账户/无 Codex 的纯 DSH 本地模式；统计页可见时语言/主题重绘缓存图表且无额外 DSH 请求；隐藏页销毁图表、取消未决请求、停轮询并前台立即刷新；900px 真实溢出并可改变 `scrollLeft` | 通过（Chromium） |
 | V10 | 自动回归断言冻结快照范围切换不会解压；只读本机抽验 | 通过 |
 
@@ -93,6 +93,10 @@ python -X utf8 -m pytest tests -q
 node --check app/web/app.js
 exit 0
 ```
+
+## 证据措辞更正
+
+初版 V8 文字误称“释放旧 7d 后仍显示 30d”。实际测试在 30d 已先渲染后主动回到 7d，再释放原始 7d 请求，并断言活跃范围、缓存范围和 KPI 都是 7d/700；上方改动已与该执行路径一致。V4 的真实 `scan_sync`/worker 碰撞仍明确列为未验证。
 
 ## V10 只读本机证据
 
