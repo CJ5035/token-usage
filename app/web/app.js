@@ -275,7 +275,33 @@ let state = {
   reportMetric: "tokens",
 };
 
-const COLOR = { input: "#4f8ef7", output: "#22c55e", reasoning: "#a78bfa", cache: "#06b6d4", cost: "#d97706" };
+/* 图表主题 (20260909 §3.3): Canvas 不能直接用 var(--x), 每次绘制经 cssVar 解析具体色
+   (cssVar 自带 #8a94a8 已知回退); chartColors 读六个指标变量, chartThemeOptions 给
+   legend/ticks/grid/tooltip 当前主题值; 各图合并时保留自有 callbacks/轴单位/多轴/事件. */
+function chartColors() {
+  return {
+    input: cssVar("--chart-input"),
+    output: cssVar("--chart-output"),
+    reasoning: cssVar("--chart-reasoning"),
+    cache: cssVar("--chart-cache"),
+    cost: cssVar("--chart-cost"),
+    extra: cssVar("--chart-extra"),
+  };
+}
+function chartThemeOptions() {
+  return {
+    legendLabel: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") },
+    tick: { color: cssVar("--text3"), font: { size: 10 } },
+    gridColor: cssVar("--grid"),
+    tooltip: {
+      backgroundColor: cssVar("--chart-tooltip-bg"),
+      titleColor: cssVar("--chart-tooltip-text"),
+      bodyColor: cssVar("--chart-tooltip-text"),
+      borderColor: cssVar("--chart-tooltip-border"),
+      borderWidth: 1,
+    },
+  };
+}
 const QUOTA_LABEL = { "5h Rolling": () => t("rolling"), "Weekly": () => t("weekly"), "Monthly": () => t("monthly"), "MCP Monthly": () => t("mcpMonthly") };
 
 /* ---------------- 格式化 ---------------- */
@@ -1018,13 +1044,14 @@ function chartZcodeTrend(daily7, noAnim) {
     return;
   }
   if (emptyEl) emptyEl.hidden = true;
+  const cc = chartColors();
   cZcodeTrend = new Chart(canvas, {
     type: "line",
     data: {
       labels: daily7.map((d) => d.date.slice(5)),
       datasets: [
-        { label: t("totalTokens"), data: daily7.map((d) => (d.total_input_tokens || 0) + (d.total_output_tokens || 0) + (d.total_reasoning_tokens || 0)), borderColor: COLOR.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
-        { label: t("zcodeEstCost"), data: daily7.map((d) => d.total_cost_usd || 0), borderColor: COLOR.input, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y1" },
+        { label: t("totalTokens"), data: daily7.map((d) => (d.total_input_tokens || 0) + (d.total_output_tokens || 0) + (d.total_reasoning_tokens || 0)), borderColor: cc.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
+        { label: t("zcodeEstCost"), data: daily7.map((d) => d.total_cost_usd || 0), borderColor: cc.input, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y1" },
       ],
     },
     options: {
@@ -1033,7 +1060,7 @@ function chartZcodeTrend(daily7, noAnim) {
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
-        tooltip: { callbacks: { label: (it) => ` ${it.dataset.label}: ${it.dataset.yAxisID === "y" ? fmtTokens(it.parsed.y) : fmtMoney(it.parsed.y)}` } },
+        tooltip: { ...chartThemeOptions().tooltip, callbacks: { label: (it) => ` ${it.dataset.label}: ${it.dataset.yAxisID === "y" ? fmtTokens(it.parsed.y) : fmtMoney(it.parsed.y)}` } },
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 7 } },
@@ -1229,13 +1256,14 @@ function chartClaudecodeTrend(daily7, noAnim) {
     return;
   }
   if (emptyEl) emptyEl.hidden = true;
+  const cc = chartColors();
   cClaudecodeTrend = new Chart(canvas, {
     type: "line",
     data: {
       labels: daily7.map((d) => d.date.slice(5)),
       datasets: [
-        { label: t("totalTokens"), data: daily7.map((d) => d.total_tokens || 0), borderColor: COLOR.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
-        { label: t("zcodeEstCost"), data: daily7.map((d) => d.total_cost_usd || 0), borderColor: COLOR.input, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y1" },
+        { label: t("totalTokens"), data: daily7.map((d) => d.total_tokens || 0), borderColor: cc.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
+        { label: t("zcodeEstCost"), data: daily7.map((d) => d.total_cost_usd || 0), borderColor: cc.input, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y1" },
       ],
     },
     options: {
@@ -1244,7 +1272,7 @@ function chartClaudecodeTrend(daily7, noAnim) {
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
-        tooltip: { callbacks: { label: (it) => ` ${it.dataset.label}: ${it.dataset.yAxisID === "y" ? fmtTokens(it.parsed.y) : fmtMoney(it.parsed.y)}` } },
+        tooltip: { ...chartThemeOptions().tooltip, callbacks: { label: (it) => ` ${it.dataset.label}: ${it.dataset.yAxisID === "y" ? fmtTokens(it.parsed.y) : fmtMoney(it.parsed.y)}` } },
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 7 } },
@@ -1384,13 +1412,14 @@ function chartCodexTrend(daily7, noAnim) {
     return;
   }
   if (emptyEl) emptyEl.hidden = true;
+  const cc = chartColors();
   cCodexTrend = new Chart(canvas, {
     type: "line",
     data: {
       labels: daily7.map((d) => d.date.slice(5)),
       datasets: [
-        { label: t("totalTokens"), data: daily7.map((d) => d.total_tokens || 0), borderColor: COLOR.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
-        { label: t("totalRequests"), data: daily7.map((d) => d.request_count || 0), borderColor: COLOR.output, borderWidth: 2, pointRadius: 1.5, tension: 0.3, borderDash: [4, 3], yAxisID: "y1" },
+        { label: t("totalTokens"), data: daily7.map((d) => d.total_tokens || 0), borderColor: cc.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
+        { label: t("totalRequests"), data: daily7.map((d) => d.request_count || 0), borderColor: cc.output, borderWidth: 2, pointRadius: 1.5, tension: 0.3, borderDash: [4, 3], yAxisID: "y1" },
       ],
     },
     options: {
@@ -1399,7 +1428,7 @@ function chartCodexTrend(daily7, noAnim) {
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
-        tooltip: { callbacks: { label: (it) => ` ${it.dataset.label}: ${it.dataset.yAxisID === "y" ? fmtTokens(it.parsed.y) : fmtInt(it.parsed.y)}` } },
+        tooltip: { ...chartThemeOptions().tooltip, callbacks: { label: (it) => ` ${it.dataset.label}: ${it.dataset.yAxisID === "y" ? fmtTokens(it.parsed.y) : fmtInt(it.parsed.y)}` } },
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 7 } },
@@ -1458,20 +1487,21 @@ function chartToday(trend, noAnim) {
   }
   const emptyEl = $("today-empty");
   if (emptyEl) emptyEl.hidden = true;
+  const cc = chartColors();
   cToday = new Chart(canvas, {
     type: "bar",
     data: {
       labels: trend.map((d) => d.hour),
       datasets: [
-        { label: t("input"), data: trend.map((d) => d.input), backgroundColor: COLOR.input, borderRadius: 2, barPercentage: 0.8 },
-        { label: t("output"), data: trend.map((d) => d.output), backgroundColor: COLOR.output, borderRadius: 2, barPercentage: 0.8 },
+        { label: t("input"), data: trend.map((d) => d.input), backgroundColor: cc.input, borderRadius: 2, barPercentage: 0.8 },
+        { label: t("output"), data: trend.map((d) => d.output), backgroundColor: cc.output, borderRadius: 2, barPercentage: 0.8 },
       ],
     },
     options: {
       responsive: false, maintainAspectRatio: false,
       animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       interaction: { mode: "index", intersect: false },
-      plugins: { legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } } },
+      plugins: { legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } }, tooltip: chartThemeOptions().tooltip },
       scales: {
         x: { grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 8 } },
         y: { grid: { color: cssVar("--grid") }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtTokens(v) } },
@@ -1542,7 +1572,7 @@ function chartModel(models, noAnim) {
   const sorted = [...models].sort((a, b) => getVal(b) - getVal(a));
   const top = sorted.slice(0, 6);
   const total = sorted.reduce((s, m) => s + getVal(m), 0);
-  const palette = [COLOR.input, COLOR.output, COLOR.reasoning, COLOR.cache, COLOR.cost, "#ec4899"];
+  const cc = chartColors(); const palette = [cc.input, cc.output, cc.reasoning, cc.cache, cc.cost, cc.extra];
   cModel = new Chart(canvas, {
     type: "doughnut",
     data: {
@@ -1554,7 +1584,7 @@ function chartModel(models, noAnim) {
       animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       plugins: {
         legend: { position: "right", labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
-        tooltip: { callbacks: { label: (it) => ` ${it.label}: ${fmt(it.parsed)}${total ? ` (${((it.parsed / total) * 100).toFixed(1)}%)` : ""}` } },
+        tooltip: { ...chartThemeOptions().tooltip, callbacks: { label: (it) => ` ${it.label}: ${fmt(it.parsed)}${total ? ` (${((it.parsed / total) * 100).toFixed(1)}%)` : ""}` } },
       },
     },
   });
@@ -1578,13 +1608,14 @@ function chartTrend(trend, noAnim) {
   }
   const emptyEl = $("trend-empty");
   if (emptyEl) emptyEl.hidden = true;
+  const cc = chartColors();
   cTrend = new Chart(canvas, {
     data: {
       labels: trend.map((d) => d.date.slice(5)),
       datasets: [
-        { type: "line", label: t("totalCost"), data: trend.map((d) => d.total_cost_usd), borderColor: COLOR.input, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
-        { type: "line", label: t("totalRequests"), data: trend.map((d) => d.request_count), borderColor: COLOR.output, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y1", borderDash: [4, 3] },
-        { type: "line", label: t("totalTokens"), data: trend.map((d) => d.total_input_tokens + d.total_output_tokens + d.total_reasoning_tokens), borderColor: COLOR.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y2" },
+        { type: "line", label: t("totalCost"), data: trend.map((d) => d.total_cost_usd), borderColor: cc.input, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
+        { type: "line", label: t("totalRequests"), data: trend.map((d) => d.request_count), borderColor: cc.output, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y1", borderDash: [4, 3] },
+        { type: "line", label: t("totalTokens"), data: trend.map((d) => d.total_input_tokens + d.total_output_tokens + d.total_reasoning_tokens), borderColor: cc.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y2" },
       ],
     },
     options: {
@@ -1594,6 +1625,7 @@ function chartTrend(trend, noAnim) {
       plugins: {
         legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
         tooltip: {
+          ...chartThemeOptions().tooltip,
           callbacks: {
             label: (item) => {
               if (item.dataset.label === t("totalTokens")) return ` ${item.dataset.label}: ${fmtTokens(item.parsed.y)}`;
@@ -2015,14 +2047,15 @@ function chartOvTrend(accounts, noAnim) {
   const costData = labels.map((dt) => costSum[dt] || 0);
   const reqData = labels.map((dt) => reqSum[dt] || 0);
   const tokData = labels.map((dt) => tokSum[dt] || 0);
+  const cc = chartColors();
   cOvTrendChart = new Chart(canvas, {
     type: "line",
     data: {
       labels,
       datasets: [
-        { label: t("totalCost"), data: costData, borderColor: COLOR.input, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
-        { label: t("totalRequests"), data: reqData, borderColor: COLOR.output, borderWidth: 2, pointRadius: 1.5, tension: 0.3, borderDash: [4, 3], yAxisID: "y1" },
-        { label: t("totalTokens"), data: tokData, borderColor: COLOR.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, borderDash: [4, 3], yAxisID: "y2" },
+        { label: t("totalCost"), data: costData, borderColor: cc.input, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
+        { label: t("totalRequests"), data: reqData, borderColor: cc.output, borderWidth: 2, pointRadius: 1.5, tension: 0.3, borderDash: [4, 3], yAxisID: "y1" },
+        { label: t("totalTokens"), data: tokData, borderColor: cc.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, borderDash: [4, 3], yAxisID: "y2" },
       ],
     },
     options: {
@@ -2031,7 +2064,7 @@ function chartOvTrend(accounts, noAnim) {
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
-        tooltip: { callbacks: { label: (it) => it.dataset.label === t("totalRequests") ? ` ${it.dataset.label}: ${fmtInt(it.parsed.y)}` : it.dataset.label === t("totalTokens") ? ` ${it.dataset.label}: ${fmtTokens(it.parsed.y)}` : ` ${it.dataset.label}: ${fmtMoney(it.parsed.y)}` } },
+        tooltip: { ...chartThemeOptions().tooltip, callbacks: { label: (it) => it.dataset.label === t("totalRequests") ? ` ${it.dataset.label}: ${fmtInt(it.parsed.y)}` : it.dataset.label === t("totalTokens") ? ` ${it.dataset.label}: ${fmtTokens(it.parsed.y)}` : ` ${it.dataset.label}: ${fmtMoney(it.parsed.y)}` } },
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 7 } },
@@ -2749,7 +2782,7 @@ function chartReportStack(d, noAnim) {
       responsive: false, maintainAspectRatio: false,
       animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       interaction: { mode: "index", intersect: false },
-      plugins: { legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } } },
+      plugins: { legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } }, tooltip: chartThemeOptions().tooltip },
       scales: {
         x: { stacked: true, grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 10 } },
         y: { stacked: true, grid: { color: cssVar("--grid") }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => d.metric === "cost" ? fmtMoney(v) : d.metric === "requests" ? fmtInt(v) : fmtTokens(v) } },
@@ -2790,7 +2823,7 @@ function chartReportDonut(d, noAnim) {
       responsive: false, maintainAspectRatio: false, cutout: "62%",
       animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       onClick: (_e, els) => { if (els.length) switchChannel(chs[els[0].index]); },  // 扇区->渠道 tab (spec v4)
-      plugins: { legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } } },
+      plugins: { legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } }, tooltip: chartThemeOptions().tooltip },
     },
   });
   cDonut.resize();
@@ -2816,7 +2849,7 @@ function chartReportHourly(d, noAnim, emptyKey) {   // EVOLUTION-7: 第三参 em
       responsive: false, maintainAspectRatio: false,
       animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       interaction: { mode: "index", intersect: false },
-      plugins: { legend: { display: chs.length > 1, labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } } },
+      plugins: { legend: { display: chs.length > 1, labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } }, tooltip: chartThemeOptions().tooltip },
       scales: {
         x: { stacked: true, grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 12 } },
         y: { stacked: true, grid: { color: cssVar("--grid") }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtTokens(v) } },
