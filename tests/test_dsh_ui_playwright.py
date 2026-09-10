@@ -84,8 +84,8 @@ def _dsh_summary(range_: str, *, scanning: bool = False) -> dict:
     return {
         "found": True,
         "range": range_, "totals": totals, "total": totals, "today": _bucket(0),
-        "providers": ([{"provider": "fixture", **totals}] if tokens else []),
-        "models": ([{"provider": "fixture", "model": "fixture-model", **totals}] if tokens else []),
+        "providers": ([{"provider": "fixture-" + "x" * 120, **totals}] if tokens else []),
+        "models": ([{"provider": "fixture-" + "x" * 120, "model": "fixture-model-" + "y" * 120, **totals}] if tokens else []),
         "trend": ([{"date": today, **totals}] if tokens else []),
         "hourly": hourly if range_ in {"today", "yesterday"} else [],
         "sessions_count": 2 if tokens else 0,
@@ -96,18 +96,22 @@ def _dsh_summary(range_: str, *, scanning: bool = False) -> dict:
     }
 
 
-def _dashboard() -> dict:
+def _dashboard(local_only: bool = False) -> dict:
     totals = {
         "total_tokens": 1, "total_input_tokens": 0, "total_output_tokens": 1,
         "total_reasoning_tokens": 0, "total_cost_usd": 0, "request_count": 1,
         "cache_hit_tokens": 0, "request_count_exact": True, "cost_available": True,
     }
-    return {
+    payload = {
         "logged_in": True, "account": {"source": "opencode"}, "account_name": "fixture",
         "quota": {"windows": []}, "totals": totals, "today": totals,
         "today_trend": [], "trend": [], "models": [], "sync": {}, "progress": {},
         "codex": {}, "exchange_rate": {"usd_cny": 7, "currency": "CNY"},
     }
+    if local_only:
+        return {"scope": "all", "range": "today", "totals": totals, "today": totals,
+                "dsh_status": {"found": True}, "exchange_rate": {"usd_cny": 7, "currency": "CNY"}}
+    return payload
 
 
 class _ApiFixture:
@@ -116,7 +120,8 @@ class _ApiFixture:
         self.dashboard_ranges: list[str] = []
         self.scanning_ranges: set[str] = set()
         self.fail_ranges: set[str] = set()
-        self.slow_ranges: set[str] = set()
+        self.held_ranges: set[str] = set()
+        self.held_routes: dict[str, list] = {}
         self.local_only = False
 
     def handle(self, route):
@@ -127,8 +132,9 @@ class _ApiFixture:
         if path == "/api/dsh/usage":
             range_ = query.get("range", ["all"])[0]
             self.dsh_calls.append(range_)
-            if range_ in self.slow_ranges:
-                time.sleep(0.20)
+            if range_ in self.held_ranges:
+                self.held_routes.setdefault(range_, []).append(route)
+                return
             if range_ in self.fail_ranges:
                 route.fulfill(status=500, content_type="application/json", body='{"error":"fixture failure"}')
                 return
@@ -138,13 +144,13 @@ class _ApiFixture:
             return
         if path == "/api/state":
             route.fulfill(content_type="application/json", body=json.dumps({
-                "logged_in": not self.local_only,
-                "progress": {}, "codex": {"source_found": self.local_only},
+                "logged_in": not self.local_only, "dsh_found": self.local_only,
+                "progress": {}, "codex": {},
             }))
             return
         if path == "/api/dashboard":
             self.dashboard_ranges.append(query.get("range", ["today"])[0])
-            route.fulfill(content_type="application/json", body=json.dumps(_dashboard()))
+            route.fulfill(content_type="application/json", body=json.dumps(_dashboard(self.local_only)))
             return
         payload = {
             "/api/version": {"version": "fixture"},
@@ -160,6 +166,10 @@ class _ApiFixture:
             "/api/report/hourly": {"buckets": [], "series": {}},
         }.get(path, {})
         route.fulfill(content_type="application/json", body=json.dumps(payload))
+
+    def release(self, range_: str):
+        for route in self.held_routes.pop(range_, []):
+            route.fulfill(content_type="application/json", body=json.dumps(_dsh_summary(range_)))
 
 
 def _open_stats(page, url):
@@ -193,12 +203,20 @@ def test_dsh_real_page_ranges_race_states_and_tooltip(browser_page):
         assert range_ in fixture.dashboard_ranges
 
     _open_stats(page, url)
-    fixture.slow_ranges.add("7d")
-    page.evaluate("""() => {
-      document.querySelector('#stats-pills .pill[data-r="7d"]').click();
-      document.querySelector('#stats-pills .pill[data-r="30d"]').click();
-    }""")
+    page.locator('#stats-pills .pill[data-r="today"]').click()
+    fixture.held_ranges.add("7d")
+    page.locator('#stats-pills .pill[data-r="7d"]').click()
+    for _ in range(20):
+        if fixture.held_routes.get("7d"):
+            break
+        page.wait_for_timeout(20)
+    assert fixture.held_routes["7d"]
+    page.locator('#stats-pills .pill[data-r="30d"]').click()
     page.locator("#dsh-kpis").filter(has_text="3.0k").wait_for()
+    assert "3.0k" in page.locator("#dsh-kpis").inner_text()
+    fixture.held_ranges.remove("7d")
+    fixture.release("7d")
+    page.wait_for_timeout(80)
     assert "3.0k" in page.locator("#dsh-kpis").inner_text()
 
     fixture.scanning_ranges.add("7d")
@@ -252,29 +270,41 @@ def test_dsh_local_mode_theme_language_hidden_lifecycle_and_narrow_layout(browse
     fixture.scanning_ranges.add("7d")
     page.locator('#stats-pills .pill[data-r="7d"]').click()
     page.locator("#dsh-status").wait_for(state="visible")
+    before_preferences = len(fixture.dsh_calls)
+    before_chart = page.evaluate("Chart.getChart(document.querySelector('#dsh-trend-chart')).options.plugins.title.text")
+    page.evaluate("applyLang('en'); setThemePreference(true)")
+    assert page.locator("#dsh-stats h3").inner_text() == "DSH Local Usage"
+    assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+    assert page.evaluate("Chart.getChart(document.querySelector('#dsh-trend-chart')).options.plugins.title.text") != before_chart
+    assert len(fixture.dsh_calls) == before_preferences
+
+    fixture.held_ranges.add("7d")
+    page.locator('#stats-pills .pill[data-r="all"]').click()
+    page.locator('#stats-pills .pill[data-r="7d"]').click()
+    for _ in range(20):
+        if fixture.held_routes.get("7d"):
+            break
+        page.wait_for_timeout(20)
+    assert fixture.held_routes["7d"]
     before_hide = len(fixture.dsh_calls)
+    assert page.evaluate("!!Chart.getChart(document.querySelector('#dsh-trend-chart'))")
     page.evaluate("""() => {
       Object.defineProperty(document, 'hidden', {configurable: true, get: () => true});
       document.dispatchEvent(new Event('visibilitychange'));
     }""")
     page.wait_for_timeout(1700)
     assert len(fixture.dsh_calls) == before_hide
+    assert not page.evaluate("!!Chart.getChart(document.querySelector('#dsh-trend-chart'))")
     page.evaluate("""() => {
       Object.defineProperty(document, 'hidden', {configurable: true, get: () => false});
       document.dispatchEvent(new Event('visibilitychange'));
     }""")
     page.wait_for_timeout(80)
     assert len(fixture.dsh_calls) == before_hide + 1
-
-    before_preferences = len(fixture.dsh_calls)
-    page.locator('.side-item[data-page="settings"]').click()
-    page.locator('#set-lang-pills .pill[data-v="en"]').click()
-    page.locator('#set-theme-pills .pill[data-v="dark"]').click()
-    assert page.locator("#dsh-stats h3").inner_text() == "DSH Local Usage"
-    assert page.evaluate("document.documentElement.dataset.theme") == "dark"
-    assert len(fixture.dsh_calls) == before_preferences
-
-    page.locator('.side-item[data-page="stats"]').click()
+    fixture.held_ranges.remove("7d")
+    fixture.release("7d")
+    page.locator("#dsh-kpis").wait_for()
+    assert page.evaluate("!!Chart.getChart(document.querySelector('#dsh-trend-chart'))")
     for width, height in ((1280, 840), (900, 700)):
         page.set_viewport_size({"width": width, "height": height})
         page.wait_for_timeout(300)
@@ -286,5 +316,11 @@ def test_dsh_local_mode_theme_language_hidden_lifecycle_and_narrow_layout(browse
           overflowX: getComputedStyle(document.querySelector('#dsh-tables')).overflowX,
         })""")
         assert dimensions["documentWidth"] <= dimensions["viewportWidth"], dimensions
-        assert dimensions["tableWidth"] >= dimensions["tableClientWidth"], dimensions
         assert dimensions["overflowX"] in {"auto", "scroll"}, dimensions
+        if width == 900:
+            assert dimensions["tableWidth"] > dimensions["tableClientWidth"], dimensions
+            assert page.evaluate("""() => {
+              const tables = document.querySelector('#dsh-tables');
+              tables.scrollLeft = 80;
+              return tables.scrollLeft;
+            }""") > 0

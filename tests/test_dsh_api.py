@@ -136,6 +136,18 @@ class TestParsing:
         assert r["_steps"][0]["final"] is True
         assert r["_steps"][0]["completed_ms"] == 2000
 
+    def test_late_chunk_cannot_replace_final_message_but_later_message_can_correct(self, tmp_path, monkeypatch):
+        events = [
+            _ctx("p", "m"),
+            _msg(1, 1, 1_000, {"inputTokens": 10, "outputTokens": 20}),
+            _chunk(1, 1, 1_500, {"inputTokens": 99, "outputTokens": 999}),
+            _msg(1, 1, 2_000, {"inputTokens": 30, "outputTokens": 40}),
+        ]
+        result = _scan(tmp_path, monkeypatch, events)
+        assert result["total"]["input"] == 30
+        assert result["total"]["output"] == 40
+        assert result["_steps"][0]["completed_ms"] == 2_000
+
     def test_context_switch_attributes_usage(self, tmp_path, monkeypatch):
         events = [
             _ctx("p1", "m1"),
@@ -435,6 +447,30 @@ class TestRangeQueries:
         now = datetime(2024, 11, 4, 12, tzinfo=tz)
         _, start_ms, end_ms, _, _ = dsh_api._range_bounds("yesterday", now)
         assert end_ms - start_ms == 25 * 60 * 60 * 1000
+
+    def test_exact_range_exclusion_and_repeated_dst_hour_aggregation(self, monkeypatch):
+        utc = ZoneInfo("UTC")
+        monkeypatch.setattr(dsh_api, "_local_timezone", lambda: utc)
+        now = datetime(2024, 1, 31, 12, tzinfo=utc)
+        ms = lambda days: int((now - timedelta(days=days)).timestamp() * 1000)
+        snapshot = _range_snapshot(
+            _range_step(ms(0), output=1), _range_step(ms(6), output=2),
+            _range_step(ms(7), output=4), _range_step(ms(29), output=8),
+            _range_step(ms(30), output=16),
+        )
+        assert dsh_api.query_dsh_usage(snapshot, "7d", now)["totals"]["output"] == 3
+        assert dsh_api.query_dsh_usage(snapshot, "30d", now)["totals"]["output"] == 15
+
+        eastern = ZoneInfo("America/New_York")
+        monkeypatch.setattr(dsh_api, "_local_timezone", lambda: eastern)
+        after_fallback = datetime(2024, 11, 4, 12, tzinfo=eastern)
+        repeated = _range_snapshot(
+            _range_step(int(datetime(2024, 11, 3, 1, 30, tzinfo=eastern, fold=0).timestamp() * 1000), output=10),
+            _range_step(int(datetime(2024, 11, 3, 1, 30, tzinfo=eastern, fold=1).timestamp() * 1000), output=20),
+        )
+        yesterday = dsh_api.query_dsh_usage(repeated, "yesterday", after_fallback)
+        assert yesterday["totals"]["output"] == 30
+        assert yesterday["hourly"][1]["output"] == 30
 
     def test_timezone_discovery_maps_windows_key_to_transition_aware_zone(self, monkeypatch):
         monkeypatch.setenv("TZ", "Eastern Standard Time")

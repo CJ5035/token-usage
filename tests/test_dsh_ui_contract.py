@@ -49,7 +49,7 @@ def test_dsh_refresh_scheduler_and_transport_error_contract():
         "function scheduleDshRefresh(data)",
         "function cancelDshRefresh()",
         "function renderDshTransportError()",
-        "dshRequestController.abort()",
+        "for (const controller of dshRequestControllers.values()) controller.abort();",
         "data.refresh_error",
         "data.scanning",
         "renderDshError(data);",
@@ -67,7 +67,8 @@ def test_hanging_dsh_request_times_out_and_allows_same_range_retry():
     assert "const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, DSH_REQUEST_TIMEOUT_MS);" in js
     assert "controller.signal.aborted && !timedOut" in js
     assert "clearTimeout(timeoutId);" in js
-    assert "dshInFlightRange = null;" in js
+    assert "const dshRequestControllers = new Map();" in js
+    assert "dshRequestControllers.has(range)" in js
 
 
 def test_dsh_unknown_home_values_and_data_since_are_safe():

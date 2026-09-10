@@ -462,7 +462,7 @@ def test_report_params_fallback_contract(tmp_report_db):
 
 
 def test_server_merge_dsh(tmp_report_db, monkeypatch):
-    """R6: dsh 仅并入 today 窗口与 range=today 明细表 (勾稽口径: 7d/30d 双方均不含 dsh)."""
+    """DSH is merged into every selected history window, not only today's row."""
     _seed_channels()
     _mock_dsh(monkeypatch, today_tokens=70)
     from app import server
@@ -605,6 +605,57 @@ def test_dsh_history_report_contract_uses_one_range_summary(tmp_report_db, monke
 
     trend = _api_payload("/api/report/channel-trend", {"date": ["today"], "channel": ["dsh"]})
     assert len(trend) == 24 and sum(row["total_tokens"] for row in trend) == 1550
+
+
+def test_fixed_dsh_snapshot_flows_through_query_and_report_adapters(tmp_report_db, monkeypatch):
+    """V5 fixture: actual range query preserves cache input and rejects invalid speed."""
+    from app import dsh_api, server
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("Asia/Shanghai")
+    fixed_now = datetime(2026, 9, 10, 12, tzinfo=tz)
+    stamp = lambda day, hour=0, minute=0, second=0: int(
+        datetime(2026, 9, day, hour, minute, second, tzinfo=tz).timestamp() * 1000
+    )
+    def step(completed, input_, read, write, output, valid_output, seconds):
+        return {"session_id": "ws/fixed", "step_key": str(completed), "completed_ms": completed,
+                "provider": "fixed", "model": "fixed-model", "input": input_, "cache": read,
+                "cache_read": read, "cache_write": write, "output": output, "reasoning": 0,
+                "valid_output": valid_output, "valid_seconds": seconds, "final": True, "unkeyed": False}
+    snapshot = {"found": True, "updated_at": "2026-09-10T12:00:00", "sessions_count": 1,
+                "unkeyed_steps": 0, "_steps": [
+                    step(stamp(9, 23, 59, 59), 100, 60, 10, 100, 100, 10),
+                    step(stamp(10, 0, 0, 1), 200, 100, 20, 300, 300, 30),
+                    step(stamp(10, 11), 50, 0, 0, 1000, 0, 0),
+                    step(stamp(4, 12), 10, 0, 0, 20, 20, 2),
+                ]}
+    def summary(range_):
+        return {"found": True, "scanning": False, "stale": False, "refresh_error": False,
+                "updated_at": snapshot["updated_at"], "retry_after_seconds": 0,
+                **dsh_api.query_dsh_usage(snapshot, range_, fixed_now)}
+    class _FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tzinfo=None):
+            return fixed_now if tzinfo else fixed_now.replace(tzinfo=None)
+    monkeypatch.setattr(dsh_api, "_local_timezone", lambda: tz)
+    monkeypatch.setattr(dsh_api, "get_dsh_summary", summary)
+    monkeypatch.setattr(server, "datetime", _FixedDateTime)
+
+    today = summary("today")
+    seven = summary("7d")
+    assert today["totals"]["tokens"] == 1550 and today["totals"]["input"] == 250
+    assert today["totals"]["output"] == 1300 and today["totals"]["tps"] == 10
+    assert seven["totals"]["tokens"] == 1780 and seven["sessions_count"] == 1
+    assert sum(row["tokens"] for row in seven["trend"]) == 1780
+
+    windows = server._report_windows_response(None)
+    assert windows["today"]["tokens"] == 1550 and windows["7d"]["tokens"] == 1780
+    dashboard = server._dashboard_all_payload("7d")
+    assert dashboard["totals"]["total_tokens"] == 1780 and dashboard["today"]["total_tokens"] == 1550
+    daily = _api_payload("/api/report/daily", {"range": ["7d"], "metric": ["tokens"], "channel": ["dsh"]})
+    assert sum(daily["series"]["dsh"]) == 1780
+    hourly = _api_payload("/api/report/hourly", {"date": ["today"], "channel": ["dsh"]})
+    assert sum(row["total_tokens"] for row in hourly["buckets"]) == 1550
 
 
 def test_report_daily_formats_pure_dsh_rows_and_merged_all_span(tmp_report_db):

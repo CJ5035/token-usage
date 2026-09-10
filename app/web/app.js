@@ -1082,7 +1082,7 @@ let cDshTrend = null;
 let dshTransportError = null;
 let dshRefreshTimer = null;
 let dshRequestController = null;
-let dshInFlightRange = null;
+const dshRequestControllers = new Map();
 const DSH_REFRESH_POLL_MS = 1500;
 const DSH_REFRESH_MAX_MS = 60_000;
 const DSH_REQUEST_TIMEOUT_MS = 20_000;
@@ -1096,9 +1096,9 @@ function clearDshRefreshTimer() {
 function cancelDshRefresh() {
   clearDshRefreshTimer();
   dshSumSeq++;
-  if (dshRequestController) dshRequestController.abort();
+  for (const controller of dshRequestControllers.values()) controller.abort();
+  dshRequestControllers.clear();
   dshRequestController = null;
-  dshInFlightRange = null;
 }
 function scheduleDshRefresh(data) {
   clearDshRefreshTimer();
@@ -1116,12 +1116,11 @@ async function loadDshUsage() {
   const range = state.statsRange;
   const box = $("dsh-stats");
   if (!box || !dshStatsVisible()) return;
-  if (dshInFlightRange === range) return;
+  if (dshRequestControllers.has(range)) return;
   clearDshRefreshTimer();
-  if (dshRequestController) dshRequestController.abort();
   const controller = new AbortController();
   dshRequestController = controller;
-  dshInFlightRange = range;
+  dshRequestControllers.set(range, controller);
   const seq = ++dshSumSeq;
   let timedOut = false;
   const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, DSH_REQUEST_TIMEOUT_MS);
@@ -1140,9 +1139,9 @@ async function loadDshUsage() {
     clearTimeout(timeoutId);
     if (seq === dshSumSeq) {
       box.classList.remove("swapping");
-      dshRequestController = null;
-      dshInFlightRange = null;
+      if (dshRequestController === controller) dshRequestController = null;
     }
+    if (dshRequestControllers.get(range) === controller) dshRequestControllers.delete(range);
   }
 }
 function dshRenderHeads() {
@@ -2423,7 +2422,7 @@ let loginPollTimer = null;
    与远程账号登录状态 (logged_in) 相互独立; 所有"无账号则回欢迎页"的
    判断统一走本函数, 不复制条件 */
 function canUseLocalCodex(st) {
-  return !!(st.codex && (st.codex.source_found || st.codex.has_data));
+  return !!((st.codex && (st.codex.source_found || st.codex.has_data)) || st.dsh_found);
 }
 function showLoginOverlay(show) {
   // 遮罩背景不透明, 直接显示即可覆盖页面; 不要隐藏 .app (会连同遮罩一起隐藏)

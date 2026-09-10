@@ -1592,6 +1592,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
     if route == "/api/state" and method == "GET":
         account = db.get_account()
         sync = db.get_sync_state()
+        dsh_found = bool(dsh_api.get_dsh_summary("all").get("found"))
         _json_response(
             handler,
             {
@@ -1604,6 +1605,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                 "progress": _sync_progress_snapshot(),
                 "datadir": db.data_dir(),
                 "codex": _codex_state_snapshot(),   # T7 登录遮罩分离消费
+                "dsh_found": dsh_found,
             },
         )
         return
