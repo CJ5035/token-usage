@@ -109,6 +109,16 @@ class TestDecompressFrames:
 # ---------------------------------------------------------------------------
 
 class TestParsing:
+    def test_late_context_fills_only_empty_attribution_fields(self, tmp_path, monkeypatch):
+        events = [
+            _msg(1, 1, 1000, {"inputTokens": 1, "outputTokens": 2}),
+            _ctx("p-late", ""),
+            _ctx("", "m-late"),
+        ]
+        r = _scan(tmp_path, monkeypatch, events)
+        assert r["_steps"][0]["provider"] == "p-late"
+        assert r["_steps"][0]["model"] == "m-late"
+
     def test_message_overrides_chunk_same_step(self, tmp_path, monkeypatch):
         events = [
             _ctx("p1", "m1"),

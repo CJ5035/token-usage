@@ -229,8 +229,19 @@ def stat_log(log_path: Path, sid: str) -> Optional[dict[str, Any]]:
         if etype == "request/context":
             p = data.get("provider")
             m = data.get("model")
-            cur_provider = p if isinstance(p, str) and p else ""
-            cur_model = m if isinstance(m, str) and m else ""
+            valid_provider = p if isinstance(p, str) and p else ""
+            valid_model = m if isinstance(m, str) and m else ""
+            # A context event may arrive after usage (or omit one field). Fill
+            # only empty attribution fields; retain each step's first value.
+            if valid_provider:
+                cur_provider = valid_provider
+            if valid_model:
+                cur_model = valid_model
+            for sample in step_usage.values():
+                if not sample["provider"] and valid_provider:
+                    sample["provider"] = valid_provider
+                if not sample["model"] and valid_model:
+                    sample["model"] = valid_model
         elif etype == "assistant/chunk":
             chunk = data.get("chunk")
             if (

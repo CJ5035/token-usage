@@ -19,3 +19,9 @@ Focused validation: `pytest -q tests/test_dsh_api.py tests/test_dsh_background.p
 ## Notes
 
 The snapshot retains legacy aggregate totals for compatibility. Future and undated completion metadata remain available in `_steps` for the range-query task; future records are excluded from the legacy `today` bucket.
+
+## Round 1 review fix
+
+Fixed late and partial `request/context` attribution. Existing step metadata now retains the first non-empty provider/model values while allowing later valid context fields to fill values that were empty when usage arrived. Added a regression test covering usage before context plus partial context events.
+
+Validation command and output: `pytest -q tests/test_dsh_api.py tests/test_dsh_background.py` — 34 passed.
