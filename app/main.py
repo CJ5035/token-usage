@@ -499,6 +499,16 @@ def _patch_webview_popup() -> None:
     edgechromium.EdgeChrome.on_new_window_request = _allow_native_popup
 
 
+def _theme_background_color() -> str:
+    """主窗口原生底色 (20260909 §3.4): 与已保存主题对齐 (dark --bg #111112 / light --bg #f7f6f4),
+    避免 HTML 绘制前的原生白底; 未设置或读取失败用浅色默认. 只处理主窗口, 不动第三方登录页."""
+    try:
+        theme = db.get_settings().get("theme")
+    except Exception:  # noqa: BLE001 偏好读取失败按未设置处理
+        theme = None
+    return "#111112" if theme == "dark" else "#f7f6f4"
+
+
 def main() -> None:
     global _quitting
 
@@ -557,6 +567,7 @@ def main() -> None:
         # easy_drag 的 JS 用 clientX 记起点/screenX 算增量 + 后端再乘 DPI 缩放,
         # 高 DPI 屏幕拖动漂移抽动. 窗口拖动由前端自实现 (js_api.move_by).
         easy_drag=False,
+        background_color=_theme_background_color(),
         js_api=api,
     )
     api.bind(main_win)

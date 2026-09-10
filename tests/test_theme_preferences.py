@@ -131,3 +131,32 @@ def test_inject_theme_seed_pure_function(tmp_codex_db):
     # 非 index 内容无标记时原样返回
     assert server._inject_theme_seed(b"plain bytes") == b"plain bytes"
 
+
+# ---------------------------------------------------------------------------
+# 3. 主窗口原生底色 (§3.4: 与 root/dark --bg 对齐, 避免 HTML 绘制前闪白)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("theme,expected", [
+    ("dark", "#111112"),
+    ("light", "#f7f6f4"),
+    (None, "#f7f6f4"),
+    ("neon", "#f7f6f4"),   # 损坏值: 浅色默认
+])
+def test_main_window_background_matches_saved_theme(theme, expected, monkeypatch):
+    monkeypatch.setattr(db, "get_settings", lambda: {"theme": theme})
+    assert main._theme_background_color() == expected
+
+
+def test_main_window_background_fallback_on_read_error(monkeypatch):
+    def _boom():
+        raise RuntimeError("db down")
+    monkeypatch.setattr(db, "get_settings", _boom)
+    assert main._theme_background_color() == "#f7f6f4"
+
+
+def test_main_window_create_window_uses_theme_background():
+    src = (main.__file__ and open(main.__file__, encoding="utf-8").read())
+    assert "background_color=_theme_background_color()" in src, "主窗口 create_window 未接主题底色"
+
+
