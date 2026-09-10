@@ -27,7 +27,7 @@ def test_dsh_range_ui_contract():
     for stale in ("dshDim", "dsh-today-note", "dataSinceToday"):
         assert stale not in js
     assert '"/api/dsh/usage?range=" + encodeURIComponent(range)' in js
-    assert "seq !== dshSumSeq || range !== state.statsRange" in js
+    assert "if (range !== state.statsRange || !dshStatsVisible()) return;" in js
 
 
 def test_dsh_chart_and_status_use_cached_range_data():

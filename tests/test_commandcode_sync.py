@@ -55,8 +55,11 @@ def _usage_row(usg_id, model="meta/muse-spark-1.3") -> dict:
 
 def _bucket_today() -> str:
     """UTC 桶字符串 (1 小时前整点), 本地化后必落在今日 (避开本地零点边界 1 小时)."""
-    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    return (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    local_now = datetime.now().astimezone()
+    candidate = local_now - timedelta(hours=1)
+    if candidate.date() != local_now.date():
+        candidate = local_now.replace(hour=12, minute=0, second=0, microsecond=0)
+    return candidate.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _boom(*_a, **_k):

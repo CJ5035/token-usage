@@ -231,7 +231,12 @@ def _to_utc_iso(dt_local) -> str:
 def _today_iso(minute_offset: int = 0) -> str:
     """当前时刻前 minute_offset 分钟 (UTC Z 串; N25 修正: 原本地无后缀串被 sqlite 当 UTC)."""
     import datetime as _dt
-    return _to_utc_iso(_dt.datetime.now() - _dt.timedelta(minutes=minute_offset))
+    now = _dt.datetime.now().astimezone()
+    candidate = now - _dt.timedelta(minutes=minute_offset)
+    # 午夜前几分钟运行时不能把“today” fixture 造到昨天。
+    if candidate.date() != now.date():
+        candidate = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    return _to_utc_iso(candidate)
 
 
 def _today_at(h: int, m: int = 0) -> str:

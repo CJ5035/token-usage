@@ -1077,7 +1077,6 @@ function chartZcodeTrend(daily7, noAnim) {
 /* DSH usage follows the selected stats range.  The response includes a cached
    snapshot's refresh state, diagnostics, provider/model aggregates, and daily trend. */
 let dshUsageLast = null;
-let dshSumSeq = 0;
 let cDshTrend = null;
 let dshTransportError = null;
 let dshRefreshTimer = null;
@@ -1095,7 +1094,6 @@ function clearDshRefreshTimer() {
 }
 function cancelDshRefresh() {
   clearDshRefreshTimer();
-  dshSumSeq++;
   for (const controller of dshRequestControllers.values()) controller.abort();
   dshRequestControllers.clear();
   dshRequestController = null;
@@ -1121,23 +1119,22 @@ async function loadDshUsage() {
   const controller = new AbortController();
   dshRequestController = controller;
   dshRequestControllers.set(range, controller);
-  const seq = ++dshSumSeq;
   let timedOut = false;
   const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, DSH_REQUEST_TIMEOUT_MS);
   box.classList.add("swapping");
   try {
     const data = await api("/api/dsh/usage?range=" + encodeURIComponent(range), { signal: controller.signal });
-    if (seq !== dshSumSeq || range !== state.statsRange || !dshStatsVisible()) return;
+    if (range !== state.statsRange || !dshStatsVisible()) return;
     dshTransportError = null;
     dshUsageLast = data;
     renderDsh(data);
   } catch (e) {
-    if (seq !== dshSumSeq || range !== state.statsRange || !dshStatsVisible() || (controller.signal.aborted && !timedOut)) return;
+    if (range !== state.statsRange || !dshStatsVisible() || (controller.signal.aborted && !timedOut)) return;
     dshTransportError = { range, message: timedOut ? t("requestTimeout") : (e.message || String(e)) };
     renderDshTransportError();
   } finally {
     clearTimeout(timeoutId);
-    if (seq === dshSumSeq) {
+    if (range === state.statsRange) {
       box.classList.remove("swapping");
       if (dshRequestController === controller) dshRequestController = null;
     }

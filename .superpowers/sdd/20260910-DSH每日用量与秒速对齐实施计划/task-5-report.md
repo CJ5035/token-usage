@@ -62,6 +62,38 @@ node --check app/web/app.js
 exit 0
 ```
 
+## 第二轮复核修正
+
+- DSH 请求不再用全局序号拒绝一个“先发 7d → 显示 30d → 回到 7d”的原始 7d 响应。接收条件以当前可见范围为准：不同范围的迟到响应继续丢弃，用户已返回的同范围响应可渲染。Playwright 断言释放原 7d 后 `state.statsRange` 与 `dshUsageLast.range` 都为 `7d`，且 KPI 显示 700。
+- parser 回归拆成两次扫描：先验证 late chunk 不会覆盖第一个 final message，再追加更晚的 final message 验证修正生效，避免后者掩盖前者。
+- 隐藏页测试先接收 scanning 响应并断言真实 `dshRefreshTimer` 已创建；隐藏后断言其为 `null` 且等待一个 poll 周期无请求。另行保持一条请求未决，隐藏后断言图表销毁且 `dshRequestControllers.size === 0`。
+
+```text
+python -X utf8 -m pytest tests/test_dsh_api.py tests/test_dsh_ui_contract.py tests/test_dsh_ui_playwright.py -q
+42 passed in 10.51s
+
+node --check app/web/app.js
+exit 0
+```
+
+## 第三轮复核修正
+
+- 修复范围往返：保持 7d 请求未决、让 30d 先渲染、再选择 7d 后释放最初请求。全局序号会把该响应当作过期而导致 30d 内容留在活跃 7d 下；现在仅当响应范围不是当前范围或统计页不可见时丢弃。Playwright 最终断言 `state.statsRange === "7d"`、`dshUsageLast.range === "7d"`，且 DSH KPI 显示 700。
+- parser 用例先单独断言 `message + late chunk` 保留首个 final 消息，再以第二次扫描断言更晚 final message 的更正，两个行为互不掩盖。
+- 隐藏页先建立 scanning 定时器并断言 `dshRefreshTimer !== null`；隐藏后断言 timer 清空且一轮 poll 内无请求。未决请求场景单独断言 `dshRequestControllers.size === 0`。
+- 全量测试在本地零点后暴露三个既有测试 fixture 将“今天减 10 分钟/1 小时”写入昨天；只修正 fixture 的本地日期保护，未更改生产报表逻辑。
+
+```text
+python -X utf8 -m pytest tests/test_commandcode_sync.py::test_dashboard_commandcode_uses_charts_aggregate tests/test_report_api.py::test_report_hourly_and_totals_local_dispatch tests/test_report_api.py::test_channel_totals_zero_fallback_and_hit_rate tests/test_dsh_api.py tests/test_dsh_ui_contract.py tests/test_dsh_ui_playwright.py -q
+45 passed in 10.78s
+
+python -X utf8 -m pytest tests -q
+639 passed, 3 skipped in 93.33s
+
+node --check app/web/app.js
+exit 0
+```
+
 ## V10 只读本机证据
 
 在一次 `dsh_api.scan()` 冻结快照上执行范围聚合，没有写入、移动或提交任何本机日志：

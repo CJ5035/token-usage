@@ -214,10 +214,13 @@ def test_dsh_real_page_ranges_race_states_and_tooltip(browser_page):
     page.locator('#stats-pills .pill[data-r="30d"]').click()
     page.locator("#dsh-kpis").filter(has_text="3.0k").wait_for()
     assert "3.0k" in page.locator("#dsh-kpis").inner_text()
+    page.locator('#stats-pills .pill[data-r="7d"]').click()
+    assert fixture.held_routes["7d"], "returning to 7d must keep its original request usable"
     fixture.held_ranges.remove("7d")
     fixture.release("7d")
-    page.wait_for_timeout(80)
-    assert "3.0k" in page.locator("#dsh-kpis").inner_text()
+    page.locator("#dsh-kpis").filter(has_text="700").wait_for()
+    active = page.evaluate("({ range: dshUsageLast.range, active: state.statsRange })")
+    assert active == {"range": "7d", "active": "7d"}
 
     fixture.scanning_ranges.add("7d")
     page.locator('#stats-pills .pill[data-r="7d"]').click()
@@ -278,6 +281,22 @@ def test_dsh_local_mode_theme_language_hidden_lifecycle_and_narrow_layout(browse
     assert page.evaluate("Chart.getChart(document.querySelector('#dsh-trend-chart')).options.plugins.title.text") != before_chart
     assert len(fixture.dsh_calls) == before_preferences
 
+    # A fulfilled scanning response owns a real scheduler; hiding clears it before it can poll.
+    assert page.evaluate("dshRefreshTimer !== null")
+    before_timer_hide = len(fixture.dsh_calls)
+    page.evaluate("""() => {
+      Object.defineProperty(document, 'hidden', {configurable: true, get: () => true});
+      document.dispatchEvent(new Event('visibilitychange'));
+    }""")
+    assert page.evaluate("dshRefreshTimer === null")
+    page.wait_for_timeout(1700)
+    assert len(fixture.dsh_calls) == before_timer_hide
+    page.evaluate("""() => {
+      Object.defineProperty(document, 'hidden', {configurable: true, get: () => false});
+      document.dispatchEvent(new Event('visibilitychange'));
+    }""")
+    page.wait_for_timeout(80)
+
     fixture.held_ranges.add("7d")
     page.locator('#stats-pills .pill[data-r="all"]').click()
     page.locator('#stats-pills .pill[data-r="7d"]').click()
@@ -295,6 +314,7 @@ def test_dsh_local_mode_theme_language_hidden_lifecycle_and_narrow_layout(browse
     page.wait_for_timeout(1700)
     assert len(fixture.dsh_calls) == before_hide
     assert not page.evaluate("!!Chart.getChart(document.querySelector('#dsh-trend-chart'))")
+    assert page.evaluate("dshRequestControllers.size === 0")
     page.evaluate("""() => {
       Object.defineProperty(document, 'hidden', {configurable: true, get: () => false});
       document.dispatchEvent(new Event('visibilitychange'));

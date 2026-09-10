@@ -137,13 +137,20 @@ class TestParsing:
         assert r["_steps"][0]["completed_ms"] == 2000
 
     def test_late_chunk_cannot_replace_final_message_but_later_message_can_correct(self, tmp_path, monkeypatch):
-        events = [
+        initial = [
             _ctx("p", "m"),
             _msg(1, 1, 1_000, {"inputTokens": 10, "outputTokens": 20}),
             _chunk(1, 1, 1_500, {"inputTokens": 99, "outputTokens": 999}),
+        ]
+        first = _scan(tmp_path, monkeypatch, initial)
+        assert first["total"]["input"] == 10
+        assert first["total"]["output"] == 20
+        assert first["_steps"][0]["completed_ms"] == 1_000
+
+        corrected = initial + [
             _msg(1, 1, 2_000, {"inputTokens": 30, "outputTokens": 40}),
         ]
-        result = _scan(tmp_path, monkeypatch, events)
+        result = _scan(tmp_path, monkeypatch, corrected)
         assert result["total"]["input"] == 30
         assert result["total"]["output"] == 40
         assert result["_steps"][0]["completed_ms"] == 2_000
