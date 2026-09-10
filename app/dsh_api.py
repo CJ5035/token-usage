@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import sys
 import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import zstandard
 
@@ -451,9 +454,76 @@ def scan() -> dict[str, Any]:
 
 _RANGES = {"today", "yesterday", "7d", "30d", "all"}
 
+# Windows reports names such as ``Eastern Standard Time`` rather than IANA
+# keys. Map the common Windows IDs before constructing a stdlib ZoneInfo.
+_WINDOWS_ZONE_TO_IANA = {
+    "Dateline Standard Time": "Etc/GMT+12",
+    "UTC-11": "Etc/GMT+11",
+    "Hawaiian Standard Time": "Pacific/Honolulu",
+    "Alaskan Standard Time": "America/Anchorage",
+    "Pacific Standard Time": "America/Los_Angeles",
+    "US Mountain Standard Time": "America/Phoenix",
+    "Mountain Standard Time": "America/Denver",
+    "Central Standard Time": "America/Chicago",
+    "Eastern Standard Time": "America/New_York",
+    "Atlantic Standard Time": "America/Halifax",
+    "Newfoundland Standard Time": "America/St_Johns",
+    "E. South America Standard Time": "America/Sao_Paulo",
+    "Greenwich Standard Time": "Atlantic/Reykjavik",
+    "GMT Standard Time": "Europe/London",
+    "W. Europe Standard Time": "Europe/Berlin",
+    "Central Europe Standard Time": "Europe/Budapest",
+    "Romance Standard Time": "Europe/Paris",
+    "South Africa Standard Time": "Africa/Johannesburg",
+    "Egypt Standard Time": "Africa/Cairo",
+    "Israel Standard Time": "Asia/Jerusalem",
+    "Arabian Standard Time": "Asia/Dubai",
+    "Iran Standard Time": "Asia/Tehran",
+    "India Standard Time": "Asia/Kolkata",
+    "China Standard Time": "Asia/Shanghai",
+    "Tokyo Standard Time": "Asia/Tokyo",
+    "Korea Standard Time": "Asia/Seoul",
+    "AUS Eastern Standard Time": "Australia/Sydney",
+    "Tasmania Standard Time": "Australia/Hobart",
+    "New Zealand Standard Time": "Pacific/Auckland",
+    "Fiji Standard Time": "Pacific/Fiji",
+}
+
+
+def _zoneinfo_from_key(key: str | None) -> ZoneInfo | None:
+    """解析 IANA 或 Windows 时区键，失败时返回 None。"""
+    if not key:
+        return None
+    mapped = _WINDOWS_ZONE_TO_IANA.get(key, key)
+    try:
+        return ZoneInfo(mapped)
+    except ZoneInfoNotFoundError:
+        return None
+
+
+def _windows_timezone_key() -> str | None:
+    """读取 Windows 当前时区键，不依赖当前 offset 的固定 tzinfo。"""
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation") as key:
+            value, _ = winreg.QueryValueEx(key, "TimeZoneKeyName")
+            return value.strip() if isinstance(value, str) else None
+    except OSError:
+        return None
+
 
 def _local_timezone() -> Any:
-    """返回系统本地时区，留出小函数以便测试 DST 边界。"""
+    """返回可感知 DST 转换的系统本地时区。"""
+    for key in (os.environ.get("TZ"), _windows_timezone_key(),
+                getattr(datetime.now().astimezone().tzinfo, "key", None), *time.tzname):
+        zone = _zoneinfo_from_key(key)
+        if zone is not None:
+            return zone
+    # 极少数平台没有可解析的时区键时，保留旧行为作为可用的固定-offset 回退。
     return datetime.now().astimezone().tzinfo
 
 
@@ -617,6 +687,7 @@ def _legacy_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
         "found": bool(snapshot.get("found")),
         "updated_at": snapshot.get("updated_at"),
         "sessions_count": int(snapshot.get("sessions_count") or 0),
+        "unkeyed_steps": int(snapshot.get("unkeyed_steps") or 0),
         "total": dict(snapshot.get("total") or _public_bucket(_new_bucket())),
         "today": dict(snapshot.get("today") or _public_bucket(_new_bucket())),
         "providers": [dict(row) for row in snapshot.get("providers", []) if isinstance(row, dict)],

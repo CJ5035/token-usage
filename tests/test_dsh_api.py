@@ -436,6 +436,15 @@ class TestRangeQueries:
         _, start_ms, end_ms, _, _ = dsh_api._range_bounds("yesterday", now)
         assert end_ms - start_ms == 25 * 60 * 60 * 1000
 
+    def test_timezone_discovery_maps_windows_key_to_transition_aware_zone(self, monkeypatch):
+        monkeypatch.setenv("TZ", "Eastern Standard Time")
+        tz = dsh_api._local_timezone()
+        now = datetime(2024, 11, 4, 12, tzinfo=tz)
+        _, start_ms, end_ms, _, _ = dsh_api._range_bounds("yesterday", now)
+
+        assert getattr(tz, "key", None) == "America/New_York"
+        assert end_ms - start_ms == 25 * 60 * 60 * 1000
+
     def test_future_undated_and_provisional_steps_are_diagnostics(self, monkeypatch):
         tz = ZoneInfo("UTC")
         monkeypatch.setattr(dsh_api, "_local_timezone", lambda: tz)
@@ -495,3 +504,19 @@ class TestRangeQueries:
         assert "_steps" not in summary and "session_id" not in json.dumps(summary)
         assert dsh_api._cache_payload["total"]["output"] == 10
         json.dumps(summary)
+
+    def test_legacy_accessors_copy_unkeyed_steps_without_exposing_steps(self, tmp_path, monkeypatch):
+        _patch_root(monkeypatch, tmp_path)
+        _write_session(tmp_path, "ws", "s1", [
+            _ctx("p", "m"),
+            _msg(None, 1, 1_000, {"inputTokens": 1, "outputTokens": 10}),
+        ])
+
+        synced = dsh_api.scan_sync()
+        from_cache = dsh_api.get_dsh_usage()
+        synced["unkeyed_steps"] = 99
+        from_cache["unkeyed_steps"] = 88
+
+        assert "_steps" not in synced and "_steps" not in from_cache
+        assert dsh_api._cache_payload["unkeyed_steps"] == 1
+        assert dsh_api.get_dsh_usage()["unkeyed_steps"] == 1

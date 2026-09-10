@@ -32,3 +32,15 @@
 - Task 1 的 `_steps` 字段正好提供了本任务所需的完成时间、测速样本、最终消息状态和相对会话目录，未需要扩展其接口。
 - 无范围旧接口不再返回缓存对象本体，这是为满足“缓存不可由消费者修改”所作的最小行为调整；字段形状保持兼容，内部 `_steps` 也不再泄漏。
 - 全量 `pytest -q` 在本运行器中两次只回传到约 34% 的进度后脱离调用，未将其视为通过；针对本改动的 DSH 及 server 消费路径回归已完整通过。
+
+## Round 1 review fixes
+
+- DST：`_local_timezone()` 不再直接返回 `datetime.now().astimezone().tzinfo` 的固定 offset。它现在优先解析 `TZ`、Windows 注册表 `TimeZoneKeyName`、可用的 `tzinfo.key` 与系统时区名，映射常见 Windows 时区键后构造 `zoneinfo.ZoneInfo`。日期边界继续逐日转换，因此例如美国东部夏令时结束日正确为 25 小时。
+- 兼容性：`_legacy_payload()` 现在复制 `unkeyed_steps` 标量；`get_dsh_usage()` 和 `scan_sync()` 都保留该字段，同时仍不公开 `_steps`，且修改返回值不会改变缓存。
+
+### Round 1 验证
+
+- `pytest -q tests/test_dsh_api.py tests/test_dsh_background.py`：`41 passed in 0.58s`。
+- `pytest -q tests/test_dsh_api.py::TestRangeQueries::test_timezone_discovery_maps_windows_key_to_transition_aware_zone tests/test_dsh_api.py::TestRangeQueries::test_summary_is_serializable_and_does_not_expose_cache_steps tests/test_dsh_api.py::TestRangeQueries::test_legacy_accessors_copy_unkeyed_steps_without_exposing_steps tests/test_codex_server.py`：`42 passed in 3.90s`。
+- 直接发现路径检查：`dst-discovery-ok`（`TZ=Eastern Standard Time` 映射到 `America/New_York`，昨天范围为 `90,000,000` 毫秒）。
+- `python -m compileall -q app/dsh_api.py tests/test_dsh_api.py` 与 `git diff --check`：通过。
