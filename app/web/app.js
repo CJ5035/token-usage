@@ -6,7 +6,7 @@ const $ = (id) => document.getElementById(id);
 /* ================= 国际化 ================= */
 const I18N = {
   zh: {
-    syncing: "同步中", themeDark: "暗色", themeLight: "亮色", refresh: "刷新", themeToggle: "切换主题", minimize: "最小化", close: "关闭", maximize: "最大化", restore: "还原",
+    syncing: "同步中", themeDark: "暗色", themeLight: "亮色", refresh: "刷新", themeToggle: "切换主题", themeSaveFailed: "主题未保存，重试", minimize: "最小化", close: "关闭", maximize: "最大化", restore: "还原",
     homeTitle: "用量统计总览", navHome: "首页", today: "今天", d7: "近7天", d30: "近30天", all: "全部",
     overviewTitle: "用量概览", followRange: "数据跟随时间范围",
     todayTrend: "今日趋势", hours24: "24 小时",
@@ -129,7 +129,7 @@ const I18N = {
     cmpExcludesDsh: "涨跌百分比未含今日 DSH", statsScopeHint: "主区仅统计 OpenCode 渠道用量；ZCode / Claude Code / DSH / Codex 本地用量见下方独立区块（首页「今天」合计已并入今日 DSH 用量，涨跌百分比未含）",
   },
   en: {
-    syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh", themeToggle: "Toggle theme", minimize: "Minimize", close: "Close", maximize: "Maximize", restore: "Restore",
+    syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh", themeToggle: "Toggle theme", themeSaveFailed: "Theme not saved, retrying", minimize: "Minimize", close: "Close", maximize: "Maximize", restore: "Restore",
     homeTitle: "Usage Overview", navHome: "Home", today: "Today", d7: "7 Days", d30: "30 Days", all: "All",
     overviewTitle: "Usage Overview", followRange: "Follows selected range",
     todayTrend: "Today's Trend", hours24: "24 Hours",
@@ -461,7 +461,7 @@ function bindTitlebar() {
   $("tb-min").addEventListener("click", async () => { const a = await pywebviewApi(); if (a) a.minimize(); });
   $("tb-max").addEventListener("click", async () => { const a = await pywebviewApi(); if (a && a.toggle_maximize) a.toggle_maximize(); });
   $("tb-close").addEventListener("click", async () => { const a = await pywebviewApi(); if (a) a.close(); });
-  $("tb-theme").addEventListener("click", () => applyDarkMode(document.documentElement.dataset.theme !== "dark"));
+  $("tb-theme").addEventListener("click", () => setThemePreference(document.documentElement.dataset.theme !== "dark"));
 
   /* 标题栏拖动 (自实现, 替代 pywebview easy_drag):
      easy_drag 的 JS 用 clientX 记起点、screenX 算增量 (DPI 缩放下两坐标系
@@ -515,6 +515,37 @@ function applyDarkMode(on) {
   try { localStorage.setItem("gousage-dark", on ? "1" : "0"); } catch (e) { /* ignore */ }
   syncThemePills();
   rerenderCharts();   // EVOLUTION-4: refreshIcons 并入 rerenderCharts 末尾 (唯一入口, 消除双调用重复重建)
+}
+/* 主题持久化 (20260909 §3.4): applyDarkMode 保持纯界面应用 + 旧键兼容写入;
+   保存走单串行队列 + 最新意图合并 (快速 dark→light→dark 最终存 dark);
+   PUT 响应不回写 state (后到响应不能覆盖新选择); 失败 toast 一次并重试一次,
+   仍走本队列; 重试失败保留界面选择, 不宣称重启恢复. */
+const themeSaveQueue = { pending: null, running: false, retried: false };
+function setThemePreference(on) {
+  applyDarkMode(on);
+  themeSaveQueue.pending = on;
+  if (!themeSaveQueue.running) _drainThemeSaveQueue();
+}
+async function _drainThemeSaveQueue() {
+  themeSaveQueue.running = true;
+  try {
+    while (themeSaveQueue.pending !== null) {
+      const target = themeSaveQueue.pending;
+      themeSaveQueue.pending = null;
+      try {
+        await api("/api/settings", { method: "PUT", body: JSON.stringify({ theme: target ? "dark" : "light" }) });
+        themeSaveQueue.retried = false;
+      } catch (e) {
+        if (themeSaveQueue.pending === null && !themeSaveQueue.retried) {
+          themeSaveQueue.retried = true;
+          themeSaveQueue.pending = target;
+          toast(t("themeSaveFailed"), "err");
+        }
+      }
+    }
+  } finally {
+    themeSaveQueue.running = false;
+  }
 }
 function syncThemePills() {
   document.querySelectorAll("#set-theme-pills .pill").forEach((b) => b.classList.toggle("active", b.dataset.v === (state.darkMode ? "dark" : "light")));
@@ -2405,7 +2436,7 @@ function bindEvents() {
     syncSettingsPills();
     toast(t("syncRangeUpdated"));
   }));
-  document.querySelectorAll("#set-theme-pills .pill").forEach((b) => b.addEventListener("click", () => applyDarkMode(b.dataset.v === "dark")));
+  document.querySelectorAll("#set-theme-pills .pill").forEach((b) => b.addEventListener("click", () => setThemePreference(b.dataset.v === "dark")));
   document.querySelectorAll("#set-currency-pills .pill").forEach((b) => b.addEventListener("click", () => applyCurrency(b.dataset.v)));
   document.querySelectorAll("#set-lang-pills .pill").forEach((b) => b.addEventListener("click", () => applyLang(b.dataset.v)));
   $("set-auto-sync").addEventListener("change", (e) => {
@@ -2888,18 +2919,28 @@ window.addEventListener("resize", () => {
 /* ---------------- 启动 ---------------- */
 let APP_VERSION = "";  // 后端版本号 (app/__init__.py), 唯一版本源
 (async function init() {
-  let dark = false, cur = "CNY", l = "zh";
+  // bootstrap 已在首帧前设定根主题; init 从已应用根主题建立 state,
+  // 版本请求延迟或失败不能重置主题 (20260909 §3.4)
+  let dark = document.documentElement.dataset.theme === "dark", cur = "CNY", l = "zh";
   try {
-    dark = localStorage.getItem("gousage-dark") === "1";
     cur = localStorage.getItem("gousage-currency") || "CNY";
     l = localStorage.getItem("gousage-lang") || "zh";
   } catch (e) { /* ignore */ }
-  try { const v = await api("/api/version"); APP_VERSION = v.version || ""; } catch (e) { /* ignore */ }
   applyLang(l);
   applyDarkMode(dark);
   applyCurrency(cur);
+  try { const v = await api("/api/version"); APP_VERSION = v.version || ""; } catch (e) { /* ignore */ }
   bindEvents();
   try { state.settings = await api("/api/settings"); } catch (e) { /* ignore */ }
+  // 旧偏好迁移: 仅服务端 unset 且当前来源旧键有效时保存一次;
+  // 静态伺服无 seed 属性按 unset 处理; 随机旧端口/旧临时 WebView 存储中已不可访问的数据不承诺找回 (20260909 §3.4)
+  try {
+    const pref = document.documentElement.getAttribute("data-theme-preference");
+    if (!pref || pref === "unset") {
+      const old = localStorage.getItem("gousage-dark");
+      if (old === "1" || old === "0") setThemePreference(old === "1");
+    }
+  } catch (e) { /* ignore */ }
   syncSettingsPills();
   $("set-auto-sync").checked = state.settings.auto_sync !== false;
   $("set-overview-panel").checked = state.settings.show_accounts_panel === true;
