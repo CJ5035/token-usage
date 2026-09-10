@@ -1901,7 +1901,6 @@ function renderSettingsSyncProgress(progress) {
 /* ---------------- 账户总览面板 (多账户聚合) ---------------- */
 let ovSeq = 0;
 let cOvTrendChart = null;
-const OV_COLORS = ["#7c5cf6", "#4f8ef7", "#22c55e", "#d97706", "#06b6d4", "#ec4899"];
 
 /* 开关控制侧边栏入口显隐; 关闭时若停留在总览页则退回首页 */
 function applyOverviewPanel(show) {
@@ -1933,7 +1932,7 @@ async function loadOverview(quiet = false) {
 }
 
 function renderAccountOverview(data) {
-  const accounts = (data.accounts || []).map((a, i) => ({ ...a, color: OV_COLORS[i % OV_COLORS.length] }));
+  const accounts = (data.accounts || []).map((a, i) => ({ ...a, colorCss: `var(--account-${(i % 6) + 1})` }));   // 20260909 §3.3: 存变量名而非解析色, 主题切换即时生效
   // ---- 顶部汇总: 今日合计 ----
   const sum = accounts.reduce((acc, a) => {
     const tt = a.today || {};
@@ -1990,7 +1989,7 @@ function renderAccountCard(a) {
     quotaHtml = `<div class="ov-quota-empty">${t("quotaNotReady")}</div>`;
   }
   const tt = a.today || {};
-  const spark = sparklineSvg((a.today_trend || []).map((d) => d.input + d.output + d.reasoning), a.color);
+  const spark = sparklineSvg((a.today_trend || []).map((d) => d.input + d.output + d.reasoning), a.colorCss);
   return `<div class="card ov-acc">
     <div class="ov-acc-head">
       <span class="ov-acc-name">${escapeHtml(a.name)}</span>
@@ -2010,15 +2009,15 @@ function renderAccountCard(a) {
 }
 
 /* 24h 迷你趋势: 纯 SVG 折线 (无 Chart 实例, 轻量随卡片渲染) */
-function sparklineSvg(values, color) {
+function sparklineSvg(values, colorCss) {
   const w = 120, h = 30, n = values.length;
   if (!n) return `<svg viewBox="0 0 ${w} ${h}" class="spark"></svg>`;
   const max = Math.max(...values, 1);
   const step = n > 1 ? w / (n - 1) : w;
   const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - 2 - (v / max) * (h - 4)).toFixed(1)}`);
   return `<svg viewBox="0 0 ${w} ${h}" class="spark" preserveAspectRatio="none">
-    <polyline points="${pts.join(" ")}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
-    <polyline points="0,${h} ${pts.join(" ")} ${w},${h}" fill="${color}" opacity="0.12" stroke="none"/>
+    <polyline points="${pts.join(" ")}" fill="none" style="stroke:${colorCss}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <polyline points="0,${h} ${pts.join(" ")} ${w},${h}" style="fill:${colorCss}" fill-opacity="0.12" stroke="none"/>
   </svg>`;
 }
 
