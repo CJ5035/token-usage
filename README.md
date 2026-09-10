@@ -114,7 +114,7 @@ Python · pywebview (WebView2) · SQLite · Chart.js · pystray · zstandard
 
 ## 📬 联系
 
-- GitHub：[yphyphyph/opencode-go-gauge](https://github.com/yphyphyph/opencode-go-gauge)
+- GitHub：[CJ5035/token-usage](https://github.com/CJ5035/token-usage)
 - CSDN：[Ying_ph](https://blog.csdn.net/Ying_ph)
 
 ## 📄 License

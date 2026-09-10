@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from . import __version__
 
-REPO = "yphyphyph/opencode-go-gauge"
+REPO = "CJ5035/token-usage"
 RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 ATOM_URL = f"https://github.com/{REPO}/releases.atom"
 RELEASE_PAGE_URL = f"https://github.com/{REPO}/releases/latest"
