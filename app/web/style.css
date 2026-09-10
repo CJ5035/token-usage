@@ -546,6 +546,7 @@ html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
 .zcode-missing { margin: 12px 16px 14px; padding: 12px 14px; font-size: 12px; color: var(--text2); background: var(--muted); border-radius: 10px; }
 .zcode-chart-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text3); font-size: 12px; }
 .dsh-stats { margin-bottom: 12px; padding-bottom: 12px; }
+#dsh-tables { overflow-x: auto; }
 .dsh-stats .kpi-row { padding: 12px 14px 0; margin-bottom: 4px; }
 .dsh-stats .tbl + .tbl { margin-top: 12px; }
 .dsh-stats .tbl td { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }

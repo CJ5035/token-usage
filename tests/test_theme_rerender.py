@@ -179,16 +179,16 @@ def test_ch_color_still_used_by_chart_datasets():
 _NOANIM_FUNCS = [
     "chartToday", "chartReportStack", "chartReportDonut", "chartReportHourly",
     "chartOvTrend", "chartTrend", "chartZcodeTrend", "chartClaudecodeTrend", "chartModel",
-    "chartCodexTrend",   # Codex 交付一 T4: 统计页第 10 个图表函数
+    "chartCodexTrend", "chartDshTrend",  # 本地统计图也须禁用主题切换动画
 ]
 
 
-def test_nine_chart_functions_take_noanim_param():
+def test_all_chart_functions_take_noanim_param():
     src = _src()
     # 旧 9 个 + chartCodexTrend 逐个命名检查 (内容保留, 仅扩清单)
     for name in _NOANIM_FUNCS:
         assert re.search(rf"function {name}\([^)]*noAnim", src), f"{name} 缺少 noAnim 参数"
-    assert src.count("animation: noAnim ? false : undefined,") == 10
+    assert src.count("animation: noAnim ? false : undefined,") == 11
 
 
 def test_rerender_and_refresh_icons_pass_noanim_true():

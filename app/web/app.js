@@ -2479,6 +2479,15 @@ window.gousageOnLoginSuccess = async function () {
 function bindEvents() {
   document.querySelectorAll(".side-item").forEach((btn) => btn.addEventListener("click", () => switchPage(btn.dataset.page)));
 
+  // DSH 轮询只在可见的统计页运行；页面回到前台后立即按当前范围取一次快照。
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      if (state.page === "stats") { destroyDshTrend(); cancelDshRefresh(); }
+      return;
+    }
+    if (state.page === "stats") loadDshUsage().catch(() => {});
+  });
+
   document.querySelectorAll("#home-pills .pill").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll("#home-pills .pill").forEach((x) => x.classList.remove("active"));
     b.classList.add("active"); state.range = b.dataset.r; loadDashboard();

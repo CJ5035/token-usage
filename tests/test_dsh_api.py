@@ -567,3 +567,23 @@ class TestRangeQueries:
         assert "_steps" not in synced and "_steps" not in from_cache
         assert dsh_api._cache_payload["unkeyed_steps"] == 1
         assert dsh_api.get_dsh_usage()["unkeyed_steps"] == 1
+
+    def test_cached_range_changes_do_not_decompress_again(self, monkeypatch):
+        """V10: one frozen snapshot serves every TTL-range query without a log reread."""
+        now = datetime.now().astimezone()
+        snapshot = _range_snapshot(
+            _range_step(int(now.timestamp() * 1000), session="ws/today", output=100),
+            _range_step(int((now - timedelta(days=1)).timestamp() * 1000),
+                        session="ws/yesterday", output=20),
+        )
+        monkeypatch.setattr(dsh_api, "_cache_payload", snapshot)
+        monkeypatch.setattr(dsh_api, "_cache_ts", time_mod.time())
+        monkeypatch.setattr(dsh_api, "decompress_frames", lambda _: pytest.fail("unexpected log read"))
+
+        summaries = dsh_api.get_dsh_summaries("today", "yesterday", "7d", "30d", "all")
+
+        assert summaries["today"]["totals"]["tokens"] == 102
+        assert summaries["yesterday"]["totals"]["tokens"] == 22
+        assert summaries["7d"]["totals"]["tokens"] == 124
+        assert sum(row["tokens"] for row in summaries["7d"]["trend"]) == 124
+        assert summaries["30d"]["totals"] == summaries["all"]["totals"]

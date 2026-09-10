@@ -626,6 +626,34 @@ def test_report_daily_formats_pure_dsh_rows_and_merged_all_span(tmp_report_db):
     assert "dsh" in merged["series"] and all("-W" in label for label in merged["labels"])
 
 
+def test_report_daily_all_span_boundaries_and_channel_isolation(tmp_report_db):
+    """V6: DSH participates in all-span sizing but never leaks into a single channel."""
+    start = datetime(2024, 1, 1).date()
+    at_180 = db.report_daily("all", "dsh", extra_rows=[
+        {"date": start.isoformat(), "channel": "dsh", "value": 1},
+        {"date": (start + timedelta(days=179)).isoformat(), "channel": "dsh", "value": 2},
+    ])
+    at_181 = db.report_daily("all", "dsh", extra_rows=[
+        {"date": start.isoformat(), "channel": "dsh", "value": 1},
+        {"date": (start + timedelta(days=180)).isoformat(), "channel": "dsh", "value": 2},
+    ])
+    assert at_180["granularity"] == "week" and sum(at_180["series"]["dsh"]) == 3
+    assert at_181["granularity"] == "month" and sum(at_181["series"]["dsh"]) == 3
+
+    cross_year = db.report_daily("all", "dsh", extra_rows=[
+        {"date": "2022-11-01", "channel": "dsh", "value": 1},
+        {"date": "2023-01-01", "channel": "dsh", "value": 2},
+    ])
+    assert cross_year["granularity"] == "week" and "2023-W00" in cross_year["labels"]
+
+    ids = _seed_channels()
+    db.insert_usage_records([_mkrec("only-oc", _days_ago(1), inp=3, outp=4)], ids["opencode"])
+    isolated = db.report_daily("all", "opencode", extra_rows=[
+        {"date": "2020-01-01", "channel": "dsh", "value": 999},
+    ])
+    assert set(isolated["series"]) == {"opencode"}
+
+
 def test_other_channel_windows_request_does_not_query_dsh(tmp_report_db, monkeypatch):
     from app import dsh_api, server
 
