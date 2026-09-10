@@ -1,8 +1,8 @@
 # 实施文档：分渠道消耗趋势堆叠柱状图"头重脚轻"——按用量降序堆叠
 
-- **日期**：2026-09-09
-- **状态**：已实施（方案 A，用户已确认）
-- **关联诊断**：doc/bug-diagnosis-stats-bar-chart-order-20260909.md
+- **日期**：2026-09-09（2026-09-10 更新为重做版）
+- **状态**：修复已丢失，待重做（方案 A 仍有效；9-09 的修复未进 commit，在当日分层视图回退/多会话编辑中丢失，经 2026-09-10 诊断确认代码不存在）
+- **关联诊断**：doc/bug-diagnosis-stats-bar-chart-order-20260909.md、doc/bug-diagnosis-stack-chart-order-20260910.md
 
 ## 问题
 
@@ -24,10 +24,10 @@
   - 用量最大的渠道恒在底部，视觉重心在下；
   - 图例顺序随 dataset 顺序同步变化（图例即按降序列出，信息呈现更合理）；
   - 切换 range（今天/近7天/…）时各渠道总量不同，顺序可能变化——同屏内仍一致，可接受。
-- 修改点（仅前端 app.js，共 3 处，后端不动）：
-  1. `chartReportStack`（app.js:2282）：`Object.keys(d.series)` → 上述降序 `chs`；
-  2. `chartReportHourly`（app.js:2353）：同样处理（与趋势图保持一致）；
-  3. `chartReportDonut`（app.js:2314）：段顺序同步按总量降序（环形图本就以总量占比呈现，排序后与另两图图例顺序统一）。
+- 修改点（仅前端 app.js，共 3 处，后端不动；行号为 2026-09-10 当前工作区实测，9-09 原行号 2282/2314/2353 已因回退整体偏移失效）：
+  1. `chartReportStack`（app.js:2730，datasets 构造在 2744）：`Object.keys(d.series)` → 上述降序 `chs`（需在 `new Chart` 前提出一行 `const chs = ...`）；
+  2. `chartReportDonut`（app.js:2762，`const chs = Object.keys(d.series)` 在 2765）：`chs` 加 `.sort(...)` 降序（onClick 索引映射与 chs/data 同源同序，排序后天然一致）；
+  3. `chartReportHourly`（app.js:2801，`const chs = Object.keys(d.series)` 在 2811）：同样降序（与趋势图保持一致）。
 
 ### 方案 B：每根柱子内部按当天用量排序
 
@@ -41,8 +41,15 @@
 
 1. 用本地数据库副本启动服务，浏览器实测：分渠道消耗趋势、今日趋势、渠道占比三图的分段/图例顺序按总量降序，柱内大段垫底；
 2. 截图人工复核；
-3. 跑现有测试：`scripts/check_codex_ui.cjs`（UI 契约）与 `tests/` 下相关 pytest，确认无回归。
+3. `node --check app/web/app.js` 通过；
+4. 跑现有测试：`scripts/check_codex_ui.cjs`（UI 契约）与 `tests/` 下相关 pytest，确认无回归。
 
 ## 影响范围
 
 - 仅 `app/web/app.js` 三个图表渲染函数，纯展示层；后端接口、数据、导出等不受影响。
+
+## 2026-09-10 重做记录
+
+- 9-09 实施的排序修复未进 commit，且从未持久化：HEAD 与当前工作区三处均无 `.sort`，`git log --all -S "sort((a, b)"` 无相关命中——在当日分层视图手术式回退与多会话并发编辑 `app.js` 的过程中丢失。取证详见 doc/bug-diagnosis-stack-chart-order-20260910.md。
+- 方案内容不变（方案 A），上文修改点行号已更新为当前工作区实测值。
+- **提交要求**：本次重做经用户确认执行后，须随当次 commit 固化进版本库，避免再次丢失。
