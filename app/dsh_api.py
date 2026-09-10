@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from datetime import datetime
@@ -102,7 +103,9 @@ def decompress_frames(buf: bytes) -> str:
 def _as_int(value: Any) -> int:
     """数值字段归一化为 int; None/非法 → 0."""
     try:
-        return int(value)
+        if isinstance(value, bool) or not _is_number(value) or not math.isfinite(value):
+            return 0
+        return max(0, int(value))
     except (TypeError, ValueError):
         return 0
 
@@ -119,14 +122,18 @@ def _tokens_from_usage(u: dict) -> Optional[dict[str, int]]:
     对齐 dsh GUI 的 billedInputTokens); cache = cacheRead + cacheWrite 单独
     拆出; cacheWriteTokens / reasoningTokens 缺省按 0 兼容.
     """
-    has_input = _is_number(u.get("inputTokens"))
-    has_output = _is_number(u.get("outputTokens"))
+    has_input = _is_number(u.get("inputTokens")) and math.isfinite(u.get("inputTokens"))
+    has_output = _is_number(u.get("outputTokens")) and math.isfinite(u.get("outputTokens"))
     if not has_input and not has_output:
         return None
     cache = _as_int(u.get("cacheReadTokens")) + _as_int(u.get("cacheWriteTokens"))
+    cache_read = _as_int(u.get("cacheReadTokens"))
+    cache_write = _as_int(u.get("cacheWriteTokens"))
     return {
         "input": (_as_int(u.get("inputTokens")) if has_input else 0) + cache,
         "cache": cache,
+        "cache_read": cache_read,
+        "cache_write": cache_write,
         "output": _as_int(u.get("outputTokens")) if has_output else 0,
         "reasoning": _as_int(u.get("reasoningTokens")),
     }
@@ -134,7 +141,17 @@ def _tokens_from_usage(u: dict) -> Optional[dict[str, int]]:
 
 def _usage_key(data: dict) -> str:
     """事件的 turn:step 键 (turn/step 缺失以 0 兜底)."""
-    return f"{_as_int(data.get('turn'))}:{_as_int(data.get('step'))}"
+    turn, step = data.get("turn"), data.get("step")
+    if (isinstance(turn, bool) or not _is_number(turn) or not math.isfinite(turn) or turn < 0
+            or isinstance(step, bool) or not _is_number(step) or not math.isfinite(step) or step < 0):
+        return None
+    return f"{int(turn)}:{int(step)}"
+
+
+def _event_time(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not _is_number(value) or not math.isfinite(value) or value < 0:
+        return None
+    return int(value)
 
 
 # ---------------------------------------------------------------------------
@@ -144,12 +161,13 @@ def _usage_key(data: dict) -> str:
 
 def _new_bucket() -> dict[str, Any]:
     """空聚合桶 (steps=usage 条数, seconds=参与秒速的窗口秒和)."""
-    return {"steps": 0, "input": 0, "cache": 0, "output": 0, "reasoning": 0, "seconds": 0.0}
+    return {"steps": 0, "input": 0, "cache": 0, "cache_read": 0, "cache_write": 0,
+            "output": 0, "reasoning": 0, "seconds": 0.0, "tps_output": 0}
 
 
 def _add_bucket(dst: dict[str, Any], src: dict[str, Any]) -> None:
     """把 src 桶累加进 dst 桶 (seconds 直接相加, 保持加权口径)."""
-    for key in ("steps", "input", "cache", "output", "reasoning"):
+    for key in ("steps", "input", "cache", "cache_read", "cache_write", "output", "reasoning", "tps_output"):
         dst[key] += src[key]
     dst["seconds"] += src["seconds"]
 
@@ -190,11 +208,12 @@ def stat_log(log_path: Path, sid: str) -> Optional[dict[str, Any]]:
     models: dict[tuple[str, str], dict[str, Any]] = {}
     # 同 turn:step 的 usage 只留最后一份 (chunk 先行、message 收尾, 后到覆盖)
     step_usage: dict[str, dict[str, Any]] = {}
-    step_starts: dict[str, int] = {}
+    step_starts: dict[str, Optional[int]] = {}
+    unkeyed_steps = 0
     cur_provider = ""
     cur_model = ""
 
-    for line in text.splitlines():
+    for line_no, line in enumerate(text.splitlines(), 1):
         if not any(marker in line for marker in _INTERESTING_TYPES):
             continue
         try:
@@ -221,51 +240,65 @@ def stat_log(log_path: Path, sid: str) -> Optional[dict[str, Any]]:
             ):
                 tokens = _tokens_from_usage(chunk["usage"])
                 if tokens is not None:
-                    step_usage[_usage_key(data)] = {
-                        "tokens": tokens,
-                        "provider": cur_provider,
-                        "model": cur_model,
-                        "time": _as_int(event.get("time")),
-                    }
+                    key = _usage_key(data)
+                    if key is None:
+                        unkeyed_steps += 1
+                        key = f"unkeyed:{line_no}"
+                    old = step_usage.get(key)
+                    if old is None or old["kind"] != "message":
+                        step_usage[key] = {"tokens": tokens, "provider": old["provider"] if old else cur_provider,
+                            "model": old["model"] if old else cur_model, "time": _event_time(event.get("time")),
+                            "kind": "chunk", "final": False, "unkeyed": key.startswith("unkeyed:")}
         elif etype == "assistant/message":
             usage = data.get("usage")
             if isinstance(usage, dict):
                 tokens = _tokens_from_usage(usage)
                 if tokens is not None:
-                    step_usage[_usage_key(data)] = {
-                        "tokens": tokens,
-                        "provider": cur_provider,
-                        "model": cur_model,
-                        "time": _as_int(event.get("time")),
-                    }
+                    key = _usage_key(data)
+                    if key is None:
+                        unkeyed_steps += 1
+                        key = f"unkeyed:{line_no}"
+                    old = step_usage.get(key)
+                    step_usage[key] = {"tokens": tokens, "provider": old["provider"] if old else cur_provider,
+                        "model": old["model"] if old else cur_model, "time": _event_time(event.get("time")),
+                        "kind": "message", "final": True, "unkeyed": key.startswith("unkeyed:")}
         elif etype == "step/start":
-            step_starts[_usage_key(data)] = _as_int(event.get("time"))
+            key = _usage_key(data)
+            if key is not None:
+                step_starts[key] = _event_time(event.get("time"))
 
+    steps: list[dict[str, Any]] = []
     for key, sample in step_usage.items():
         tokens = sample["tokens"]
         provider = sample["provider"] or "unknown"
         bucket_p = providers.setdefault(provider, _new_bucket())
         bucket_m = models.setdefault((provider, sample["model"]), _new_bucket())
-        is_today = sample["time"] >= today_start
+        completed_ms = sample["time"]
+        is_future = completed_ms is not None and completed_ms > int(time.time() * 1000)
+        is_today = completed_ms is not None and not is_future and completed_ms >= today_start
         targets = [total, bucket_p, bucket_m] + ([today] if is_today else [])
         for bucket in targets:
             bucket["steps"] += 1
             bucket["input"] += tokens["input"]
             bucket["cache"] += tokens["cache"]
+            bucket["cache_read"] += tokens["cache_read"]
+            bucket["cache_write"] += tokens["cache_write"]
             bucket["output"] += tokens["output"]
             bucket["reasoning"] += tokens["reasoning"]
         # 秒速窗口: output ÷ (事件 time − step/start time), 四类剔除见 docstring
         start_ms = step_starts.get(key)
-        if tokens["output"] < MIN_OUTPUT_FOR_TPS or start_ms is None:
-            continue
-        window_s = (sample["time"] - start_ms) / 1000.0
-        if window_s <= 0 or tokens["output"] / window_s > MAX_TPS:
-            continue
-        total["seconds"] += window_s
-        bucket_p["seconds"] += window_s
-        bucket_m["seconds"] += window_s
-        if is_today:
-            today["seconds"] += window_s
+        valid_output, valid_seconds = 0, 0.0
+        if tokens["output"] >= MIN_OUTPUT_FOR_TPS and start_ms is not None and completed_ms is not None:
+            window_s = (completed_ms - start_ms) / 1000.0
+            if window_s > 0 and tokens["output"] / window_s <= MAX_TPS:
+                valid_output, valid_seconds = tokens["output"], window_s
+                for bucket in (total, bucket_p, bucket_m) + ((today,) if is_today else ()):
+                    bucket["seconds"] += window_s
+                    bucket["tps_output"] += valid_output
+        steps.append({"session_id": sid, "step_key": key, "completed_ms": completed_ms,
+                      "provider": provider, "model": sample["model"], **tokens,
+                      "valid_output": valid_output, "valid_seconds": valid_seconds,
+                      "final": sample["final"], "unkeyed": sample["unkeyed"], "future": is_future})
 
     return {
         "sid": sid,
@@ -273,6 +306,8 @@ def stat_log(log_path: Path, sid: str) -> Optional[dict[str, Any]]:
         "today": today,
         "providers": providers,
         "models": models,
+        "_steps": steps,
+        "unkeyed_steps": unkeyed_steps,
     }
 
 
@@ -285,12 +320,15 @@ def _totals_row(bucket: dict[str, Any]) -> dict[str, Any]:
     """total/today 输出行 (加权 tps = Σoutput ÷ Σ窗口秒, 无窗口时 0)."""
     seconds = bucket["seconds"]
     return {
+        "steps": bucket["steps"],
         "input": bucket["input"],
         "cache": bucket["cache"],
+        "cache_read": bucket["cache_read"],
+        "cache_write": bucket["cache_write"],
         "output": bucket["output"],
         "reasoning": bucket["reasoning"],
         "seconds": seconds,
-        "tps": bucket["output"] / seconds if seconds > 0 else 0.0,
+        "tps": bucket["tps_output"] / seconds if seconds > 0 else None,
     }
 
 
@@ -300,15 +338,19 @@ def _bucket_row(bucket: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]
     row["steps"] = bucket["steps"]
     row["input"] = bucket["input"]
     row["cache"] = bucket["cache"]
+    row["cache_read"] = bucket["cache_read"]
+    row["cache_write"] = bucket["cache_write"]
+    row["reasoning"] = bucket["reasoning"]
     row["output"] = bucket["output"]
     row["seconds"] = bucket["seconds"]
-    row["tps"] = bucket["output"] / bucket["seconds"] if bucket["seconds"] > 0 else 0.0
+    row["tps"] = bucket["tps_output"] / bucket["seconds"] if bucket["seconds"] > 0 else None
     return row
 
 
 def _empty_result() -> dict[str, Any]:
     """found=false 的空结果 (目录不存在/空目录), 数值全 0, 不抛异常."""
-    zeros = {"input": 0, "cache": 0, "output": 0, "reasoning": 0, "seconds": 0.0, "tps": 0.0}
+    zeros = {"input": 0, "cache": 0, "cache_read": 0, "cache_write": 0,
+             "output": 0, "reasoning": 0, "seconds": 0.0, "tps": None}
     return {
         "found": False,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -343,8 +385,14 @@ def scan() -> dict[str, Any]:
     today = _new_bucket()
     providers: dict[str, dict[str, Any]] = {}
     models: dict[tuple[str, str], dict[str, Any]] = {}
+    steps: list[dict[str, Any]] = []
+    unkeyed_steps = 0
     for path in files:
-        result = stat_log(path, path.parent.name)
+        try:
+            session_id = str(path.parent.relative_to(root))
+        except ValueError:
+            session_id = path.parent.name
+        result = stat_log(path, session_id)
         if result is None:
             continue
         _add_bucket(total, result["total"])
@@ -353,6 +401,8 @@ def scan() -> dict[str, Any]:
             _add_bucket(providers.setdefault(name, _new_bucket()), bucket)
         for key, bucket in result["models"].items():
             _add_bucket(models.setdefault(key, _new_bucket()), bucket)
+        steps.extend(result.get("_steps", []))
+        unkeyed_steps += result.get("unkeyed_steps", 0)
 
     provider_rows = [
         _bucket_row(bucket, {"provider": name})
@@ -374,6 +424,8 @@ def scan() -> dict[str, Any]:
         "today": _totals_row(today),
         "providers": provider_rows,
         "models": model_rows,
+        "_steps": steps,
+        "unkeyed_steps": unkeyed_steps,
     }
 
 

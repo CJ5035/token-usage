@@ -184,7 +184,7 @@ class TestSpeed:
         r = _scan(tmp_path, monkeypatch, events)
         # output<10 不参与秒速, token 照计
         assert r["total"]["seconds"] == 0.0
-        assert r["total"]["tps"] == 0.0
+        assert r["total"]["tps"] is None
         assert r["total"]["output"] == 9
 
     def test_zero_window_excluded(self, tmp_path, monkeypatch):
@@ -240,6 +240,31 @@ class TestSpeed:
 # ---------------------------------------------------------------------------
 
 class TestScanAggregation:
+    def test_cache_split_and_mixed_valid_invalid_speed(self, tmp_path, monkeypatch):
+        events = [
+            _ctx("p", "m"),
+            _step_start(1, 1, 1_000),
+            _msg(1, 1, 11_000, {"inputTokens": 10, "cacheReadTokens": 3,
+                                "cacheWriteTokens": 2, "outputTokens": 100}),
+            _step_start(1, 2, 11_000),
+            _msg(1, 2, 11_001, {"inputTokens": 0, "outputTokens": 1000}),
+        ]
+        r = _scan(tmp_path, monkeypatch, events)
+        assert r["total"]["input"] == 15
+        assert r["total"]["cache_read"] == 3
+        assert r["total"]["cache_write"] == 2
+        assert r["total"]["output"] == 1100
+        assert r["total"]["seconds"] == pytest.approx(10)
+        assert r["total"]["tps"] == pytest.approx(10)
+
+    def test_missing_key_is_unique_and_observable(self, tmp_path, monkeypatch):
+        events = [_ctx("p", "m"), _msg(None, 1, 1000, {"inputTokens": 1, "outputTokens": 10}),
+                  _msg(None, 1, 1000, {"inputTokens": 2, "outputTokens": 20})]
+        r = _scan(tmp_path, monkeypatch, events)
+        assert r["total"]["steps"] == 2
+        assert r["unkeyed_steps"] == 2
+        assert [s["step_key"] for s in r["_steps"]] == ["unkeyed:2", "unkeyed:3"]
+
     def test_total_vs_today_split(self, tmp_path, monkeypatch):
         today_ms = int(time_mod.time() * 1000)
         yesterday_ms = today_ms - 2 * 86_400_000
