@@ -22,7 +22,7 @@ import json
 import math
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -338,6 +338,7 @@ def _totals_row(bucket: dict[str, Any]) -> dict[str, Any]:
         "cache_write": bucket["cache_write"],
         "output": bucket["output"],
         "reasoning": bucket["reasoning"],
+        "tokens": bucket["input"] + bucket["output"],
         "seconds": seconds,
         "tps": bucket["tps_output"] / seconds if seconds > 0 else None,
     }
@@ -353,6 +354,7 @@ def _bucket_row(bucket: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]
     row["cache_write"] = bucket["cache_write"]
     row["reasoning"] = bucket["reasoning"]
     row["output"] = bucket["output"]
+    row["tokens"] = bucket["input"] + bucket["output"]
     row["seconds"] = bucket["seconds"]
     row["tps"] = bucket["tps_output"] / bucket["seconds"] if bucket["seconds"] > 0 else None
     return row
@@ -360,8 +362,9 @@ def _bucket_row(bucket: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]
 
 def _empty_result() -> dict[str, Any]:
     """found=false 的空结果 (目录不存在/空目录), 数值全 0, 不抛异常."""
-    zeros = {"input": 0, "cache": 0, "cache_read": 0, "cache_write": 0,
-             "output": 0, "reasoning": 0, "seconds": 0.0, "tps": None}
+    zeros = {"steps": 0, "input": 0, "cache": 0, "cache_read": 0,
+             "cache_write": 0, "output": 0, "reasoning": 0, "tokens": 0,
+             "seconds": 0.0, "tps": None}
     return {
         "found": False,
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -370,6 +373,8 @@ def _empty_result() -> dict[str, Any]:
         "today": dict(zeros),
         "providers": [],
         "models": [],
+        "_steps": [],
+        "unkeyed_steps": 0,
     }
 
 
@@ -440,6 +445,162 @@ def scan() -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# 历史范围查询 (只读扫描快照; 不重新读取日志)
+# ---------------------------------------------------------------------------
+
+_RANGES = {"today", "yesterday", "7d", "30d", "all"}
+
+
+def _local_timezone() -> Any:
+    """返回系统本地时区，留出小函数以便测试 DST 边界。"""
+    return datetime.now().astimezone().tzinfo
+
+
+def _local_now(now: datetime) -> datetime:
+    """把调用方捕获的时间转换为系统本地时区。"""
+    tz = _local_timezone()
+    if now.tzinfo is None:
+        return now.replace(tzinfo=tz)
+    return now.astimezone(tz)
+
+
+def _midnight_ms(day: Any, tz: Any) -> int:
+    """本地自然日零点转 epoch 毫秒；每个边界单独转换以适配 DST。"""
+    return int(datetime(day.year, day.month, day.day, tzinfo=tz).timestamp() * 1000)
+
+
+def _range_bounds(range_: str, now: datetime) -> tuple[str, int | None, int | None, int, Any]:
+    """规范化范围并返回 [start, end) 的本地自然日边界。"""
+    selected = range_ if range_ in _RANGES else "30d"
+    local_now = _local_now(now)
+    tz = local_now.tzinfo
+    today = local_now.date()
+    now_ms = int(local_now.timestamp() * 1000)
+    if selected == "all":
+        return selected, None, None, now_ms, tz
+    if selected == "today":
+        start_day = today
+    elif selected == "yesterday":
+        start_day = today - timedelta(days=1)
+    elif selected == "7d":
+        start_day = today - timedelta(days=6)
+    else:
+        start_day = today - timedelta(days=29)
+    end_day = today if selected == "yesterday" else today + timedelta(days=1)
+    return (selected, _midnight_ms(start_day, tz), _midnight_ms(end_day, tz), now_ms, tz)
+
+
+def _new_public_bucket() -> dict[str, Any]:
+    """范围查询的公开数值桶。"""
+    return _new_bucket()
+
+
+def _append_step(bucket: dict[str, Any], step: dict[str, Any]) -> None:
+    """把一个已过滤的步骤加入桶；测速样本沿用解析期判定。"""
+    bucket["steps"] += 1
+    for key in ("input", "cache", "cache_read", "cache_write", "output", "reasoning"):
+        bucket[key] += int(step.get(key) or 0)
+    seconds = step.get("valid_seconds") or 0.0
+    if seconds > 0:
+        bucket["seconds"] += seconds
+        bucket["tps_output"] += int(step.get("valid_output") or 0)
+
+
+def _public_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+    """移除内部 tps 累加字段并生成稳定的公开桶。"""
+    return _totals_row(bucket)
+
+
+def query_dsh_usage(snapshot: dict[str, Any], range_: str, now: datetime) -> dict[str, Any]:
+    """对单一扫描快照做纯历史范围查询。
+
+    ``snapshot`` 只读；范围使用本地自然日的半开区间，且统一剔除 ``now``
+    之后的完成记录。调用方负责只捕获一次 ``now`` 并传入此函数。
+    """
+    selected, start_ms, end_ms, now_ms, tz = _range_bounds(range_, now)
+    total = _new_public_bucket()
+    providers: dict[str, dict[str, Any]] = {}
+    models: dict[tuple[str, str], dict[str, Any]] = {}
+    daily: dict[str, dict[str, Any]] = {}
+    hourly = [_new_public_bucket() for _ in range(24)] if selected in {"today", "yesterday"} else []
+    session_ids: set[str] = set()
+    undated = future = provisional_steps = unkeyed_steps = 0
+    data_since_ms: int | None = None
+
+    raw_steps = snapshot.get("_steps", [])
+    if not isinstance(raw_steps, list):
+        raw_steps = []
+    for raw_step in raw_steps:
+        if not isinstance(raw_step, dict):
+            continue
+        completed_ms = raw_step.get("completed_ms")
+        if isinstance(completed_ms, bool) or not isinstance(completed_ms, int):
+            undated += 1
+            continue
+        if completed_ms > now_ms:
+            future += 1
+            continue
+        if data_since_ms is None or completed_ms < data_since_ms:
+            data_since_ms = completed_ms
+        if start_ms is not None and completed_ms < start_ms:
+            continue
+        if end_ms is not None and completed_ms >= end_ms:
+            continue
+
+        provider = str(raw_step.get("provider") or "unknown")
+        model = str(raw_step.get("model") or "")
+        _append_step(total, raw_step)
+        _append_step(providers.setdefault(provider, _new_public_bucket()), raw_step)
+        _append_step(models.setdefault((provider, model), _new_public_bucket()), raw_step)
+        local_time = datetime.fromtimestamp(completed_ms / 1000, tz)
+        day = local_time.date().isoformat()
+        _append_step(daily.setdefault(day, _new_public_bucket()), raw_step)
+        if hourly:
+            _append_step(hourly[local_time.hour], raw_step)
+        session_id = raw_step.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            session_ids.add(session_id)
+        if not raw_step.get("final", False):
+            provisional_steps += 1
+        if raw_step.get("unkeyed", False):
+            unkeyed_steps += 1
+
+    provider_rows = [
+        {"provider": provider, **_public_bucket(bucket)}
+        for provider, bucket in sorted(providers.items(), key=lambda item: item[1]["output"], reverse=True)
+    ]
+    model_rows = [
+        {"provider": provider, "model": model, **_public_bucket(bucket)}
+        for (provider, model), bucket in sorted(
+            models.items(), key=lambda item: (item[0][0], -item[1]["output"])
+        )
+    ]
+    trend = [
+        {"date": day, **_public_bucket(bucket)}
+        for day, bucket in sorted(daily.items())
+    ]
+    hourly_rows = [
+        {"hour": hour, **_public_bucket(bucket)} for hour, bucket in enumerate(hourly)
+    ]
+    data_since = (datetime.fromtimestamp(data_since_ms / 1000, tz).date().isoformat()
+                  if data_since_ms is not None else None)
+    return {
+        "range": selected,
+        "totals": _public_bucket(total),
+        "providers": provider_rows,
+        "models": model_rows,
+        "trend": trend,
+        "hourly": hourly_rows,
+        "sessions_count": len(session_ids),
+        "data_since": data_since,
+        "undated": undated,
+        "future": future,
+        "unkeyed_steps": unkeyed_steps,
+        "provisional_steps": provisional_steps,
+    }
+
+
 # 模块级 TTL 缓存 (scan 结果 + 时间戳) 与后台刷新状态 (_cache_payload 引用替换
 # 在 GIL 下原子, server 层只读透传严禁原地修改)
 _cache_payload: Optional[dict[str, Any]] = None
@@ -450,22 +611,60 @@ _FAIL_BACKOFF_SECONDS = 60.0  # 失败退避窗 (区别于正常 TTL 15s)
 _last_fail_ts = 0.0           # 最近一次失败时刻 (退避判定基准)
 
 
+def _legacy_payload(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """旧调用方所需字段的深度一层副本，绝不暴露扫描期内部步骤。"""
+    return {
+        "found": bool(snapshot.get("found")),
+        "updated_at": snapshot.get("updated_at"),
+        "sessions_count": int(snapshot.get("sessions_count") or 0),
+        "total": dict(snapshot.get("total") or _public_bucket(_new_bucket())),
+        "today": dict(snapshot.get("today") or _public_bucket(_new_bucket())),
+        "providers": [dict(row) for row in snapshot.get("providers", []) if isinstance(row, dict)],
+        "models": [dict(row) for row in snapshot.get("models", []) if isinstance(row, dict)],
+    }
+
+
+def _snapshot_for_read() -> tuple[dict[str, Any], bool]:
+    """取得当前快照，并在过期时惰性触发刷新；返回值仍由模块私有。"""
+    global _refreshing
+    now = time.time()
+    snapshot = _cache_payload
+    stale = snapshot is not None and now - _cache_ts >= CACHE_TTL_SECONDS
+    if (snapshot is None or stale) and not _refreshing and _fail_count < 3 and now - _last_fail_ts >= _FAIL_BACKOFF_SECONDS:
+        _refreshing = True
+        threading.Thread(target=_rescan_worker, daemon=True, name="gousage-dsh-rescan").start()
+        # 测试/某些极快调度器可能已同步完成 worker；仍只读取本次确定的缓存槽。
+        if snapshot is None:
+            snapshot = _cache_payload
+    return (snapshot if snapshot is not None else _empty_result()), stale
+
+
 def get_dsh_usage() -> dict[str, Any]:
-    """读 dsh 用量: 15s TTL 缓存内直接返回; 过期即返 stale 并触发后台重扫.
+    """返回兼容旧端点的公开副本，并在 TTL 过期时后台刷新。
 
     冷启动 (无缓存) 返回 found=false 空态不阻塞首屏; 后台重扫完成前持续
     返回 stale, 完成后下一次调用取到新数据 (无自动轮询, 不做广播).
     """
-    global _cache_payload, _cache_ts, _refreshing, _fail_count
-    now = time.time()
-    if _cache_payload is not None and now - _cache_ts < CACHE_TTL_SECONDS:
-        return _cache_payload
-    # 后台刷新守卫: 防重入 + 连续失败 >=3 次停止自动重试 (降级路径见 scan_sync)
-    # + 失败退避 60s 内不再 spawn
-    if not _refreshing and _fail_count < 3 and now - _last_fail_ts >= _FAIL_BACKOFF_SECONDS:
-        _refreshing = True
-        threading.Thread(target=_rescan_worker, daemon=True, name="gousage-dsh-rescan").start()
-    return _cache_payload if _cache_payload is not None else _empty_result()  # 冷启动空态, found=false 天然兼容
+    snapshot, _ = _snapshot_for_read()
+    return _legacy_payload(snapshot)
+
+
+def get_dsh_summary(range_: str) -> dict[str, Any]:
+    """返回范围聚合和刷新状态；内部快照及路径、日志内容永不序列化。"""
+    captured_now = datetime.now().astimezone()
+    snapshot, stale = _snapshot_for_read()
+    retry_after = 0
+    if _fail_count and _last_fail_ts:
+        retry_after = max(0, int(math.ceil(_FAIL_BACKOFF_SECONDS - (time.time() - _last_fail_ts))))
+    return {
+        "found": bool(snapshot.get("found")),
+        "scanning": _refreshing,
+        "stale": stale,
+        "refresh_error": bool(_fail_count),
+        "updated_at": snapshot.get("updated_at"),
+        "retry_after_seconds": retry_after,
+        **query_dsh_usage(snapshot, range_, captured_now),
+    }
 
 
 def degraded() -> bool:
@@ -484,7 +683,7 @@ def scan_sync() -> dict[str, Any]:
     _cache_payload, _cache_ts = payload, time.time()
     _fail_count = 0
     _last_fail_ts = 0.0
-    return payload
+    return _legacy_payload(payload)
 
 
 def _rescan_worker() -> None:

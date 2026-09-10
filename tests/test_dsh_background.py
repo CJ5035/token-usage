@@ -96,7 +96,8 @@ def test_ttl_expired_returns_stale_and_spawns_refresh(tmp_path, monkeypatch):
 
     _write_session(tmp_path, "ws", "s2")
     r = dsh_api.get_dsh_usage()
-    assert r is stale                       # 过期即返 stale (缓存对象本体)
+    assert r is not stale                   # 过期即返 stale 的公开副本
+    assert r["sessions_count"] == stale["sessions_count"]
     assert r["sessions_count"] == 1
     assert spawned == [dsh_api._rescan_worker]   # 且触发了后台刷新 (仅 spawn 未执行)
     assert dsh_api._refreshing is True
@@ -199,7 +200,8 @@ def test_cold_failure_writes_empty_result(tmp_path, monkeypatch):
 
     r = dsh_api.get_dsh_usage()   # 冷启动 + 扫描失败 → 写空态兜底, 不抛错
     assert r["found"] is False
-    assert dsh_api._cache_payload is r         # 空态入缓存 (消解 TTL 短路永不命中的退避漏洞)
+    assert dsh_api._cache_payload is not r     # 公开副本不暴露可变缓存
+    assert dsh_api._cache_payload["found"] is r["found"]
     assert dsh_api._fail_count == 1
 
 
@@ -217,7 +219,8 @@ def test_scan_sync_success_resets_fail_state(tmp_path, monkeypatch):
 
     payload = dsh_api.scan_sync()
     assert payload["found"] is True
-    assert dsh_api._cache_payload is payload   # 写缓存
+    assert dsh_api._cache_payload is not payload  # 写缓存，返回公开副本
+    assert dsh_api._cache_payload["found"] is payload["found"]
     assert dsh_api._cache_ts > 0
     assert dsh_api._fail_count == 0            # 复位失败计数
     assert dsh_api._last_fail_ts == 0.0        # 退出退避窗

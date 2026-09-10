@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import json
 import time as time_mod
+from copy import deepcopy
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 import zstandard
@@ -130,6 +133,8 @@ class TestParsing:
         assert r["total"]["input"] == 200
         assert r["total"]["output"] == 20
         assert r["providers"][0]["steps"] == 1
+        assert r["_steps"][0]["final"] is True
+        assert r["_steps"][0]["completed_ms"] == 2000
 
     def test_context_switch_attributes_usage(self, tmp_path, monkeypatch):
         events = [
@@ -361,8 +366,132 @@ class TestCache:
         assert r1["found"] is True
         assert r1["sessions_count"] == 1
 
-        # TTL 内: 改文件后仍返回旧值 (同一对象, 不重扫)
+        # TTL 内: 改文件后仍返回旧值，但公开副本不能让调用方改写缓存。
         _write_session(tmp_path, "ws", "session-2", events)
         r2 = dsh_api.get_dsh_usage()
-        assert r2 is r1
+        assert r2 is not r1
+        assert r2 == r1
         assert r2["sessions_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 6. 历史范围聚合
+# ---------------------------------------------------------------------------
+
+def _range_step(completed: int | None, *, session="ws/s1", provider="p", model="m",
+                output=10, final=True, unkeyed=False):
+    return {
+        "session_id": session,
+        "step_key": "1:1",
+        "completed_ms": completed,
+        "provider": provider,
+        "model": model,
+        "input": 2,
+        "cache": 1,
+        "cache_read": 1,
+        "cache_write": 0,
+        "output": output,
+        "reasoning": 0,
+        "valid_output": output,
+        "valid_seconds": 2.0,
+        "final": final,
+        "unkeyed": unkeyed,
+    }
+
+
+def _range_snapshot(*steps):
+    return {"found": True, "updated_at": "2024-01-01T00:00:00", "sessions_count": 9,
+            "_steps": list(steps), "unkeyed_steps": 0}
+
+
+class TestRangeQueries:
+    def test_natural_day_boundaries_and_sessions_are_range_scoped(self, monkeypatch):
+        tz = ZoneInfo("America/New_York")
+        monkeypatch.setattr(dsh_api, "_local_timezone", lambda: tz)
+        now = datetime(2024, 3, 11, 12, tzinfo=tz)
+        midnight = lambda day, hour=0: int(datetime(2024, 3, day, hour, tzinfo=tz).timestamp() * 1000)
+        snapshot = _range_snapshot(
+            _range_step(midnight(10), session="ws/a", output=10),
+            _range_step(midnight(11), session="ws/a", output=20),
+            _range_step(midnight(11, 13), session="ws/b", output=30),
+        )
+
+        yesterday = dsh_api.query_dsh_usage(snapshot, "yesterday", now)
+        today = dsh_api.query_dsh_usage(snapshot, "today", now)
+        seven_days = dsh_api.query_dsh_usage(snapshot, "7d", now)
+
+        assert yesterday["totals"]["output"] == 10
+        assert yesterday["sessions_count"] == 1
+        assert today["totals"]["output"] == 20       # 13:00 is after captured now
+        assert today["totals"]["tokens"] == 22
+        assert today["sessions_count"] == 1            # relative session identity de-duplicates
+        assert [row["date"] for row in seven_days["trend"]] == ["2024-03-10", "2024-03-11"]
+        assert len(today["hourly"]) == 24
+        assert dsh_api.query_dsh_usage(snapshot, "7d", now)["hourly"] == []
+
+    def test_dst_day_boundary_uses_local_calendar_conversion(self, monkeypatch):
+        tz = ZoneInfo("America/New_York")
+        monkeypatch.setattr(dsh_api, "_local_timezone", lambda: tz)
+        now = datetime(2024, 11, 4, 12, tzinfo=tz)
+        _, start_ms, end_ms, _, _ = dsh_api._range_bounds("yesterday", now)
+        assert end_ms - start_ms == 25 * 60 * 60 * 1000
+
+    def test_future_undated_and_provisional_steps_are_diagnostics(self, monkeypatch):
+        tz = ZoneInfo("UTC")
+        monkeypatch.setattr(dsh_api, "_local_timezone", lambda: tz)
+        now = datetime(2024, 1, 2, 12, tzinfo=tz)
+        now_ms = int(now.timestamp() * 1000)
+        snapshot = _range_snapshot(
+            _range_step(now_ms - 1_000, final=False, unkeyed=True),
+            _range_step(now_ms + 1_000, session="ws/future"),
+            _range_step(None, session="ws/undated"),
+        )
+
+        result = dsh_api.query_dsh_usage(snapshot, "today", now)
+        assert result["totals"]["steps"] == 1
+        assert result["future"] == 1
+        assert result["undated"] == 1
+        assert result["provisional_steps"] == 1
+        assert result["unkeyed_steps"] == 1
+
+    def test_same_cached_snapshot_rebuckets_after_midnight_without_mutation(self, monkeypatch):
+        tz = ZoneInfo("UTC")
+        monkeypatch.setattr(dsh_api, "_local_timezone", lambda: tz)
+        before = datetime(2024, 1, 1, 23, 59, tzinfo=tz)
+        after = before + timedelta(minutes=2)
+        snapshot = _range_snapshot(
+            _range_step(int(datetime(2024, 1, 1, 23, 58, tzinfo=tz).timestamp() * 1000), output=10),
+            _range_step(int(datetime(2024, 1, 2, 0, 1, tzinfo=tz).timestamp() * 1000), output=20),
+        )
+        original = deepcopy(snapshot)
+
+        assert dsh_api.query_dsh_usage(snapshot, "today", before)["totals"]["output"] == 10
+        assert dsh_api.query_dsh_usage(snapshot, "today", after)["totals"]["output"] == 20
+        assert snapshot == original
+
+    def test_summary_is_serializable_and_does_not_expose_cache_steps(self, monkeypatch):
+        now = datetime.now().astimezone()
+        now_ms = int(now.timestamp() * 1000)
+        bucket = {"steps": 1, "input": 2, "cache": 1, "cache_read": 1,
+                  "cache_write": 0, "output": 10, "reasoning": 0,
+                  "tokens": 12, "seconds": 2.0, "tps": 5.0}
+        snapshot = _range_snapshot(_range_step(now_ms))
+        snapshot.update({"total": dict(bucket), "today": dict(bucket),
+                         "providers": [{"provider": "p", **bucket}],
+                         "models": [{"provider": "p", "model": "m", **bucket}]})
+        dsh_api._cache_payload = snapshot
+        dsh_api._cache_ts = time_mod.time()
+
+        summary = dsh_api.get_dsh_summary("today")
+        empty_range = dsh_api.get_dsh_summary("yesterday")
+        legacy = dsh_api.get_dsh_usage()
+        legacy["total"]["output"] = 999
+
+        assert summary["found"] is True
+        assert summary["updated_at"] is not None
+        assert empty_range["found"] is True
+        assert empty_range["totals"]["steps"] == 0
+        assert {"scanning", "stale", "refresh_error", "retry_after_seconds"} <= set(summary)
+        assert "_steps" not in summary and "session_id" not in json.dumps(summary)
+        assert dsh_api._cache_payload["total"]["output"] == 10
+        json.dumps(summary)
