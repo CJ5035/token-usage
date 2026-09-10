@@ -1336,7 +1336,7 @@ def _dsh_range(summary: dict[str, Any], range_: str) -> dict[str, Any]:
     start = None if range_ == "all" else now - timedelta(days=days[range_])
     end = now if range_ == "yesterday" else now + timedelta(days=1)
     total = {field: 0 for field in _DSH_BUCKET_FIELDS}
-    speed_output = 0
+    valid_output = 0.0
     for row in summary.get("trend", []):
         try:
             day = datetime.fromisoformat(row["date"]).date()
@@ -1346,9 +1346,13 @@ def _dsh_range(summary: dict[str, Any], range_: str) -> dict[str, Any]:
             continue
         for field in _DSH_BUCKET_FIELDS:
             total[field] += row.get(field) or 0
-        if (row.get("seconds") or 0) > 0:
-            speed_output += row.get("output") or 0
-    total["tps"] = speed_output / total["seconds"] if total["seconds"] else None
+        seconds = row.get("seconds") or 0
+        tps = row.get("tps")
+        if seconds > 0 and isinstance(tps, (int, float)) and not isinstance(tps, bool):
+            # Task 2's public tps is valid-output / valid-seconds. Reconstitute that
+            # numerator rather than using total output, which includes rejected samples.
+            valid_output += tps * seconds
+    total["tps"] = valid_output / total["seconds"] if total["seconds"] else None
     return {**summary, "range": range_, "totals": total}
 
 
@@ -1717,13 +1721,15 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             # 连续 3 次后台扫描失败的降级: 同步重扫一次; 失败异常透传由外层 500
             # 兜底, 前端 catch 后 toast 且保留旧内容
             dsh_api.scan_sync()
-            summary = dsh_api.get_dsh_summary(range_)
+            snapshot = dsh_api.get_dsh_summary("all")
+            summary = _dsh_range(snapshot, range_)
             _json_response(handler, {**summary, "total": summary.get("totals") or {},
-                                     "today": _dsh_range(summary, "today").get("totals") or {}})
+                                     "today": _dsh_range(snapshot, "today").get("totals") or {}})
             return
-        summary = dsh_api.get_dsh_summary(range_)
+        snapshot = dsh_api.get_dsh_summary("all")
+        summary = _dsh_range(snapshot, range_)
         _json_response(handler, {**summary, "total": summary.get("totals") or {},
-                                 "today": _dsh_range(summary, "today").get("totals") or {}})
+                                 "today": _dsh_range(snapshot, "today").get("totals") or {}})
         return
 
     if route == "/api/logout" and method == "POST":
@@ -1936,7 +1942,9 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             _maybe_trigger_codex_import()
         payload = db.report_hourly(date_, channel)
         if channel in (None, "dsh"):
-            payload = _merge_dsh_hourly(payload, dsh_api.get_dsh_summary(date_))
+            dsh = dsh_api.get_dsh_summary(date_)
+            payload = _merge_dsh_hourly(payload, dsh)
+            payload["dsh_status"] = _dsh_status(dsh)
         _json_response(handler, payload)
         return
 

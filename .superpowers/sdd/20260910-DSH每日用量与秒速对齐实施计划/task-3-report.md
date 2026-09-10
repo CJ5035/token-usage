@@ -30,3 +30,16 @@
 ## 关注点
 
 - DSH 费用和请求数没有可用原始口径，因此混合汇总中的数值只代表 DB 已知部分；响应以 `cost_partial` 和 `request_count_exact=false` 明示这一点。
+
+## Fix round 1
+
+- `_dsh_range` 现在以 Task 2 每日聚合的 `tps × seconds` 恢复有效测速分子；不再使用全部 output，因此被 parser 排除的测速样本不会污染跨范围 TPS。
+- `/api/report/hourly` 在 DSH 参与时始终从同一次摘要写入 `dsh_status`，包括 found 但选定日期没有 steps/tokens 的空桶响应；`buckets`、`series` 与 24 桶形状保持不变。
+- `/api/dsh/usage` 统一读取一次 `all` 摘要，再派生请求 range 和兼容 `today` 字段。因此 `range=yesterday` 仍返回 yesterday totals，同时 `today` 反映同一快照的真实 today，而不增加扫描。
+
+### Fix round 1 验证
+
+- 回归用例将总 output `1000`、有效测速 `seconds=10`、`tps=10` 的拒绝样本场景送入 `/api/dsh/usage?range=yesterday`，断言 today 仍为 `10 tps`，请求只读取一次 `all` 摘要。
+- 覆盖 hourly 空用量的完整六字段 `dsh_status`。
+- `pytest -q tests/test_report_api.py tests/test_empty_state.py tests/test_codex_server.py tests/test_dsh_api.py tests/test_dsh_background.py`：`125 passed, 3 skipped`。
+- `python -m compileall -q app/server.py tests/test_report_api.py` 与 `git diff --check`：通过。

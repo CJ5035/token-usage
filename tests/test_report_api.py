@@ -633,3 +633,48 @@ def test_other_channel_windows_request_does_not_query_dsh(tmp_report_db, monkeyp
     monkeypatch.setattr(dsh_api, "get_dsh_summary", lambda _: pytest.fail("unexpected DSH query"))
     response = server._report_windows_response("opencode")
     assert "dsh_status" not in response
+
+
+def test_dsh_range_preserves_valid_speed_and_usage_today_alias(tmp_report_db, monkeypatch):
+    """A rejected speed sample must not turn the valid 10 tps aggregate into 100."""
+    from app import dsh_api
+
+    today = datetime.now().astimezone().date()
+    valid_today = {"date": today.isoformat(), "steps": 2, "input": 0, "cache": 0,
+                   "cache_read": 0, "cache_write": 0, "output": 1000, "reasoning": 0,
+                   "tokens": 1000, "seconds": 10.0, "tps": 10.0}
+    yesterday = {"date": (today - timedelta(days=1)).isoformat(), "steps": 1, "input": 0,
+                 "cache": 0, "cache_read": 0, "cache_write": 0, "output": 20,
+                 "reasoning": 0, "tokens": 20, "seconds": 2.0, "tps": 10.0}
+    all_totals = {key: sum(row[key] for row in (valid_today, yesterday))
+                  for key in ("steps", "input", "cache", "cache_read", "cache_write", "output",
+                              "reasoning", "tokens", "seconds")}
+    all_totals["tps"] = 10.0
+    calls = []
+
+    def summary(range_):
+        calls.append(range_)
+        return {"found": True, "scanning": False, "stale": False, "refresh_error": False,
+                "updated_at": "2026-09-10T12:00:00", "retry_after_seconds": 0,
+                "range": "all", "totals": all_totals, "trend": [yesterday, valid_today],
+                "hourly": [], "sessions_count": 2, "data_since": yesterday["date"]}
+
+    monkeypatch.setattr(dsh_api, "get_dsh_summary", summary)
+    monkeypatch.setattr(dsh_api, "degraded", lambda: False)
+    response = _api_payload("/api/dsh/usage", {"range": ["yesterday"]})
+    assert calls == ["all"]
+    assert response["range"] == "yesterday" and response["totals"]["tokens"] == 20
+    assert response["today"]["tokens"] == 1000 and response["today"]["tps"] == 10.0
+
+
+def test_hourly_dsh_status_is_present_even_without_usage(tmp_report_db, monkeypatch):
+    from app import dsh_api
+
+    status = {"found": True, "scanning": True, "stale": True, "refresh_error": True,
+              "updated_at": "2026-09-10T12:00:00", "retry_after_seconds": 42}
+    monkeypatch.setattr(dsh_api, "get_dsh_summary", lambda range_: {
+        **status, "range": range_, "totals": {"steps": 0, "tokens": 0},
+        "trend": [], "hourly": [], "sessions_count": 0, "data_since": None})
+    payload = _api_payload("/api/report/hourly", {"date": ["today"], "channel": ["dsh"]})
+    assert payload["dsh_status"] == status
+    assert len(payload["buckets"]) == 24 and payload["series"] == {}
