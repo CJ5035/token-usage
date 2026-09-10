@@ -983,6 +983,24 @@ def _json_response(handler: BaseHTTPRequestHandler, data: Any, status: int = 200
     handler.wfile.write(body)
 
 
+def _inject_theme_seed(body: bytes) -> bytes:
+    """首页主题预置 (20260909 §3.4): 仅注入 data-theme-preference 枚举 (light/dark/unset),
+    无需等待任何 API 请求; 不注入完整 settings/账号/凭据; 读取失败按 unset."""
+    try:
+        pref = db.get_settings().get("theme")
+    except Exception:  # noqa: BLE001 偏好读取失败按未设置处理
+        pref = None
+    seed = pref if pref in ("light", "dark") else "unset"
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return body
+    marker = 'data-theme="light"'
+    if marker not in text:
+        return body
+    return text.replace(marker, f'{marker} data-theme-preference="{seed}"', 1).encode("utf-8")
+
+
 def _static_response(handler: BaseHTTPRequestHandler, rel: str) -> None:
     # 防目录穿越
     rel = rel.lstrip("/")
@@ -1000,6 +1018,8 @@ def _static_response(handler: BaseHTTPRequestHandler, rel: str) -> None:
     except OSError:
         handler.send_error(500)
         return
+    if rel == "index.html":
+        body = _inject_theme_seed(body)   # Content-Length 在下方按注入后字节重算
     handler.send_response(200)
     handler.send_header("Content-Type", ctype)
     handler.send_header("Content-Length", str(len(body)))

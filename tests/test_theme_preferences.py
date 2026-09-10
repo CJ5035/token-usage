@@ -58,3 +58,76 @@ def test_save_theme_preserves_unknown_keys_and_sync_config(tmp_codex_db):
     raw = db._raw_payload(db.get_db())
     assert raw.get("key_names") == {"k1": "生产 Key"}, "theme 保存覆盖了未知键"
     assert db.get_settings()["sync_interval_sec"] == 900, "theme 保存覆盖了同步配置"
+
+
+# ---------------------------------------------------------------------------
+# 2. 首页主题预置 (§3.4: 只注入主题枚举, Content-Length 重算, 无敏感值)
+# ---------------------------------------------------------------------------
+
+
+class _FakeHandler:
+    """_static_response 最小 handler 替身 (捕获状态/头/体)."""
+
+    def __init__(self):
+        self.status = None
+        self.headers = {}
+        self.body = b""
+        self.error = None
+        self.wfile = self
+
+    def send_response(self, code):
+        self.status = code
+
+    def send_header(self, key, value):
+        self.headers[key] = value
+
+    def end_headers(self):
+        pass
+
+    def send_error(self, code):
+        self.error = code
+
+    def write(self, data):
+        self.body += data
+
+
+def _serve_index() -> _FakeHandler:
+    handler = _FakeHandler()
+    server._static_response(handler, "index.html")
+    return handler
+
+
+def test_index_seed_dark(tmp_codex_db):
+    db.save_settings({"theme": "dark"})
+    h = _serve_index()
+    assert h.status == 200 and h.error is None
+    text = h.body.decode("utf-8")
+    assert 'data-theme-preference="dark"' in text
+    assert h.headers["Content-Length"] == str(len(h.body)), "注入后 Content-Length 未重算"
+    assert h.headers["Cache-Control"] == "no-cache"
+
+
+def test_index_seed_light_and_unset(tmp_codex_db):
+    db.save_settings({"theme": "light"})
+    assert 'data-theme-preference="light"' in _serve_index().body.decode("utf-8")
+    db.save_settings({"theme": "dark"})
+    db._write_payload(db.get_db(), {})   # 模拟无偏好
+    db.get_db().commit()
+    assert 'data-theme-preference="unset"' in _serve_index().body.decode("utf-8")
+
+
+def test_index_seed_contains_no_sensitive_values(tmp_codex_db):
+    db.save_key_names({"k1": "生产 Key 绝密"})
+    db.save_settings({"theme": "dark", "sync_interval_sec": 900})
+    text = _serve_index().body.decode("utf-8")
+    assert "生产 Key 绝密" not in text and "key_names" not in text
+    assert "sync_interval_sec" not in text, "首页注入了 theme 以外的设置"
+
+
+def test_inject_theme_seed_pure_function(tmp_codex_db):
+    raw = '<html lang="zh-CN" data-theme="light">'.encode("utf-8")
+    out = server._inject_theme_seed(raw)
+    assert b'data-theme-preference=' in out
+    # 非 index 内容无标记时原样返回
+    assert server._inject_theme_seed(b"plain bytes") == b"plain bytes"
+
