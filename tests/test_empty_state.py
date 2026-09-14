@@ -114,7 +114,7 @@ def test_hourly_empty_key_passed_by_call_sites_range_aware():
     """emptyKey 档位联动由调用点显式传参 (架构师 R2 轮: 图函数不读全局 state.range)."""
     src = _src()
     load = _strip_comments(_extract_fn(src, "loadReportAll"))
-    assert 'chartReportHourly(hourly, undefined, range === "today" ? "noUsageToday" : "noDataInRange");' in load
+    assert 'chartReportHourly(hourly, noAnim, range === "today" ? "noUsageToday" : "noDataInRange");' in load
     rerender = _strip_comments(_extract_fn(src, "rerenderCharts"))
     assert ('chartReportHourly(reportHourlyCache.data, true, reportHourlyCache.range === "today"'
             ' ? "noUsageToday" : "noDataInRange");' in rerender)

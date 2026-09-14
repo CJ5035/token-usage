@@ -55,3 +55,22 @@ def test_data_since_column_uses_real_dsh_ranges():
     assert 'dataSinceToday' not in js
     assert "r.data_since ||" in js
     assert "renderChannelTable(rows.rows, rows.summary)" in js
+
+
+def test_codex_summary_renders_only_range_row():
+    """20260911 问题2: 今日行 (data.today) 不再渲染, KPI 仅所选范围口径一行;
+    DOM 契约保留 #codex-today-kpis (恒隐藏, 见 test_codex_stats_nodes)。
+
+    断言2 必须锚定"显示路径"那一次赋值: 函数内早退分支 (db_found === false) 本就含
+    同一句 `todayKpis.hidden = true;`, 仅用 `in body` 无法区分"显示路径置 true"与
+    "显示路径整行被删" —— 后者会让 #codex-today-kpis 空着却可见 (hidden 默认 false,
+    index.html 未声明 hidden), 故按早退 return 之后的正尾段计数。
+    """
+    js = (ROOT / "app/web/app.js").read_text(encoding="utf-8")
+    start = js.index("function renderCodexSummary(")
+    body = js[start:js.index("\n}", start)]
+    assert "cards(data.today" not in body        # 今日行不再取数渲染
+    assert "todayKpis.hidden = false" not in body
+    # 早退分支之后即显示路径正尾段, 其中必须恰好有一次 `todayKpis.hidden = true;`
+    tail = body[body.index("if (cCodexTrend) { cCodexTrend.destroy(); cCodexTrend = null; }"):]
+    assert tail.count("todayKpis.hidden = true;") == 1

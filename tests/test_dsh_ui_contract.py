@@ -121,3 +121,32 @@ def test_dsh_unknown_home_values_and_data_since_are_safe():
     assert 'r.channel === "dsh" ? dshUnavailableCell("dshRequestsUnavailable")' in js
     assert 'r.channel === "dsh" ? dshUnavailableCell("dshCostUnavailable")' in js
     assert "escapeHtml(r.data_since ||" in js
+
+
+def test_dsh_home_tick_avoids_full_dashboard_reload():
+    """20260911 问题1 方案A②: 首页 all 页签 DSH 周期刷新只静默刷状态条,
+    不再整页 loadDashboard (曾致三图每 15s destroy+重建并重播入场动画);
+    dsh 页签保留数据保活但 noAnim。重武装仍只经 scheduleDshRefresh (唯一 setTimeout)。"""
+    js = (ROOT / "app/web/app.js").read_text(encoding="utf-8")
+    t0 = js.index("function dshSchedulerTick(")
+    tick = js[t0:js.index("\n}", t0)]
+    assert 'refreshHomeDshStrip() : loadDashboard(true, true)' in tick   # all 仅刷状态条 / dsh 保活 noAnim
+    assert "loadDashboard(true)" not in tick                             # 旧的单参整页刷新已移除
+    s0 = js.index("async function refreshHomeDshStrip")
+    strip = js[s0:js.index("\n}", s0)]
+    assert 'renderHomeDshStatus(w.dsh_status)' in strip                  # 复用状态条渲染 (内部重武装)
+    assert "scheduleDshRefresh(" in strip                                # 失败退避也重武装
+    assert 'await api("/api/report/windows")' in strip
+    assert js.count("dshRefreshTimer = setTimeout") == 1                 # 周期唯一入口不破坏
+    # 修复轮3 根因: renderHomeDshStatus 收到无 dsh_status 时不得拆台
+    # (否则 scheduleDshRefresh(undefined) 在 :1125 先 clear 再 return, 只清不装)。
+    h0 = js.index("function renderHomeDshStatus(")
+    home_status = js[h0:js.index("\n}", h0)]
+    assert "if (!status) return;" in home_status                         # 无状态则不触碰 timer
+    assert "scheduleDshRefresh(status);" in home_status                  # 有状态照旧重武装
+    # 顺序即语义: 守卫必须排在重武装之前, 颠倒则等价于修复失效 (仅断言两条子串抓不到)
+    assert (home_status.index("if (!status) return;")
+            < home_status.index("scheduleDshRefresh(status);"))
+    # 纵深防御: 单渠道调用点也不再把缺 dsh_status 的响应送进状态条渲染
+    load_dash = js[js.index("async function loadDashboard("):js.index("\n}", js.index("async function loadDashboard("))]
+    assert "if (totals.dsh_status) renderHomeDshStatus(totals.dsh_status);" in load_dash

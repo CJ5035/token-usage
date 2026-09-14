@@ -644,7 +644,7 @@ function renderDashboardError(e) {
 let loadSeq = 0;
 let chSeq = 0;   // 单渠道响应序号: 快速连点渠道 tab 时丢弃旧响应 (方案4④)
 let allSeq = 0;  // all 分支响应序号: 与 chSeq 独立 (各自独立 seq 最小方案; #report-all/#report-single 独立容器, 切换必重发, 级联失效仅在实测乱序覆盖时再加)
-async function loadDashboard(quiet = false) {
+async function loadDashboard(quiet = false, noAnim = false) {
   if (state.page === "home") {
     renderChannelTabs();                     // 每次刷新渠道列表(账号增减/删除回退)
     // §3.4: 首页 DSH 调度器只在 all/dsh 页签活动; 切到其他页签时清理状态条与定时器
@@ -655,7 +655,7 @@ async function loadDashboard(quiet = false) {
     if (state.channel === "all") {
       $("report-all").hidden = false; $("report-single").hidden = true;
       $("report-scope").hidden = false;
-      await loadReportAll(quiet);
+      await loadReportAll(quiet, noAnim);
       return;
     }
     $("report-all").hidden = true; $("report-single").hidden = false;
@@ -688,8 +688,13 @@ async function loadDashboard(quiet = false) {
       const rangeHint = document.querySelector(".overview .hint");   // 新R1 N13: dsh 仅今日口径提示
       if (rangeHint) rangeHint.textContent = t("followRange");
       renderOverview(totals, state.channel);          // 概览 6 格: channel_totals 键与 db.totals 对齐 (T5)
-      renderHomeDshStatus(totals.dsh_status);         // §3.4: 首页 dsh 页签消费 channel-overview 顶层 dsh_status
-      chartToday(trend);                              // 24h input/output 双系列 (spec v8)
+      // §3.4: 首页 dsh 页签消费 channel-overview 顶层 dsh_status。
+      // 20260911 问题1 方案A②: 仅 dsh 渠道响应携带 dsh_status (server.py:1513 无条件键),
+      // 其他渠道该字段为 undefined; 有 status 才送进状态条渲染, 避免无谓调用。
+      // 注: 在途切渠道的陈旧响应由 :681 的 `seq !== chSeq` 丢弃, 且切离 all/dsh 时
+      // :652 已 cancelDshRefresh() 显式停表 —— 本守卫是纵深防御, 不是周期保活的关键路径。
+      if (totals.dsh_status) renderHomeDshStatus(totals.dsh_status);
+      chartToday(trend, noAnim);                      // 24h input/output 双系列 (spec v8)
       const isCc = state.channel === "commandcode";
       $("cc-summary").hidden = !isCc;
       if (isCc) renderCcAccounts(chAccounts);         // 账期卡逐账号 (spec v5); 全部 tab 不显示
@@ -1138,7 +1143,19 @@ function dshSchedulerTick(target) {   // 唯一自动刷新周期入口: 不叠�
   if (target === "stats") { loadDshUsage().catch(() => {}); return; }
   if (dshHomeRefreshing) return;
   dshHomeRefreshing = true;
-  Promise.resolve(loadDashboard(true)).catch(() => {}).finally(() => { dshHomeRefreshing = false; });
+  // 20260911 问题1 方案A②: all 页签仅静默刷 DSH 状态条 (整页刷新曾致三图每 15s 重建重播动画);
+  // dsh 页签数据保活但 noAnim
+  const refresh = state.channel === "all" ? refreshHomeDshStrip() : loadDashboard(true, true);
+  Promise.resolve(refresh).catch(() => {}).finally(() => { dshHomeRefreshing = false; });
+}
+async function refreshHomeDshStrip() {
+  try {
+    const w = await api("/api/report/windows");
+    if (dshSchedulerTarget() !== "home" || state.channel !== "all") return;
+    renderHomeDshStatus(w.dsh_status);   // 内部 scheduleDshRefresh 重武装 15s 周期
+  } catch (e) {
+    scheduleDshRefresh({ refresh_error: true, retry_after_seconds: DSH_FAIL_BACKOFF_S });
+  }
 }
 async function loadDshUsage() {
   const range = state.statsRange;
@@ -1284,6 +1301,11 @@ function renderHomeDshStatus(status) {   // §3.4: 首页消费 windows/channel-
   }
   const retry = error.querySelector("[data-dsh-retry]");
   if (retry) retry.addEventListener("click", () => loadDashboard());
+  // 20260911 问题1 方案A②: 无 dsh_status 说明本次响应不是 DSH 口径。
+  // scheduleDshRefresh 首行 clearDshRefreshTimer() 先清表, 再因 falsy status 于 :1125
+  // 直接 return —— 只清不装。故此处"无状态则早退, 不触碰 timer"。
+  // 守卫必须排在 scheduleDshRefresh 之前, 顺序颠倒即等价于本修复失效 (测试已锚定顺序)。
+  if (!status) return;
   scheduleDshRefresh(status);
 }
 
@@ -1530,7 +1552,7 @@ function renderCodexSummary(data) {
   box.hidden = false;
   missing.hidden = true;
   kpis.hidden = false;
-  todayKpis.hidden = false;
+  todayKpis.hidden = true;   // 20260911 问题2: 今日行不再渲染, 仅所选范围口径 (后端 today 契约字段保留)
   tables.hidden = false;
   chartBox.hidden = false;
   codexRenderHeads();
@@ -1544,8 +1566,7 @@ function renderCodexSummary(data) {
     kpi("c-cyan", t("zcodeAvgTps"), codexSpeedCell(agg.avg_tps)),
     kpi("c-amber", t("colCost"), codexCostCell()),  // 中性"费用"键: Codex 费用未知, 不得标为估算
   ];
-  kpis.innerHTML = cards(data.totals || {}).join("");     // 总量行 ← totals
-  todayKpis.innerHTML = cards(data.today || {}).join(""); // 今日行 ← today
+  kpis.innerHTML = cards(data.totals || {}).join("");     // 总量行 ← totals (唯一 KPI 行)
   const provs = data.channels || [];
   $("codex-prov-body").innerHTML = provs.length ? provs.map((p) => `
     <tr><td>${escapeHtml(p.provider_id || "—")}</td>
@@ -1608,11 +1629,12 @@ function chartCodexTrend(daily7, noAnim) {
 }
 
 /* Codex 导入完成后的可见数据刷新分派 (pollUntilIdle 空闲分支调用):
-   stats→loadCodexSummary, home→loadDashboard(true), records→records+sessions 并发,
-   其他页仅更新状态 (切页时 switchPage 自然重拉) */
+   stats→loadCodexSummary, records→records+sessions 并发,
+   其他页仅更新状态 (切页时 switchPage 自然重拉);
+   home 不在此刷新: 空闲分支前置的 await loadDashboard() 已覆盖,
+   双路各刷一次曾致首页三图连续重绘 (20260911 问题1 方案A①) */
 function refreshCodexVisible() {
   if (state.page === "stats") loadCodexSummary().catch(() => {});
-  else if (state.page === "home") loadDashboard(true);
   else if (state.page === "records") {
     state.records.page = 1; state.sessions.page = 1;   // 后台导入数据集变化: 回第 1 页
     Promise.all([loadRecords().catch(() => {}), loadSessions().catch(() => {})]);
@@ -2051,7 +2073,7 @@ function pollUntilIdle() {
         await loadDashboard();
         if (state.page === "settings") renderSettings();
         if (state.page === "overview") loadOverview(true).catch(() => {});
-        refreshCodexVisible();   // stats→loadCodexSummary / home→loadDashboard(true) / records→records+sessions
+        refreshCodexVisible();   // stats→loadCodexSummary / records→records+sessions (home 由上方 loadDashboard 覆盖)
       }
     } catch (e) {
       // 拉取状态失败也释放按钮, 避免同步卡死无法手动刷新 (timer 保留, 下轮自愈)
@@ -2767,7 +2789,7 @@ let reportHourlyCache = null;   // {range, data} | null  首页 all 24h 图 (7d/
 let chTrendCache = null;        // {channel, range, data} 首页单渠道 24h 图 (键控 state.range, 非接口 date 二值参数)
 let ovAccountsCache = null;     // 总览页原始 data.accounts (chartOvTrend 仅读 daily7)
 
-async function loadReportAll(quiet = false) {
+async function loadReportAll(quiet = false, noAnim = false) {
   const seq = ++allSeq;                               // 快速连点档位/指标时丢弃过期响应 (对齐单渠道 chSeq, 方案4④)
   const box = $("report-all");
   box.classList.add("swapping");                      // 旧内容不清空 (隐式 SWR, 禁止再设计独立 SWR 缓存)
@@ -2809,8 +2831,8 @@ async function loadReportAll(quiet = false) {
     $("report-scope").textContent = t("scopeHint").replace("{n}", w.channel_count).replace("{m}", w.account_count);
     // 估算徽章: 仅 指标=费用 且 含估算渠道(bai/zcode/claudecode)时显示 (新R5 N24: 注释随 R6 est 集合更新)
     $("report-est").hidden = !(state.reportMetric === "cost" && rows.rows.some((r) => r.estimated));
-    chartReportStack(daily);
-    chartReportDonut(daily);
+    chartReportStack(daily, noAnim);
+    chartReportDonut(daily, noAnim);
     // EVOLUTION-4: 缓存写入点键校验 — await 期间已切 range/metric 则丢弃, 根治
     // 连点指标响应乱序覆盖; rerenderCharts 读侧校验退化为纯防御
     if (range === state.range && metric === state.reportMetric) {
@@ -2820,7 +2842,7 @@ async function loadReportAll(quiet = false) {
       $("report-hourly").closest(".card").hidden = false;    // R2: 藏整卡, 不留空壳标题
       const hSpan = $("hourly-title").querySelector("[data-i18n]");   // 标题随档位切换 (data-i18n 同步改, 保持 applyLang 一致)
       if (hSpan) { hSpan.textContent = t(range === "yesterday" ? "yesterday" : "todayTrend"); hSpan.setAttribute("data-i18n", range === "yesterday" ? "yesterday" : "todayTrend"); }
-      chartReportHourly(hourly, undefined, range === "today" ? "noUsageToday" : "noDataInRange");
+      chartReportHourly(hourly, noAnim, range === "today" ? "noUsageToday" : "noDataInRange");
       if (range === state.range) reportHourlyCache = { range, data: hourly };   // 键校验同上
     } else {
       $("report-hourly").closest(".card").hidden = true;
