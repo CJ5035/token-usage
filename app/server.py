@@ -20,6 +20,8 @@ from . import codex_api
 from . import commandcode_api
 from . import dsh_api
 from . import zcode_api
+from . import workbuddy_api
+from .workbuddy_api import WorkBuddyAPI
 from .zcode_api import QUOTA_TIMEOUT
 from .bai_api import _load_model_pricing
 from .updater import RELEASE_PAGE_URL, check_update
@@ -149,7 +151,7 @@ def _set_phase(phase: str, message: str = "") -> None:
 
 
 def _account_source(account_id: int) -> str:
-    """读取账号 source ('opencode'|'bai'|'commandcode'), 默认 'opencode'."""
+    """读取账号 source ('opencode'|'bai'|'commandcode'|'workbuddy'), 默认 'opencode'."""
     row = db.get_db().execute(
         "SELECT source FROM accounts WHERE id = ?", (account_id,)
     ).fetchone()
@@ -229,11 +231,50 @@ def _fetch_quota_with_cache(account_id: int, token: str, workspace_hint: str) ->
         result = _fetch_bai_quota(token)
     elif source == "commandcode":
         result = commandcode_api.fetch_quota(_cc_cookie_header(token))
+    elif source == "workbuddy":
+        result = _fetch_workbuddy_quota(token)
     else:
         result = fetch_quota(token, workspace_hint).to_dict()
     slot["at"] = now
     slot["data"] = result
     return slot["data"]
+
+
+def _fetch_workbuddy_quota(token: str) -> dict[str, Any]:
+    """Map confirmed package capacity fields to a credits quota window."""
+    try:
+        api = WorkBuddyAPI(token)
+        api.fetch_resource_summary()  # keep the endpoint in the quota snapshot contract
+        paid = api.fetch_paid_packages()
+        free = api.fetch_free_packages()
+        accounts = []
+        for payload in (paid, free):
+            values = payload.get("Accounts") if isinstance(payload, dict) else None
+            if isinstance(values, list):
+                accounts.extend(x for x in values if isinstance(x, dict))
+        total = 0.0
+        remaining = 0.0
+        for item in accounts:
+            cap = item.get("CycleCapacitySizePrecise")
+            rem = item.get("CycleCapacityRemainPrecise")
+            if cap is None or rem is None:
+                continue
+            total += float(cap)
+            remaining += float(rem)
+        if not accounts or total <= 0:
+            return {"success": False, "mapping_unverified": True,
+                    "error": "WorkBuddy credits fields are not confirmed"}
+        return {
+            "name": "", "workspace_id": "", "success": True,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "windows": [{"label": "Credits", "used": max(0.0, total - remaining),
+                         "remaining": remaining, "total": total,
+                         "unit": "credits", "reset_at": "", "reset_in_sec": None}],
+        }
+    except workbuddy_api.WorkBuddyAuthError as exc:
+        return {"success": False, "error": str(exc), "auth_error": True}
+    except Exception as exc:  # noqa: BLE001 quota failures stay in cache contract
+        return {"success": False, "error": str(exc)}
 
 
 def _ensure_quota_async(account_id: Optional[int] = None) -> None:
@@ -612,6 +653,72 @@ def _sync_commandcode_account(
         return {"ok": False, "error": str(exc), "partial_inserted": inserted_total}
 
 
+WB_PAGE_SIZE = 100
+WB_MAX_PAGES = 2000
+
+
+def _sync_workbuddy_account(
+    account_id: int, name: str, mode: str, window_days: Optional[int]
+) -> dict[str, Any]:
+    """Sync WorkBuddy request rows with a bounded token/page loop."""
+    token, _ = db.get_account_credentials(account_id)
+    if not token:
+        return {"ok": False, "error": "未登录"}
+    with _sync_lock:
+        _sync_state.update(account=name, page=0, inserted=0)
+    now = datetime.now().astimezone()
+    if mode == "full":
+        start = "2025-12-01 00:00:00"
+    else:
+        start = (now - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
+    end = now.strftime("%Y-%m-%d %H:%M:%S")
+    inserted_total = 0
+    page_count = 0
+    page_token = ""
+    try:
+        api = WorkBuddyAPI(token)
+        while page_count < WB_MAX_PAGES:
+            with _sync_lock:
+                _sync_state["page"] = page_count
+            result = api.fetch_request_usage_page(
+                start, end, WB_PAGE_SIZE, page_token=page_token, page_num=page_count + 1
+            )
+            rows = result.get("rows") or []
+            if rows:
+                inserted_total += db.insert_workbuddy_rows(rows, account_id)
+                with _sync_lock:
+                    _sync_state["inserted"] = inserted_total
+            page_count += 1
+            next_token = str(result.get("next_page_token") or "")
+            if not next_token:
+                if result.get("version") == 1 and rows and result.get("total") is not None:
+                    if page_count * WB_PAGE_SIZE < int(result.get("total") or 0):
+                        continue
+                break
+            page_token = next_token
+
+        if page_count >= WB_MAX_PAGES:
+            raise RuntimeError("WorkBuddy pagination limit reached")
+        conn = db.get_db()
+        state_row = conn.execute(
+            "SELECT MIN(request_time) oldest, MAX(request_time) newest, COUNT(*) total "
+            "FROM workbuddy_usage WHERE account_id = ?", (account_id,)
+        ).fetchone()
+        db.update_sync_state("ok", None, inserted_total, account_id)
+        conn.execute(
+            "UPDATE usage_sync_state SET total_records=?, oldest_record_at=?, newest_record_at=? WHERE account_id=?",
+            (state_row["total"], state_row["oldest"], state_row["newest"], account_id),
+        )
+        conn.commit()
+        return {"ok": True, "inserted": inserted_total, "pages": page_count}
+    except workbuddy_api.WorkBuddyAuthError as exc:
+        db.update_sync_state("error", "认证失败，请重新登录 WorkBuddy", inserted_total, account_id)
+        return {"ok": False, "error": str(exc), "partial_inserted": inserted_total}
+    except Exception as exc:  # noqa: BLE001 preserve rows and sync cursor on failure
+        db.update_sync_state("error", str(exc), inserted_total, account_id)
+        return {"ok": False, "error": str(exc), "partial_inserted": inserted_total}
+
+
 def sync_usage(mode: str = "incremental") -> dict[str, Any]:
     """同步用量记录.
 
@@ -652,6 +759,8 @@ def sync_usage(mode: str = "incremental") -> dict[str, Any]:
                 result = _sync_bai_account(aid, name, mode, window_days)
             elif source == "commandcode":
                 result = _sync_commandcode_account(aid, name, mode, window_days)
+            elif source == "workbuddy":
+                result = _sync_workbuddy_account(aid, name, mode, window_days)
             else:
                 result = _sync_one_account(aid, name, mode, window_days)
             total_inserted += int(result.get("inserted") or 0)
@@ -1703,6 +1812,13 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         _maybe_trigger_codex_import()
         range_param = query.get("range", ["30d"])[0]
         _json_response(handler, _codex_summary_payload(range_param))
+        return
+
+    if route == "/api/workbuddy/summary" and method == "GET":
+        range_param = query.get("range", ["30d"])[0]
+        if range_param not in _RANGE_WHITELIST:
+            range_param = "30d"
+        _json_response(handler, db.workbuddy_summary(range_param))
         return
 
     if route == "/api/dsh/usage" and method == "GET":
