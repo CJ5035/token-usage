@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoGauge · Slate/Indigo 浅色新配色 · 修改后样式演示</title>
+<style>
+  /* ================= 20260911 新配色 :root (实施计划 26 令牌) ================= */
+  :root {
+    --bg: #f8fafc;            /* bg-0 */
+    --card: #ffffff;          /* bg-1 */
+    --border: #e2e8f0;
+    --muted: #f1f5f9;         /* bg-2 */
+    --titlebar: #ffffff;
+    --sidebar: #ffffff;       /* 白侧栏 + 边框分隔 */
+    --hover: #f1f5f9;
+    --grid: #f1f5f9;
+    --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 6px 20px rgba(15, 23, 42, 0.06);
+    --text: #0f172a;  --text1: #0f172a;
+    --text2: #475569;
+    --text3: #94a3b8;
+    --primary: #4f46e5;       /* brand */
+    --primary-strong: #4338ca;/* indigo-700 */
+    --primary-soft: #eef2ff;  /* indigo-50 */
+    --grad-brand: linear-gradient(135deg, #4f46e5, #2563eb);
+    --button-primary-bg: #4f46e5;
+    --button-primary-hover: #4338ca;
+    --button-primary-text: #ffffff;
+    --focus-ring: #4f46e5;
+    --surface-popover: #ffffff;
+    --border-popover: #e2e8f0;
+    --danger: #ef4444; --danger-text: #ef4444;
+    --up: #16a34a; --down: #dc2626;
+    --account-1: #4f46e5;
+    /* 渠道六色 (用户给定) + opencode 补齐 */
+    --ch-opencode: #2563eb;   /* blue-600, 同族补齐 */
+    --ch-bai: #7c3aed;
+    --ch-commandcode: #0891b2;
+    --ch-zcode: #4f46e5;
+    --ch-claudecode: #d97706;
+    --ch-dsh: #64748b;
+    --ch-codex: #e11d48;
+    --radius: 14px;
+    --font-sans: "Fira Sans", system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+    --font-mono: "Fira Code", "Cascadia Code", Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text1); font-family: var(--font-sans); font-size: 13px; }
+  .mono { font-family: var(--font-mono); font-size: 11.5px; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 28px 32px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 34px 0 10px; }
+  .sub { color: var(--text2); margin: 0 0 6px; }
+  .note { color: var(--text3); font-size: 12px; }
+  section.demo { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; margin-top: 12px; }
+
+  /* ---------- 1. 页面骨架 ---------- */
+  .mock { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .mock-titlebar { background: var(--titlebar); border-bottom: 1px solid var(--border); padding: 9px 14px; display: flex; align-items: center; gap: 10px; }
+  .mock-titlebar .brand { font-weight: 700; background: var(--grad-brand); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .mock-titlebar .win-ctl { margin-left: auto; display: flex; gap: 6px; }
+  .win-ctl i { width: 10px; height: 10px; border-radius: 50%; background: var(--border); display: block; }
+  .mock-body { display: flex; min-height: 190px; }
+  .mock-sidebar { width: 168px; background: var(--sidebar); border-right: 1px solid var(--border); padding: 10px 8px; }
+  .mock-sidebar a { display: block; padding: 6px 10px; border-radius: 8px; color: var(--text2); text-decoration: none; margin-bottom: 2px; }
+  .mock-sidebar a:hover { background: var(--hover); color: var(--text1); }
+  .mock-sidebar a.on { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+  .mock-main { flex: 1; background: var(--bg); padding: 14px 16px; }
+  .tabs { display: inline-flex; background: var(--muted); border-radius: 9px; padding: 3px; gap: 2px; margin-bottom: 12px; }
+  .tabs b { font-weight: 500; padding: 4px 12px; border-radius: 7px; color: var(--text2); cursor: default; }
+  .tabs b.on { background: var(--card); color: var(--text1); box-shadow: var(--shadow); }
+  .btn { font: inherit; border-radius: 8px; padding: 6px 14px; border: 1px solid var(--border); background: var(--card); color: var(--text2); cursor: default; }
+  .btn:hover { background: var(--hover); color: var(--text1); }
+  .btn-primary { background: var(--button-primary-bg); border-color: var(--button-primary-bg); color: var(--button-primary-text); font-weight: 600; }
+  .btn-primary:hover { background: var(--button-primary-hover); border-color: var(--button-primary-hover); color: var(--button-primary-text); }
+  .btn-danger { color: var(--danger-text); background: var(--card); }
+  .btn-danger:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
+  .btn-focus-demo { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  /* ---------- 2. KPI 卡片 ---------- */
+  .kpis { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 12px 12px 10px; position: relative; overflow: hidden; }
+  .kpi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--kc, var(--border)); }
+  .kpi .kpi-n { color: var(--text3); font-size: 11px; }
+  .kpi .kpi-v { font-size: 18px; font-weight: 700; color: var(--kc, var(--text1)); margin-top: 3px; font-family: var(--font-mono); }
+  .kpi .kpi-s { color: var(--text2); font-size: 11px; margin-top: 2px; }
+
+  /* ---------- 3. 堆叠条 + 图例 + 表格 ---------- */
+  .stack { display: flex; height: 26px; border-radius: 7px; overflow: hidden; gap: 2px; }
+  .stack i { display: block; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; color: var(--text2); font-size: 12px; }
+  .legend i { width: 9px; height: 9px; border-radius: 3px; }
+  table.tbl { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  .tbl th { text-align: left; color: var(--text3); font-weight: 500; font-size: 11.5px; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  .tbl td { padding: 7px 10px; border-bottom: 1px solid var(--grid); color: var(--text2); }
+  .tbl tr:hover td { background: var(--hover); }
+  .tbl td.ch { font-weight: 600; }
+  .up { color: var(--up); } .down { color: var(--down); }
+
+  /* ---------- 4. 组件杂项 ---------- */
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  .col { flex: 1; min-width: 240px; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: 11px; }
+  .badge.ok { background: #e7f6ec; color: var(--up); }
+  .badge.no { background: #fdf0f0; color: var(--down); }
+  .badge.brand { background: var(--primary-soft); color: var(--primary); }
+  .ub { margin: 8px 0 14px; }
+  .ub .ub-name { font-size: 11.5px; color: var(--text2); margin-bottom: 4px; }
+  .ub-bar { height: 8px; border-radius: 99px; background: var(--muted); overflow: hidden; }
+  .ub-bar-fill { height: 100%; border-radius: 99px; }
+  .ub.c-rolling .ub-bar-fill { background: linear-gradient(90deg, #818cf8, #4f46e5); }   /* 新渐变 indigo-400→600 */
+  .ub.c-month .ub-bar-fill { background: linear-gradient(90deg, #f59e0b, #ef4444); }      /* 刻意保留: 热力语义 */
+  .qb { display: flex; align-items: center; gap: 7px; margin: 6px 0; }
+  .qb-dot { width: 9px; height: 9px; border-radius: 50%; }
+  .qb-name { font-weight: 600; }
+  .qb-bar { flex: 1; height: 6px; border-radius: 99px; background: var(--muted); overflow: hidden; }
+  .qb-bar i { display: block; height: 100%; }
+  .popover { background: var(--surface-popover); border: 1px solid var(--border-popover); border-radius: 10px; box-shadow: var(--shadow); padding: 6px; width: 220px; }
+  .popover a { display: block; padding: 6px 10px; border-radius: 7px; color: var(--text2); text-decoration: none; }
+  .popover a:hover { background: var(--hover); color: var(--text1); }
+  .sk { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; width: 240px; }
+  .sk-line { height: 12px; border-radius: 6px; background: var(--muted); margin: 6px 0; }
+  .sk-bar { height: 8px; border-radius: 99px; background: var(--muted); margin: 8px 0; }
+
+  /* ---------- 5. 新旧令牌对比 ---------- */
+  table.tok { width: 100%; border-collapse: collapse; }
+  .tok th { text-align: left; color: var(--text3); font-weight: 500; font-size: 11.5px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  .tok td { padding: 5px 10px; border-bottom: 1px solid var(--grid); font-size: 12px; }
+  .tok td.name { font-family: var(--font-mono); font-size: 11.5px; color: var(--text1); }
+  .sw { display: inline-block; width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(15,23,42,.12); vertical-align: -3px; margin-right: 7px; }
+  .old { color: var(--text3); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GoGauge 浅色新配色 · 修改后样式演示</h1>
+  <p class="sub">Slate/Indigo 方案 —— 按 <span class="mono">doc/20260911-浅色Slate-Indigo配色实施计划.md</span> 的 26 令牌映射渲染；暗色主题不在本演示范围（逐像素不变）。</p>
+  <p class="note">页面 bg-0 #F8FAFC · 卡片/侧栏/顶栏 bg-1 #FFFFFF · 次级/hover bg-2 #F1F5F9 · 边框 #E2E8F0 · 品牌靛蓝 #4F46E5</p>
+
+  <!-- ============ 1. 页面骨架 ============ -->
+  <h2>1 · 页面骨架（顶栏 / 侧栏 / 主区 / 按钮 / 焦点环）</h2>
+  <div class="mock">
+    <div class="mock-titlebar">
+      <span class="brand">GoGauge</span>
+      <span class="note">用量仪表盘</span>
+      <span class="win-ctl"><i></i><i></i><i></i></span>
+    </div>
+    <div class="mock-body">
+      <nav class="mock-sidebar">
+        <a class="on" href="#">总览</a>
+        <a href="#">渠道对比</a>
+        <a href="#">账号明细</a>
+        <a href="#">设置</a>
+      </nav>
+      <div class="mock-main">
+        <div class="tabs"><b class="on">今日</b><b>近 7 天</b><b>近 30 天</b></div>
+        <div class="toolbar">
+          <button class="btn btn-primary">刷新数据</button>
+          <button class="btn">导出 CSV</button>
+          <button class="btn btn-danger">清空缓存</button>
+          <button class="btn btn-focus-demo">焦点环示意</button>
+          <span class="note">主按钮 #4F46E5 / hover #4338CA · 焦点环 outline 2px #4F46E5</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 2. KPI 卡片 ============ -->
+  <h2>2 · KPI 卡片（七渠道色）</h2>
+  <div class="kpis">
+    <div class="kpi" style="--kc:var(--ch-opencode)"><div class="kpi-n">opencode</div><div class="kpi-v">12.4M</div><div class="kpi-s">tokens 今日</div></div>
+    <div class="kpi" style="--kc:var(--ch-zcode)"><div class="kpi-n">zcode</div><div class="kpi-v">9.8M</div><div class="kpi-s">tokens 今日</div></div>
+    <div class="kpi" style="--kc:var(--ch-commandcode)"><div class="kpi-n">commandcode</div><div class="kpi-v">7.1M</div><div class="kpi-s">tokens 今日</div></div>
+    <div class="kpi" style="--kc:var(--ch-claudecode)"><div class="kpi-n">claudecode</div><div class="kpi-v">6.5M</div><div class="kpi-s">tokens 今日</div></div>
+    <div class="kpi" style="--kc:var(--ch-codex)"><div class="kpi-n">codex</div><div class="kpi-v">4.2M</div><div class="kpi-s">tokens 今日</div></div>
+    <div class="kpi" style="--kc:var(--ch-bai)"><div class="kpi-n">bai</div><div class="kpi-v">2.9M</div><div class="kpi-s">tokens 今日</div></div>
+    <div class="kpi" style="--kc:var(--ch-dsh)"><div class="kpi-n">dsh</div><div class="kpi-v">1.3M</div><div class="kpi-s">tokens 今日</div></div>
+  </div>
+
+  <!-- ============ 3. 堆叠条 + 表格 ============ -->
+  <h2>3 · 渠道构成与渠道表（图表色 / hover / 网格线）</h2>
+  <section class="demo">
+    <div class="stack">
+      <i style="width:28%;background:var(--ch-opencode)"></i>
+      <i style="width:22%;background:var(--ch-zcode)"></i>
+      <i style="width:16%;background:var(--ch-commandcode)"></i>
+      <i style="width:14%;background:var(--ch-claudecode)"></i>
+      <i style="width:9%;background:var(--ch-codex)"></i>
+      <i style="width:7%;background:var(--ch-bai)"></i>
+      <i style="width:4%;background:var(--ch-dsh)"></i>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--ch-opencode)"></i>opencode #2563EB</span>
+      <span><i style="background:var(--ch-zcode)"></i>zcode #4F46E5</span>
+      <span><i style="background:var(--ch-commandcode)"></i>commandcode #0891B2</span>
+      <span><i style="background:var(--ch-claudecode)"></i>claudecode #D97706</span>
+      <span><i style="background:var(--ch-codex)"></i>codex #E11D48</span>
+      <span><i style="background:var(--ch-bai)"></i>bai #7C3AED</span>
+      <span><i style="background:var(--ch-dsh)"></i>dsh #64748B</span>
+    </div>
+    <table class="tbl">
+      <tr><th>渠道</th><th>Tokens</th><th>占比</th><th>环比</th><th>状态</th></tr>
+      <tr><td class="ch" style="color:var(--ch-opencode)">opencode</td><td class="mono">12,437,820</td><td>28%</td><td class="up">+12.4%</td><td><span class="badge ok">正常</span></td></tr>
+      <tr><td class="ch" style="color:var(--ch-zcode)">zcode</td><td class="mono">9,802,114</td><td>22%</td><td class="up">+8.1%</td><td><span class="badge ok">正常</span></td></tr>
+      <tr><td class="ch" style="color:var(--ch-commandcode)">commandcode</td><td class="mono">7,120,553</td><td>16%</td><td class="down">-2.3%</td><td><span class="badge ok">正常</span></td></tr>
+      <tr><td class="ch" style="color:var(--ch-claudecode)">claudecode</td><td class="mono">6,487,201</td><td>14%</td><td class="up">+5.7%</td><td><span class="badge brand">主推</span></td></tr>
+      <tr><td class="ch" style="color:var(--ch-codex)">codex</td><td class="mono">4,201,776</td><td>9%</td><td class="down">-6.9%</td><td><span class="badge no">异常</span></td></tr>
+      <tr><td class="ch" style="color:var(--ch-bai)">bai</td><td class="mono">2,944,030</td><td>7%</td><td class="up">+1.2%</td><td><span class="badge ok">正常</span></td></tr>
+      <tr><td class="ch" style="color:var(--ch-dsh)">dsh</td><td class="mono">1,305,982</td><td>4%</td><td class="up">+0.4%</td><td><span class="badge ok">正常</span></td></tr>
+    </table>
+    <p class="note">行 hover = bg-2 #F1F5F9 · 行分隔 = --grid #F1F5F9 · 表头/外框 = --border #E2E8F0</p>
+  </section>
+
+  <!-- ============ 4. 组件杂项 ============ -->
+  <h2>4 · 组件（用量条 / 配额条 / 弹出层 / 骨架屏）</h2>
+  <div class="row">
+    <section class="demo col">
+      <div class="ub c-rolling"><div class="ub-name">滚动 5 小时窗 <span class="note">— 新渐变 indigo-400→600（替换品牌紫）</span></div><div class="ub-bar"><div class="ub-bar-fill" style="width:62%"></div></div></div>
+      <div class="ub c-month"><div class="ub-name">月度用量 <span class="note">— 琥珀→红热力渐变（刻意保留，非渠道/品牌色）</span></div><div class="ub-bar"><div class="ub-bar-fill" style="width:38%"></div></div></div>
+      <div class="qb"><span class="qb-dot" style="background:var(--ch-zcode)"></span><span class="qb-name" style="color:var(--ch-zcode)">zcode</span><div class="qb-bar"><i style="width:74%;background:var(--ch-zcode)"></i></div><span class="mono note">74%</span></div>
+      <div class="qb"><span class="qb-dot" style="background:var(--ch-codex)"></span><span class="qb-name" style="color:var(--ch-codex)">codex</span><div class="qb-bar"><i style="width:41%;background:var(--ch-codex)"></i></div><span class="mono note">41%</span></div>
+    </section>
+    <section class="demo col">
+      <div class="popover">
+        <a href="#">个人资料</a>
+        <a href="#">主题：浅色</a>
+        <a href="#" style="color:var(--danger-text)">退出登录</a>
+      </div>
+      <p class="note">popover = bg-1 + border #E2E8F0 + 中性阴影（去紫调）</p>
+    </section>
+    <section class="demo col">
+      <div class="sk">
+        <div class="sk-line" style="width:60%"></div>
+        <div class="sk-line" style="width:85%"></div>
+        <div class="sk-bar" style="width:40%"></div>
+        <div class="sk-bar" style="width:70%"></div>
+      </div>
+      <p class="note">骨架屏承载面 = --muted #F1F5F9</p>
+    </section>
+  </div>
+
+  <!-- ============ 5. 新旧令牌对比 ============ -->
+  <h2>5 · 新旧令牌对比（26 处改值）</h2>
+  <section class="demo">
+    <table class="tok">
+      <tr><th>令牌</th><th>旧值（晨雾紫）</th><th>新值（Slate/Indigo）</th><th>说明</th></tr>
+      <tr><td class="name">--bg</td><td class="old mono"><span class="sw" style="background:#f7f6f4"></span>#f7f6f4</td><td class="mono"><span class="sw" style="background:#f8fafc"></span>#f8fafc</td><td>页面 bg-0</td></tr>
+      <tr><td class="name">--border</td><td class="old mono"><span class="sw" style="background:#eae7f2"></span>#eae7f2</td><td class="mono"><span class="sw" style="background:#e2e8f0"></span>#e2e8f0</td><td>去紫调</td></tr>
+      <tr><td class="name">--muted / --hover / --grid</td><td class="old mono"><span class="sw" style="background:#f1eff6"></span>#f1eff6 …</td><td class="mono"><span class="sw" style="background:#f1f5f9"></span>#f1f5f9</td><td>bg-2 统一</td></tr>
+      <tr><td class="name">--sidebar</td><td class="old mono"><span class="sw" style="background:#fbfaf8"></span>#fbfaf8</td><td class="mono"><span class="sw" style="background:#ffffff"></span>#ffffff</td><td>白侧栏 + 边框分隔</td></tr>
+      <tr><td class="name">--shadow</td><td class="old mono">rgba(30,20,60,…) 紫调</td><td class="mono">rgba(15,23,42,…) 中性</td><td>去紫调</td></tr>
+      <tr><td class="name">--text / --text1</td><td class="old mono"><span class="sw" style="background:#221f33"></span>#221f33</td><td class="mono"><span class="sw" style="background:#0f172a"></span>#0f172a</td><td>text-1</td></tr>
+      <tr><td class="name">--text2</td><td class="old mono"><span class="sw" style="background:#5f5b73"></span>#5f5b73</td><td class="mono"><span class="sw" style="background:#475569"></span>#475569</td><td>text-2</td></tr>
+      <tr><td class="name">--text3</td><td class="old mono"><span class="sw" style="background:#938ea8"></span>#938ea8</td><td class="mono"><span class="sw" style="background:#94a3b8"></span>#94a3b8</td><td>text-3（对比度同级）</td></tr>
+      <tr><td class="name">--primary / --button-primary-bg / --focus-ring / --account-1</td><td class="old mono"><span class="sw" style="background:#7c5cf6"></span>#7c5cf6</td><td class="mono"><span class="sw" style="background:#4f46e5"></span>#4f46e5</td><td>brand</td></tr>
+      <tr><td class="name">--primary-strong / --button-primary-hover</td><td class="old mono"><span class="sw" style="background:#6a46ea"></span>#6a46ea</td><td class="mono"><span class="sw" style="background:#4338ca"></span>#4338ca</td><td>indigo-700 派生</td></tr>
+      <tr><td class="name">--primary-soft</td><td class="old mono"><span class="sw" style="background:#f2eefe"></span>#f2eefe</td><td class="mono"><span class="sw" style="background:#eef2ff"></span>#eef2ff</td><td>indigo-50 派生</td></tr>
+      <tr><td class="name">--grad-brand</td><td class="old mono"><span class="sw" style="background:linear-gradient(135deg,#8b5cf6,#5b8def)"></span>紫→蓝</td><td class="mono"><span class="sw" style="background:linear-gradient(135deg,#4f46e5,#2563eb)"></span>靛蓝→蓝</td><td>标题品牌字</td></tr>
+      <tr><td class="name">--border-popover</td><td class="old mono"><span class="sw" style="background:#eae7f2"></span>#eae7f2</td><td class="mono"><span class="sw" style="background:#e2e8f0"></span>#e2e8f0</td><td>同 --border</td></tr>
+      <tr><td class="name">--ch-opencode</td><td class="old mono"><span class="sw" style="background:#4f8ef7"></span>#4f8ef7</td><td class="mono"><span class="sw" style="background:#2563eb"></span>#2563eb</td><td>方案未给，blue-600 同族补齐</td></tr>
+      <tr><td class="name">--ch-zcode</td><td class="old mono"><span class="sw" style="background:#6366f1"></span>#6366f1</td><td class="mono"><span class="sw" style="background:#4f46e5"></span>#4f46e5</td><td>= 品牌主色</td></tr>
+      <tr><td class="name">--ch-commandcode</td><td class="old mono"><span class="sw" style="background:#10b981"></span>#10b981</td><td class="mono"><span class="sw" style="background:#0891b2"></span>#0891b2</td><td>翡翠绿 → 青</td></tr>
+      <tr><td class="name">--ch-claudecode</td><td class="old mono"><span class="sw" style="background:#c2410c"></span>#c2410c</td><td class="mono"><span class="sw" style="background:#d97706"></span>#d97706</td><td>品牌橙 → amber-600</td></tr>
+      <tr><td class="name">--ch-codex</td><td class="old mono"><span class="sw" style="background:#c026d3"></span>#c026d3</td><td class="mono"><span class="sw" style="background:#e11d48"></span>#e11d48</td><td>梅子紫 → 玫红</td></tr>
+      <tr><td class="name">--ch-bai</td><td class="old mono"><span class="sw" style="background:#f59e0b"></span>#f59e0b</td><td class="mono"><span class="sw" style="background:#7c3aed"></span>#7c3aed</td><td>亮琥珀 → 紫罗兰</td></tr>
+      <tr><td class="name">--ch-dsh</td><td class="old mono"><span class="sw" style="background:#64748b"></span>#64748b</td><td class="mono"><span class="sw" style="background:#64748b"></span>#64748b</td><td>不变</td></tr>
+      <tr><td class="name">.ub.c-rolling 渐变（硬编码）</td><td class="old mono"><span class="sw" style="background:linear-gradient(90deg,#a78bfa,#7c5cf6)"></span>#a78bfa→#7c5cf6</td><td class="mono"><span class="sw" style="background:linear-gradient(90deg,#818cf8,#4f46e5)"></span>#818cf8→#4f46e5</td><td>style.css:283/291</td></tr>
+      <tr><td class="name">app.js 兜底 / main.py 窗口底色</td><td class="old mono">#4f8ef7 / #f7f6f4</td><td class="mono">#2563eb / #f8fafc</td><td>7 处 / 3 处 + docstring</td></tr>
+    </table>
+    <p class="note">未列出项均不变：--card/--titlebar/--surface-popover、--chart-input/output/reasoning/cache/cost/extra、--account-2..6、--up/--down/--danger、tooltip 三令牌、暗色主题全部。</p>
+  </section>
+</div>
+</body>
+</html>

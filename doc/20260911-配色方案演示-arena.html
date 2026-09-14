@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>GoGauge 高端配色方案演示</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #0B0F17;
+    color: #E5E7EB;
+    padding: 24px;
+    transition: background 0.4s ease;
+  }
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+  }
+  .title { font-size: 22px; font-weight: 600; }
+  .theme-switcher { display: flex; gap: 8px; }
+  .theme-btn {
+    padding: 8px 16px;
+    border: 1px solid rgba(255,255,255,0.1);
+    background: rgba(255,255,255,0.04);
+    color: #E5E7EB;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+  }
+  .theme-btn:hover { background: rgba(255,255,255,0.08); }
+  .theme-btn.active {
+    background: var(--primary, #6366F1);
+    border-color: var(--primary, #6366F1);
+    color: white;
+  }
+
+  /* KPI 卡片 */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .card {
+    background: linear-gradient(145deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+    padding: 20px;
+    backdrop-filter: blur(10px);
+    transition: all 0.3s;
+  }
+  .card:hover {
+    border-color: rgba(255,255,255,0.12);
+    transform: translateY(-2px);
+  }
+  .card-label {
+    font-size: 12px;
+    color: #9CA3AF;
+    margin-bottom: 8px;
+    letter-spacing: 0.5px;
+  }
+  .card-value {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #fff, #94A3B8);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .card-sub {
+    font-size: 12px;
+    color: #6B7280;
+    margin-top: 6px;
+  }
+  .card-trend {
+    font-size: 12px;
+    color: var(--success, #10B981);
+    margin-top: 6px;
+  }
+
+  /* 图表区 */
+  .chart-grid {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr;
+    gap: 16px;
+  }
+  .chart-card {
+    background: linear-gradient(145deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+    padding: 20px;
+  }
+  .chart-title {
+    font-size: 14px;
+    color: #D1D5DB;
+    margin-bottom: 16px;
+    font-weight: 500;
+  }
+  #barChart { width: 100%; height: 380px; }
+  #donutChart { width: 100%; height: 380px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="title">📊 GoGauge · 高端配色演示</div>
+  <div class="theme-switcher">
+    <button class="theme-btn active" onclick="applyTheme('cyber', event)">赛博科技</button>
+    <button class="theme-btn" onclick="applyTheme('finance', event)">商务蔚蓝</button>
+    <button class="theme-btn" onclick="applyTheme('mono', event)">同色系高级</button>
+  </div>
+</div>
+
+<!-- KPI -->
+<div class="kpi-grid">
+  <div class="card">
+    <div class="card-label">今天</div>
+    <div class="card-value">197.84M</div>
+    <div class="card-sub">¥83.62</div>
+    <div class="card-trend">↑ 157.9% vs 昨日</div>
+  </div>
+  <div class="card">
+    <div class="card-label">昨天</div>
+    <div class="card-value">362.55M</div>
+    <div class="card-sub">¥302.28</div>
+  </div>
+  <div class="card">
+    <div class="card-label">近 7 天</div>
+    <div class="card-value">1.85B</div>
+    <div class="card-sub">¥1984.34</div>
+  </div>
+  <div class="card">
+    <div class="card-label">近 30 天</div>
+    <div class="card-value">5.26B</div>
+    <div class="card-sub">¥4417.13</div>
+  </div>
+</div>
+
+<!-- Charts -->
+<div class="chart-grid">
+  <div class="chart-card">
+    <div class="chart-title">分渠道消耗趋势（近 7 天）</div>
+    <div id="barChart"></div>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">渠道占比</div>
+    <div id="donutChart"></div>
+  </div>
+</div>
+
+<script>
+  // 三套配色方案
+  const themes = {
+    cyber: {
+      name: '赛博科技',
+      bg: '#0C0D10',
+      primary: '#6366F1',
+      colors: ['#6366F1', '#A855F7', '#06B6D4', '#10B981', '#F59E0B', '#475569']
+    },
+    finance: {
+      name: '商务蔚蓝',
+      bg: '#0B0F17',
+      primary: '#3B82F6',
+      colors: ['#3B82F6', '#60A5FA', '#8B5CF6', '#F43F5E', '#14B8A6', '#64748B']
+    },
+    mono: {
+      name: '同色系高级',
+      bg: '#0A0E1A',
+      primary: '#3B82F6',
+      colors: ['#60A5FA', '#3B82F6', '#2563EB', '#1D4ED8', '#1E3A8A', '#F97316']
+    }
+  };
+
+  const channels = ['bai', 'commandcode', 'zcode', 'claudecode', 'Codex', 'dsh'];
+  const days = ['09-05','09-06','09-07','09-08','09-09','09-10','09-11'];
+
+  // 模拟数据（每个渠道每天的 Token 消耗）
+  const seriesData = [
+    [5, 8, 6, 10, 7, 9, 12],
+    [15, 18, 20, 16, 22, 19, 17],
+    [80, 95, 110, 120, 100, 130, 140],
+    [10, 12, 8, 14, 11, 13, 9],
+    [30, 35, 28, 40, 45, 38, 42],
+    [3, 5, 4, 6, 5, 7, 6]
+  ];
+
+  const donutData = [
+    { name: 'bai', value: 12 },
+    { name: 'commandcode', value: 17 },
+    { name: 'zcode', value: 140 },
+    { name: 'claudecode', value: 9 },
+    { name: 'Codex', value: 42 },
+    { name: 'dsh', value: 6 }
+  ];
+
+  const barChart = echarts.init(document.getElementById('barChart'));
+  const donutChart = echarts.init(document.getElementById('donutChart'));
+
+  function renderCharts(theme) {
+    // 堆叠柱状图（高端质感）
+    barChart.setOption({
+      backgroundColor: 'transparent',
+      color: theme.colors,
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: {
+          type: 'shadow',
+          shadowStyle: { color: 'rgba(255,255,255,0.04)' }
+        },
+        backgroundColor: 'rgba(20,22,28,0.95)',
+        borderColor: 'rgba(255,255,255,0.1)',
+        textStyle: { color: '#fff' }
+      },
+      legend: {
+        data: channels,
+        textStyle: { color: '#9CA3AF' },
+        top: 0,
+        icon: 'circle',
+        itemWidth: 8,
+        itemHeight: 8
+      },
+      grid: { left: 50, right: 20, top: 40, bottom: 30 },
+      xAxis: {
+        type: 'category',
+        data: days,
+        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } },
+        axisTick: { show: false },
+        axisLabel: { color: '#6B7280', fontSize: 11 }
+      },
+      yAxis: {
+        type: 'value',
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
+        axisLabel: { color: '#6B7280', fontSize: 11 }
+      },
+      series: channels.map((name, i) => {
+        const isLast = i === channels.length - 1;
+        const isFirst = i === 0;
+        return {
+          name,
+          type: 'bar',
+          stack: 'total',
+          barWidth: '55%',
+          itemStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: theme.colors[i] },
+              { offset: 1, color: theme.colors[i] + 'AA' }
+            ]),
+            // 顶部圆角（只给最上层加）
+            borderRadius: isLast ? [6, 6, 0, 0] : [0, 0, 0, 0]
+          },
+          emphasis: {
+            itemStyle: {
+              color: theme.colors[i],
+              shadowBlur: 10,
+              shadowColor: theme.colors[i] + '80'
+            }
+          },
+          data: seriesData[i]
+        };
+      })
+    });
+
+    // 环形图
+    donutChart.setOption({
+      backgroundColor: 'transparent',
+      color: theme.colors,
+      tooltip: {
+        trigger: 'item',
+        backgroundColor: 'rgba(20,22,28,0.95)',
+        borderColor: 'rgba(255,255,255,0.1)',
+        textStyle: { color: '#fff' }
+      },
+      legend: {
+        bottom: 0,
+        textStyle: { color: '#9CA3AF' },
+        icon: 'circle',
+        itemWidth: 8,
+        itemHeight: 8
+      },
+      series: [{
+        type: 'pie',
+        radius: ['65%', '82%'],
+        center: ['50%', '45%'],
+        avoidLabelOverlap: true,
+        itemStyle: {
+          borderColor: theme.bg,
+          borderWidth: 3
+        },
+        label: {
+          show: true,
+          position: 'center',
+          formatter: () => `{v|197.84M}\n{l|总 Token}`,
+          rich: {
+            v: { fontSize: 26, fontWeight: 700, color: '#fff', lineHeight: 34 },
+            l: { fontSize: 12, color: '#9CA3AF' }
+          }
+        },
+        labelLine: { show: false },
+        data: donutData
+      }]
+    });
+  }
+
+  function applyTheme(key, ev) {
+    const theme = themes[key];
+    document.body.style.background = theme.bg;
+    document.documentElement.style.setProperty('--primary', theme.primary);
+    document.querySelectorAll('.theme-btn').forEach(b => b.classList.remove('active'));
+    if (ev) ev.target.classList.add('active');
+    renderCharts(theme);
+  }
+
+  // 初始化
+  renderCharts(themes.cyber);
+  window.addEventListener('resize', () => {
+    barChart.resize();
+    donutChart.resize();
+  });
+</script>
+
+</body>
+</html>

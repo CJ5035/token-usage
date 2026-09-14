@@ -138,10 +138,10 @@ def test_inject_theme_seed_pure_function(tmp_codex_db):
 
 
 @pytest.mark.parametrize("theme,expected", [
-    ("dark", "#111112"),
-    ("light", "#f7f6f4"),
-    (None, "#f7f6f4"),
-    ("neon", "#f7f6f4"),   # 损坏值: 浅色默认
+    ("dark", "#0A0B0F"),
+    ("light", "#f8fafc"),
+    (None, "#f8fafc"),
+    ("neon", "#f8fafc"),   # 损坏值: 浅色默认
 ])
 def test_main_window_background_matches_saved_theme(theme, expected, monkeypatch):
     monkeypatch.setattr(db, "get_settings", lambda: {"theme": theme})
@@ -152,7 +152,7 @@ def test_main_window_background_fallback_on_read_error(monkeypatch):
     def _boom():
         raise RuntimeError("db down")
     monkeypatch.setattr(db, "get_settings", _boom)
-    assert main._theme_background_color() == "#f7f6f4"
+    assert main._theme_background_color() == "#f8fafc"
 
 
 def test_main_window_create_window_uses_theme_background():

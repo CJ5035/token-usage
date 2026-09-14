@@ -2832,7 +2832,7 @@ async function loadReportAll(quiet = false, noAnim = false) {
     // 估算徽章: 仅 指标=费用 且 含估算渠道(bai/zcode/claudecode)时显示 (新R5 N24: 注释随 R6 est 集合更新)
     $("report-est").hidden = !(state.reportMetric === "cost" && rows.rows.some((r) => r.estimated));
     chartReportStack(daily, noAnim);
-    chartReportDonut(daily, noAnim);
+    chartReportDonut(daily, noAnim, range);
     // EVOLUTION-4: 缓存写入点键校验 — await 期间已切 range/metric 则丢弃, 根治
     // 连点指标响应乱序覆盖; rerenderCharts 读侧校验退化为纯防御
     if (range === state.range && metric === state.reportMetric) {
@@ -2889,7 +2889,7 @@ function renderQuotaBar(accounts, zdata = null) {
       main = `<div class="qb-val">${list.length}</div><div class="qb-sub">${t("accountsUnit")}</div>`;
     }
     return `<div class="qb-card">
-      <div class="qb-head"><span class="qb-dot" style="background:${CH_COLOR[ch] || "#4f8ef7"}"></span><span class="qb-name" style="color:${CH_COLOR[ch] || "#4f8ef7"}">${ch}</span></div>
+      <div class="qb-head"><span class="qb-dot" style="background:${CH_COLOR[ch] || "#2563eb"}"></span><span class="qb-name" style="color:${CH_COLOR[ch] || "#2563eb"}">${ch}</span></div>
       ${main}
       <div class="qb-foot">${foot}</div>
     </div>`;
@@ -2900,7 +2900,7 @@ function renderQuotaBar(accounts, zdata = null) {
       .filter((x) => x.label === "5h Rolling" || x.label === "Weekly")
       .map((x) => `${(QUOTA_LABEL[x.label] || (() => x.label))()} ${(Number(x.used) || 0).toFixed(0)}%`);
     cards.push(`<div class="qb-card">
-      <div class="qb-head"><span class="qb-dot" style="background:${CH_COLOR["zcode"] || "#4f8ef7"}"></span><span class="qb-name" style="color:${CH_COLOR["zcode"] || "#4f8ef7"}">zcode</span>${zdata.level ? `<span class="zcode-badge">${escapeHtml(zcodeLevelText(zdata.level))}</span>` : ""}</div>
+      <div class="qb-head"><span class="qb-dot" style="background:${CH_COLOR["zcode"] || "#2563eb"}"></span><span class="qb-name" style="color:${CH_COLOR["zcode"] || "#2563eb"}">zcode</span>${zdata.level ? `<span class="zcode-badge">${escapeHtml(zcodeLevelText(zdata.level))}</span>` : ""}</div>
       <div class="qb-sub">${segs.join(" · ") || t("zcodeNoData")}</div>
       <div class="qb-foot">GLM Coding Plan</div>
     </div>`);
@@ -2974,7 +2974,7 @@ function setChartEmpty(canvasId, emptyId, key) {   // EVOLUTION-7: 空态占位�
 
 function chColor(ch) {
   const v = CH_COLOR[ch];
-  return v ? getComputedStyle(document.documentElement).getPropertyValue(v.replace(/var\(|\)/g, "").trim()) || "#4f8ef7" : "#4f8ef7";
+  return v ? getComputedStyle(document.documentElement).getPropertyValue(v.replace(/var\(|\)/g, "").trim()) || "#2563eb" : "#2563eb";
 }
 
 function chartReportStack(d, noAnim) {
@@ -2987,13 +2987,27 @@ function chartReportStack(d, noAnim) {
   }
   const emptyEl = $("report-stack-empty");
   if (emptyEl) emptyEl.hidden = true;
+  const chs = Object.keys(d.series);   // 键序=堆叠序: 首系列最底, 末系列最顶
   cStack = new Chart(canvas, {
     type: "bar",
     data: {
       labels: d.labels,
-      datasets: Object.keys(d.series).map((ch) => ({
-        label: CH_LABEL[ch] || ch, data: d.series[ch], backgroundColor: chColor(ch), borderRadius: 2, barPercentage: 0.8,
-      })),
+      datasets: chs.map((ch, i) => {
+        const base = chColor(ch).trim();
+        return {
+          label: CH_LABEL[ch] || ch, data: d.series[ch],
+          backgroundColor: (ctx) => {   // arena2: 垂直渐变 (上实下透); chartArea 未就绪回退平色
+            const area = ctx.chart.chartArea;
+            if (!area) return base;
+            const g = ctx.chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+            g.addColorStop(0, base);
+            g.addColorStop(1, base + "CC");
+            return g;
+          },
+          borderRadius: i === chs.length - 1 ? [6, 6, 0, 0] : 0,   // arena2: 仅堆叠顶系列圆角 (同演示稿)
+          maxBarThickness: 28,
+        };
+      }),
     },
     options: {
       responsive: false, maintainAspectRatio: false,
@@ -3009,7 +3023,9 @@ function chartReportStack(d, noAnim) {
   cStack.resize();
 }
 
-function chartReportDonut(d, noAnim) {
+const RANGE_LABEL_KEY = { today: "today", yesterday: "yesterday", "7d": "d7", "30d": "d30", all: "all" };   // 环心范围标签 i18n 映射 (arena2)
+
+function chartReportDonut(d, noAnim, range) {
   const canvas = $("report-donut");
   if (cDonut) cDonut.destroy();
   const chs = Object.keys(d.series);
@@ -3022,22 +3038,25 @@ function chartReportDonut(d, noAnim) {
   }
   const emptyEl = $("report-donut-empty");
   if (emptyEl) emptyEl.hidden = true;
-  const centerText = { id: "centerText", afterDraw(chart) {   // 环形图中心总量 (spec v8, P0)
+  const centerText = { id: "centerText", afterDraw(chart) {   // 环形图中心两行: 范围标签 + 总量 (arena2, 原 spec v8 P0 单行)
     const { ctx, chartArea } = chart;
     if (!chartArea) return;
+    const cx = (chartArea.left + chartArea.right) / 2, cy = (chartArea.top + chartArea.bottom) / 2;
     ctx.save();
-    ctx.font = "600 16px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillStyle = cssVar("--text1") || "#111";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = "500 11px sans-serif"; ctx.fillStyle = cssVar("--text3") || "#888";
+    ctx.fillText(t(RANGE_LABEL_KEY[range] || range || ""), cx, cy - 12);
+    ctx.font = "600 22px sans-serif"; ctx.fillStyle = cssVar("--text1") || "#111";
     const v = d.metric === "cost" ? fmtMoney(grand) : d.metric === "requests" ? fmtInt(grand) : fmtTokens(grand);
-    ctx.fillText(v, (chartArea.left + chartArea.right) / 2, (chartArea.top + chartArea.bottom) / 2);
+    ctx.fillText(v, cx, cy + 8);
     ctx.restore();
   } };
   cDonut = new Chart(canvas, {
     type: "doughnut",
     plugins: [centerText],
-    data: { labels: chs.map((ch) => CH_LABEL[ch] || ch), datasets: [{ data: totals, backgroundColor: chs.map(chColor), borderWidth: 2, borderColor: cssVar("--card") }] },   // T5: 显示名映射; onClick 仍用原始 chs 键切 tab
+    data: { labels: chs.map((ch) => CH_LABEL[ch] || ch), datasets: [{ data: totals, backgroundColor: chs.map(chColor), borderWidth: 2, borderColor: cssVar("--card"), borderRadius: 4 }] },   // T5: 显示名映射; onClick 仍用原始 chs 键切 tab; arena2: 扇区圆角 4
     options: {
-      responsive: false, maintainAspectRatio: false, cutout: "62%",
+      responsive: false, maintainAspectRatio: false, radius: "82%", cutout: "62%", padAngle: 2,   // arena2: 细环 62–82% + 扇区间隙 (Chart.js >=4.2)
       animation: noAnim ? false : undefined,  // EVOLUTION-4: 切主题重渲关闭入场动画
       onClick: (_e, els) => { if (els.length) switchChannel(chs[els[0].index]); },  // 扇区->渠道 tab (spec v4)
       plugins: { legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } }, tooltip: chartThemeOptions().tooltip },
@@ -3091,7 +3110,7 @@ function renderChannelTable(rows, summary) {
     ? `<tr><td colspan="8" class="empty-cell">${t("unusedChannelsHint").replace("{chs}", missing.map((ch) => CH_LABEL[ch] || ch).join(", "))}</td></tr>`
     : "";
   $("report-table").innerHTML = rows.map((r) => `<tr>
-    <td style="color:${CH_COLOR[r.channel] || "#4f8ef7"}">${escapeHtml(CH_LABEL[r.channel] || r.channel)}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
+    <td style="color:${CH_COLOR[r.channel] || "#2563eb"}">${escapeHtml(CH_LABEL[r.channel] || r.channel)}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
     <td class="num">${fmtTokens(r.tokens)}</td><td class="num">${fmtTokens(r.input)}</td><td class="num">${fmtTokens(r.output)}</td>
     <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshRequestsUnavailable") : fmtInt(r.requests)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshCostUnavailable") : fmtOptionalMoney(r.cost)}</td>
     <td>${escapeHtml(r.data_since || "—")}</td></tr>`).join("") + foot;
@@ -3119,7 +3138,7 @@ function rerenderCharts() {
   if (!document.getElementById("page-home").hidden && !$("report-all").hidden) {
     if (reportDailyCache && reportDailyCache.range === state.range && reportDailyCache.metric === state.reportMetric) {
       chartReportStack(reportDailyCache.data, true);
-      chartReportDonut(reportDailyCache.data, true);
+      chartReportDonut(reportDailyCache.data, true, reportDailyCache.range);
     }
     if (reportHourlyCache && reportHourlyCache.range === state.range) chartReportHourly(reportHourlyCache.data, true, reportHourlyCache.range === "today" ? "noUsageToday" : "noDataInRange");
   }

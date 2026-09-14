@@ -251,8 +251,8 @@ def test_render_function_signatures_unchanged():
 
 
 def test_root_channel_color_vars_unchanged():
-    """:root 渠道配色维持 f6dda34 基线 (commandcode 翡翠绿 / zcode 靛蓝)."""
+    """:root 渠道配色 20260911 slate/indigo 基线 (commandcode 青 / zcode 靛蓝)."""
     css = _CSS.read_text(encoding="utf-8")
     root = css[css.index(":root"):css.index("}", css.index(":root"))]
-    assert "--ch-commandcode: #10b981" in root
-    assert "--ch-zcode: #6366f1" in root
+    assert "--ch-commandcode: #0891b2" in root
+    assert "--ch-zcode: #4f46e5" in root

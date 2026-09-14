@@ -168,11 +168,11 @@ def test_tbl_scroll_still_wraps_only_channel_table():
 def test_root_channel_colors_unchanged():
     css = _css()
     for line in (
-        "--ch-opencode: #4f8ef7;",
-        "--ch-bai: #f59e0b;",
-        "--ch-commandcode: #10b981;",
-        "--ch-zcode: #6366f1;",
-        "--ch-claudecode: #c2410c;",   # 20260908: 鲑粉 → Claude 品牌橙 (用户指定)
+        "--ch-opencode: #2563eb;",
+        "--ch-bai: #7c3aed;",
+        "--ch-commandcode: #0891b2;",
+        "--ch-zcode: #4f46e5;",
+        "--ch-claudecode: #d97706;",   # 20260911: 品牌橙 → amber-600 (slate/indigo 方案)
         "--ch-dsh: #64748b;",
     ):
         assert line in css, f":root 渠道色基线变化: {line}"

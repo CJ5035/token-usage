@@ -1,16 +1,16 @@
-/* GoGauge 正式版 - 晨雾紫 + Data-Dense Dashboard */
+/* GoGauge 正式版 - Slate/Indigo (20260911) + Data-Dense Dashboard */
 :root {
   color-scheme: light;
-  --bg: #f7f6f4;
+  --bg: #f8fafc;
   --card: #ffffff;
-  --border: #eae7f2;
-  --text: #221f33;
-  --text1: #221f33;
-  --text2: #5f5b73;
-  --text3: #938ea8;
-  --primary: #7c5cf6;
-  --primary-strong: #6a46ea;
-  --primary-soft: #f2eefe;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --text1: #0f172a;
+  --text2: #475569;
+  --text3: #94a3b8;
+  --primary: #4f46e5;
+  --primary-strong: #4338ca;
+  --primary-soft: #eef2ff;
   --blue: #4f8ef7;
   --green: #22c55e;
   --purple: #a78bfa;
@@ -19,44 +19,44 @@
   --red: #ef4444;
   --danger: #ef4444;
   --danger-soft: #fdf0f0;
-  --muted: #f1eff6;
+  --muted: #f1f5f9;
   --titlebar: #ffffff;
-  --sidebar: #fbfaf8;
-  --hover: #f3f0fb;
+  --sidebar: #ffffff;
+  --hover: #f1f5f9;
   --radius: 14px;
-  --shadow: 0 1px 2px rgba(30, 20, 60, 0.05), 0 6px 20px rgba(30, 20, 60, 0.06);
-  --grid: #efedf5;
-  --grad-brand: linear-gradient(135deg, #8b5cf6, #5b8def);
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 6px 20px rgba(15, 23, 42, 0.06);
+  --grid: #f1f5f9;
+  --grad-brand: linear-gradient(135deg, #4f46e5, #2563eb);
   --font-sans: "Fira Sans", system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
   --font-mono: "Fira Code", "Cascadia Code", Consolas, monospace;
-  --ch-opencode: #4f8ef7;
-  --ch-bai: #f59e0b;            /* 原 #d97706: 暗琥珀 → 亮琥珀 (问题3); 亮档保持, 暗档 20260908 单独提亮 */
-  --ch-commandcode: #10b981;    /* 原 #a78bfa: 浅紫 → 翡翠绿 (用户调整渠道配色) */
-  --ch-zcode: #6366f1;          /* 原 #06b6d4 青 → 翡翠绿 → 靛蓝 (用户指定) */
-  --ch-claudecode: #c2410c;     /* 20260908: #fb7185 鲑粉 → #c2410c Claude 品牌橙 (亮, orange-700, 白卡 5.18; 用户指定) */
-  --ch-dsh: #64748b;
-  --ch-codex: #c026d3;          /* 渠道色演变: #0f766e 青 → 品红/正红多轮 → 20260908 定梅子紫 #c026d3 (fuchsia-600, claudecode 上橙后紫区唯一空缺) */
+  --ch-opencode: #2563eb;       /* 20260911 slate/indigo 方案: blue-600 (方案未给, 同族补齐) */
+  --ch-bai: #7c3aed;            /* 20260911 slate/indigo 方案: violet-600 (用户给定) */
+  --ch-commandcode: #0891b2;    /* 20260911 slate/indigo 方案: cyan-600 (用户给定) */
+  --ch-zcode: #4f46e5;          /* 20260911 slate/indigo 方案: indigo-600 = 品牌主色 (用户给定) */
+  --ch-claudecode: #d97706;     /* 20260911 slate/indigo 方案: amber-600 (用户给定) */
+  --ch-dsh: #64748b;            /* slate-500, 新旧方案同值 */
+  --ch-codex: #e11d48;          /* 20260911 slate/indigo 方案: rose-600 (用户给定) */
   --up: #16a34a;                /* 涨/成功语义色 (EVOLUTION-6 新增, 值=原 .wb-s .up 硬编码, 亮色逐像素不变) */
   --down: #dc2626;              /* 跌/失败语义色 (EVOLUTION-6 新增, 值=原 .wb-s .down/.sync-fail 硬编码, 亮色逐像素不变) */
 
   /* ---- 20260909 界面优化 §3.2: 语义令牌 (亮色值 = 现状逐像素一致) ---- */
-  --button-primary-bg: #7c5cf6;
-  --button-primary-hover: #6a46ea;
+  --button-primary-bg: #4f46e5;
+  --button-primary-hover: #4338ca;
   --button-primary-text: #ffffff;
   --refresh-hover-text: #ffffff;
   --danger-text: #ef4444;
   --danger-hover-bg: #ef4444;
   --danger-hover-text: #ffffff;
   --surface-popover: #ffffff;
-  --border-popover: #eae7f2;
-  --focus-ring: #7c5cf6;
+  --border-popover: #e2e8f0;
+  --focus-ring: #4f46e5;
   --chart-input: #4f8ef7;
   --chart-output: #22c55e;
   --chart-reasoning: #a78bfa;
   --chart-cache: #06b6d4;
   --chart-cost: #d97706;
   --chart-extra: #ec4899;
-  --account-1: #7c5cf6;
+  --account-1: #4f46e5;
   --account-2: #4f8ef7;
   --account-3: #22c55e;
   --account-4: #d97706;
@@ -68,60 +68,64 @@
 }
 html[data-theme="dark"] {
   color-scheme: dark;
-  /* EVOLUTION-6: 中性纯黑灰重定标 (灰阶无紫调), 层次 bg<sidebar<card<muted<hover<border 明度递进 */
-  --bg: #111112;
-  --card: #1a1a1c;
-  --border: #2a2a2c;
-  --text: #e8e8ea;
-  --text1: #e8e8ea;
-  --text2: #a3a3a8;
-  --text3: #8a8a90;             /* WCAG 实测: card 5.06:1 / muted 4.74:1 (>=4.5 达标) */
-  --primary: #9d7cf8;
-  --primary-strong: #8b6cf6;
-  --primary-soft: #2a2440;
-  --muted: #202022;
-  --titlebar: #1a1a1c;
-  --sidebar: #151516;
-  --hover: #262628;
+  /* 20260911 arena2 对齐: Linear/Vercel 风蓝调灰层次 (原 EVOLUTION-6 中性纯黑灰),
+     层次 bg<sidebar/card/titlebar<muted<hover<border 明度递进; 映射表与对比度验算见
+     doc/20260911-暗色主题arena2风格对齐实施计划.md §3 */
+  --bg: #0A0B0F;
+  --card: #111218;
+  --border: #1F2230;
+  --text: #E6E8EF;
+  --text1: #E6E8EF;
+  --text2: #9BA1B0;
+  --text3: #8a8a90;             /* WCAG 实测: card #111218 5.45:1 / muted #171922 5.11:1 (>=4.5 达标) */
+  --primary: #818CF8;           /* indigo-400 = 演示稿 #6366F1 提亮档, 新卡 6.27:1 */
+  --primary-strong: #6F79F5;
+  --primary-soft: #1C2030;
+  --muted: #171922;
+  --titlebar: #111218;
+  --sidebar: #111218;
+  --hover: #1B1E29;
   --shadow: 0 1px 2px rgba(0,0,0,.2), 0 4px 14px rgba(0,0,0,.24);
-  --grid: #242426;
+  --grid: #1F2230;
+  --grad-brand: linear-gradient(135deg, #6366F1, #7C3AED);   /* 演示稿主按钮渐变 */
   --danger-soft: #3d2429;
-  --up: #4ade80;                /* 按最浅承载面 muted 校准 (>=4.5): muted 9.33:1 / card 9.97:1 */
-  --down: #f87171;              /* 原亮色值 #dc2626 对 muted 仅 3.37:1 不达标, 提亮: muted 5.88:1 / card 6.28:1 */
+  --up: #4ade80;                /* 按最浅承载面 muted 校准 (>=4.5): muted #171922 10.05:1 */
+  --down: #f87171;              /* 原亮色值 #dc2626 不达标, 提亮: muted #171922 6.33:1 */
   --ch-opencode: #6ba3ff;
-  --ch-bai: #facc15;            /* 20260908: #f59e0b → #facc15 金黄 (yellow-400; 品牌橙上位后暗主题距橙 90→113, 亮档仍 #f59e0b) */
-  --ch-commandcode: #34d399;
-  --ch-zcode: #818cf8;
-  --ch-claudecode: #d97757;     /* 20260908: Claude 品牌陶土橙 (亮配 #c2410c; 暗卡 5.57) */
-  --ch-dsh: #94a3b8;
-  --ch-codex: #d946ef;          /* 20260908: 定梅子紫 (fuchsia-500, 暗配 #c026d3; 暗卡 5.03, 距最近渠道 113) */
+  --ch-bai: #A78BFA;            /* 20260911 arena2: violet-400 = 演示稿 #8B5CF6 提亮档 (新卡 6.87:1); 原金黄 #facc15 */
+  --ch-commandcode: #06B6D4;    /* 20260911 arena2: 演示稿原值 cyan-500 (新卡 7.70:1); 原翡翠绿 #34d399 */
+  --ch-zcode: #818cf8;          /* indigo-400 = 演示稿 #6366F1 提亮档 (新卡 6.27:1), 20260908 起未变 */
+  --ch-claudecode: #F59E0B;     /* 20260911 arena2: 演示稿原值 amber-500 (新卡 8.70:1); 原陶土橙 #d97757 */
+  --ch-dsh: #94a3b8;            /* slate-400 = 演示稿 #64748B 提亮档 (新卡 7.29:1), 20260908 起未变 */
+  --ch-codex: #F43F5E;          /* 20260911 arena2: 演示稿原值 rose-500 (新卡 5.09:1); 原 fuchsia #d946ef */
 
-  /* ---- 20260909 界面优化 §3.2: 深色语义令牌 (对比度由 test_dark_theme.py §8 程序化校验) ---- */
-  --button-primary-bg: #9d7cf8;
-  --button-primary-hover: #8b6cf6;
-  --button-primary-text: #111112;
-  --refresh-hover-text: #111112;
+  /* ---- 20260909 界面优化 §3.2: 深色语义令牌 (对比度由 test_dark_theme.py §8 程序化校验;
+          20260911 arena2 换值: 按钮白字 4.85/6.27, 焦点环 9.38/9.87, tooltip 14.31) ---- */
+  --button-primary-bg: #5B5FEF;      /* 演示稿 #6366F1 白字仅 4.47:1, 加深一档保 >=4.5 */
+  --button-primary-hover: #4A4ED6;
+  --button-primary-text: #FFFFFF;
+  --refresh-hover-text: #111112;     /* 语义=琥珀 hover 底的深字; dark 刷新按钮整体渐变化, 见文件尾 dark 覆写 */
   --danger-text: #f87171;
   --danger-hover-bg: #ef4444;
   --danger-hover-text: #111112;
-  --surface-popover: #262628;
-  --border-popover: #3d3d42;
-  --focus-ring: #c4b5fd;
+  --surface-popover: #171922;
+  --border-popover: #2A2E3F;
+  --focus-ring: #A5B4FC;
   --chart-input: #6ba3ff;
   --chart-output: #4ade80;
   --chart-reasoning: #c4b5fd;
   --chart-cache: #22d3ee;
   --chart-cost: #fbbf24;
   --chart-extra: #f472b6;
-  --account-1: #9d7cf8;
+  --account-1: #818CF8;
   --account-2: #6ba3ff;
   --account-3: #4ade80;
   --account-4: #fbbf24;
   --account-5: #22d3ee;
   --account-6: #f472b6;
-  --chart-tooltip-bg: #262628;
-  --chart-tooltip-text: #e8e8ea;
-  --chart-tooltip-border: #3d3d42;
+  --chart-tooltip-bg: #171922;
+  --chart-tooltip-text: #E6E8EF;
+  --chart-tooltip-border: #2A2E3F;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { height: 100%; overflow: hidden; }
@@ -280,7 +284,7 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
 .usage-blocks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
 .ub { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; padding: 14px 16px 12px; position: relative; }
 .ub::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
-.ub.c-rolling::before { background: linear-gradient(90deg, #a78bfa, #7c5cf6); }
+.ub.c-rolling::before { background: linear-gradient(90deg, #818cf8, #4f46e5); }
 .ub.c-week::before { background: linear-gradient(90deg, #4f8ef7, #22c55e); }
 .ub.c-month::before { background: linear-gradient(90deg, #d97706, #ef4444); }
 .ub-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
@@ -288,7 +292,7 @@ html[data-theme="dark"] .skeleton::after { background: linear-gradient(90deg, tr
 .ub-rem { font-size: 14px; font-weight: 700; font-family: var(--font-mono); color: var(--text); }
 .ub-bar { height: 8px; background: var(--muted); border-radius: 99px; overflow: hidden; }
 .ub-bar-fill { height: 100%; border-radius: 99px; background: var(--grad-brand); transition: width .4s ease; }
-.ub.c-rolling .ub-bar-fill { background: linear-gradient(90deg, #a78bfa, #7c5cf6); }
+.ub.c-rolling .ub-bar-fill { background: linear-gradient(90deg, #818cf8, #4f46e5); }
 .ub.c-week .ub-bar-fill { background: linear-gradient(90deg, #4f8ef7, #22c55e); }
 .ub.c-month .ub-bar-fill { background: linear-gradient(90deg, #f59e0b, #ef4444); }
 .ub-meta { display: flex; justify-content: space-between; margin-top: 8px; font-size: 11.5px; color: var(--text3); }
@@ -641,6 +645,13 @@ html[data-theme="dark"] .ub.ub-hint { background: #123144; color: #67e8f9; }
 
 /* 深色表头轻微提层 (行 hover 已有 var(--muted) 连贯规则, 不新增选择业务) */
 html[data-theme="dark"] .tbl th { background: var(--muted); }
+
+/* ---- 20260911 arena2 对齐 (doc/20260911-暗色主题arena2风格对齐实施计划.md §5, 均限 dark 作用域) ---- */
+/* 刷新按钮: 琥珀描边 → 演示稿式靛蓝渐变主按钮; hover 用主按钮 hover 底 (琥珀 hover 语义仅亮档) */
+html[data-theme="dark"] .pill.small.refresh { border-color: transparent; background: var(--grad-brand); color: #fff; }
+html[data-theme="dark"] .pill.small.refresh:hover { background: var(--button-primary-hover); border-color: var(--button-primary-hover); color: var(--button-primary-text); }
+/* 演示稿 period-card.hi: 「今天」卡靛蓝描边 + 左上径向光晕 */
+html[data-theme="dark"] .windows-bar .wb-cell:first-child { border-color: rgba(99,102,241,.35); background: radial-gradient(600px 120px at 0% 0%, rgba(99,102,241,.10), transparent 60%), var(--card); }
 
 /* 减少动画偏好: toast 关闭由 setTimeout 定时驱动, 不依赖动画完成, 节点仍按原时序删除 */
 @media (prefers-reduced-motion: reduce) {

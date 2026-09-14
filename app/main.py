@@ -500,13 +500,13 @@ def _patch_webview_popup() -> None:
 
 
 def _theme_background_color() -> str:
-    """主窗口原生底色 (20260909 §3.4): 与已保存主题对齐 (dark --bg #111112 / light --bg #f7f6f4),
+    """主窗口原生底色 (20260909 §3.4): 与已保存主题对齐 (dark --bg #0A0B0F / light --bg #f8fafc),
     避免 HTML 绘制前的原生白底; 未设置或读取失败用浅色默认. 只处理主窗口, 不动第三方登录页."""
     try:
         theme = db.get_settings().get("theme")
     except Exception:  # noqa: BLE001 偏好读取失败按未设置处理
         theme = None
-    return "#111112" if theme == "dark" else "#f7f6f4"
+    return "#0A0B0F" if theme == "dark" else "#f8fafc"
 
 
 def main() -> None:
@@ -581,7 +581,7 @@ def main() -> None:
         height=640,
         min_size=(560, 500),
         hidden=True,
-        background_color="#f7f6f4",
+        background_color="#f8fafc",
     )}
 
     def login_win() -> object:
@@ -764,7 +764,7 @@ def main() -> None:
             width=720,
             height=640,
             min_size=(560, 500),
-            background_color="#f7f6f4",
+            background_color="#f8fafc",
         )
         login_win_ref["win"] = new_win
         _bind_login_close_cleanup(new_win)

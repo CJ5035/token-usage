@@ -154,7 +154,7 @@ def test_inline_channel_colors_use_ch_color_var_refs():
     # 渠道名 td (renderChannelTable)
     assert '<td style="color:${CH_COLOR[' in src
     # fallback 兜底未知渠道
-    assert 'CH_COLOR[ch] || "#4f8ef7"' in src
+    assert 'CH_COLOR[ch] || "#2563eb"' in src
 
 
 def test_no_ch_color_inline_style_in_templates():
@@ -198,7 +198,7 @@ def test_rerender_and_refresh_icons_pass_noanim_true():
     icons = _extract_fn(src, "refreshIcons")
     for call in (
         "chartReportStack(reportDailyCache.data, true)",
-        "chartReportDonut(reportDailyCache.data, true)",
+        "chartReportDonut(reportDailyCache.data, true, reportDailyCache.range)",   # 20260911 arena2: 环心范围标签需 range
         "chartToday(chTrendCache.data, true)",
         "chartTrend(state.data.trend, true)",
         "chartZcodeTrend(zcodeSummaryLast.daily7, true)",

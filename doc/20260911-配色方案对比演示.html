@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN" data-scheme="current">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GoGauge 配色方案对比演示</title>
+<style>
+  /* ---- UI 骨架（四套方案共用，仅渠道色/氛围变量不同） ---- */
+  :root{
+    --bg:#0a0a0f; --panel:#121218; --card:#16161d; --border:#26262f;
+    --t1:#ececf2; --t2:#9a9aac; --t3:#66667a; --accent:#818cf8; --up:#4ade80;
+    --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  }
+  /* ---- 四套配色方案：只换渠道色 + 氛围变量 ---- */
+  [data-scheme="current"]{
+    --ch-bai:#facc15; --ch-commandcode:#34d399; --ch-zcode:#818cf8;
+    --ch-claudecode:#d97757; --ch-dsh:#94a3b8; --ch-codex:#d946ef;
+    --grid-c:rgba(255,255,255,.09); --dot-op:1; --dgap:0px;
+  }
+  [data-scheme="a"]{
+    --ch-bai:#fbbf24; --ch-commandcode:#34d399; --ch-zcode:#818cf8;
+    --ch-claudecode:#d97757; --ch-dsh:#8b9dc0; --ch-codex:#e879f9;
+    --grid-c:rgba(255,255,255,.09); --dot-op:1; --dgap:0px;
+  }
+  [data-scheme="ac"]{
+    --ch-bai:#fbbf24; --ch-commandcode:#34d399; --ch-zcode:#818cf8;
+    --ch-claudecode:#d97757; --ch-dsh:#8b9dc0; --ch-codex:#e879f9;
+    --grid-c:rgba(255,255,255,.05); --dot-op:.55; --dgap:2.5px;
+  }
+  [data-scheme="b"]{
+    --ch-bai:#e2b93b; --ch-commandcode:#45d48a; --ch-zcode:#8f9bff;
+    --ch-claudecode:#e08151; --ch-dsh:#8598bb; --ch-codex:#d477c8;
+    --grid-c:rgba(255,255,255,.09); --dot-op:1; --dgap:0px;
+  }
+  html,body{background:var(--bg);color:var(--t1);margin:0}
+  body{font:14px/1.55 system-ui,"Microsoft YaHei",sans-serif;padding:28px 24px 48px}
+  .wrap{max-width:1120px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 4px}
+  .hint{color:var(--t3);font-size:12px;margin-bottom:18px}
+
+  /* ---- 方案切换器 ---- */
+  .switch{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+  .switch button{
+    background:var(--card);border:1px solid var(--border);color:var(--t2);
+    border-radius:999px;padding:6px 16px;font-size:13px;cursor:pointer;
+  }
+  .switch button.on{background:var(--accent);border-color:var(--accent);color:#0a0a0f;font-weight:600}
+  #desc{color:var(--t2);font-size:13px;min-height:22px;margin-bottom:16px}
+
+  /* ---- 色板条 ---- */
+  .swatches{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+  .sw{display:flex;align-items:center;gap:8px;background:var(--card);
+      border:1px solid var(--border);border-radius:10px;padding:7px 12px;font-size:12px}
+  .sw .dot{width:10px;height:10px;border-radius:50%}
+  .sw code{font-family:var(--mono);color:var(--t3);font-size:11px}
+
+  /* ---- 概览卡 ---- */
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px 16px}
+  .card .lab{color:var(--t2);font-size:12px}
+  .card .num{font-family:var(--mono);font-size:22px;font-weight:600;margin:2px 0}
+  .card .sub{color:var(--t3);font-size:12px}
+  .card .up{color:var(--up);font-size:12px}
+
+  /* ---- 渠道配额卡 ---- */
+  .quota{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px}
+  .qhead{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600}
+  .qhead .dot{width:8px;height:8px;border-radius:50%}
+  .badge{background:rgba(129,140,248,.16);color:var(--accent);border-radius:6px;
+         padding:0 6px;font-size:11px;font-weight:600}
+  .qval{font-size:15px;margin:6px 0 2px}
+  .qsub{color:var(--t3);font-size:12px}
+
+  /* ---- 图表区 ---- */
+  .charts{display:grid;grid-template-columns:1fr 400px;gap:12px;margin-bottom:12px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px}
+  .panel h3{font-size:13px;margin:0 0 12px;font-weight:600}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--t2);margin-bottom:10px}
+  .legend .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:5px;
+               opacity:var(--dot-op)}
+  .gline{stroke:var(--grid-c)}
+  .tick{fill:var(--t3);font-size:10px}
+  .xlab{fill:var(--t3);font-size:11px}
+  #donut circle.seg{
+    fill:none;stroke-width:34;
+    stroke-dasharray:calc(var(--len) - var(--dgap)) calc(502.655px - var(--len) + var(--dgap));
+    stroke-dashoffset:calc(502.655px - var(--start));
+  }
+  /* 方案C氛围：柱顶圆角（其余方案由 SVG 属性回到直角） */
+  [data-scheme="ac"] .seg-top{rx:6px;y:calc(var(--sy) - 6px);height:calc(var(--sh) + 6px)}
+  .cnum{fill:var(--t1);font-family:var(--mono);font-size:19px;font-weight:700}
+  .clab{fill:var(--t3);font-size:11px}
+
+  .foot{color:var(--t3);font-size:12px;border-top:1px solid var(--border);padding-top:12px}
+  @media (max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}.charts{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GoGauge 暗色主题配色方案对比</h1>
+  <div class="hint">演示数据取自首页「今天」真实比例（总计 135.07M）· 点击按钮切换方案，图表颜色由 CSS 变量实时驱动</div>
+
+  <div class="switch" id="switch">
+    <button data-scheme="current" class="on">现状</button>
+    <button data-scheme="a">方案 A</button>
+    <button data-scheme="ac">方案 A + C（推荐）</button>
+    <button data-scheme="b">方案 B</button>
+  </div>
+  <div id="desc"></div>
+
+  <div class="swatches" id="swatches"></div>
+
+  <!-- 概览 -->
+  <div class="cards">
+    <div class="card"><div class="lab">今天</div><div class="num">135.07M</div>
+      <div class="sub">¥77.84</div><div class="up">↑149.4% vs 昨日同时段</div></div>
+    <div class="card"><div class="lab">昨天</div><div class="num">362.55M</div>
+      <div class="sub">¥302.28</div></div>
+    <div class="card"><div class="lab">近7天</div><div class="num">1.78B</div>
+      <div class="sub">¥1978.55 · 日均 254.69M</div></div>
+    <div class="card"><div class="lab">近30天</div><div class="num">5.19B</div>
+      <div class="sub">¥4411.34 · 日均 173.09M</div></div>
+  </div>
+
+  <!-- 渠道配额 -->
+  <div class="quota">
+    <div class="card"><div class="qhead"><span class="dot" style="background:var(--ch-bai)"></span>bai</div>
+      <div class="qval">余额 300,000 积分</div><div class="qsub">1账号 · 0min</div></div>
+    <div class="card"><div class="qhead"><span class="dot" style="background:var(--ch-commandcode)"></span>commandcode</div>
+      <div class="qval">$17.38</div><div class="qsub">剩余 · 1账号 · 0min</div></div>
+    <div class="card"><div class="qhead"><span class="dot" style="background:var(--ch-zcode)"></span>zcode
+      <span class="badge">Pro</span></div>
+      <div class="qval">滚动用量 15% · 每周用量 19%</div><div class="qsub">GLM Coding Plan</div></div>
+  </div>
+
+  <!-- 图表 -->
+  <div class="charts">
+    <div class="panel">
+      <h3>分渠道消耗趋势</h3>
+      <div class="legend" id="legend"></div>
+      <svg id="bar" viewBox="0 0 560 248" width="100%"></svg>
+    </div>
+    <div class="panel">
+      <h3>渠道占比</h3>
+      <div style="display:flex;justify-content:center">
+        <svg id="donut" viewBox="0 0 220 220" width="240" height="240">
+          <g id="donutG" transform="rotate(-90 110 110)"></g>
+          <text x="110" y="107" text-anchor="middle" class="cnum">135.07M</text>
+          <text x="110" y="128" text-anchor="middle" class="clab">今天</text>
+        </svg>
+      </div>
+      <div class="legend" id="legend2" style="justify-content:center;margin-top:6px"></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    亮色主题需同步换算同一色相的暗档 · 新色值需通过 tests/test_dark_theme.py 对比度校验 ·
+    --chart-* 六个指标色需与渠道色拉齐到同一明度带
+  </div>
+</div>
+
+<script>
+/* 渠道数据：按首页「今天」堆叠图目测比例（M） */
+const CH = [
+  {k:'bai',         label:'bai',         v:1.8},
+  {k:'commandcode', label:'commandcode', v:0.9},
+  {k:'zcode',       label:'zcode',       v:85},
+  {k:'claudecode',  label:'claudecode',  v:4.2},
+  {k:'codex',       label:'Codex',       v:12.5},
+  {k:'dsh',         label:'dsh',         v:30.67},
+];
+const TOTAL = CH.reduce((s,c)=>s+c.v,0);            /* 135.07 */
+const NS = 'http://www.w3.org/2000/svg';
+const PLOT = {x:56, w:360, top:12, bottom:212, max:140};
+const SCALE = (PLOT.bottom - PLOT.top) / PLOT.max;
+
+function el(name, attrs){
+  const e = document.createElementNS(NS, name);
+  for (const [k,v] of Object.entries(attrs)) e.setAttribute(k,v);
+  return e;
+}
+
+/* ---- 堆叠柱 ---- */
+const bar = document.getElementById('bar');
+for (let v=0; v<=140; v+=20){
+  const y = PLOT.bottom - v*SCALE;
+  bar.appendChild(el('line',{x1:PLOT.x, x2:PLOT.x+PLOT.w+40, y1:y, y2:y, class:'gline'}));
+  const t = el('text',{x:PLOT.x-8, y:y+3, 'text-anchor':'end', class:'tick'});
+  t.textContent = v + '.00M'; bar.appendChild(t);
+}
+let cursor = PLOT.bottom;
+for (const c of CH){
+  const h = Math.max(c.v*SCALE, 1), y = cursor - h;
+  const r = el('rect',{x:PLOT.x, y:y.toFixed(2), width:PLOT.w, height:h.toFixed(2),
+                       class: c.k==='dsh' ? 'seg-top' : 'seg'});
+  r.style.fill = `var(--ch-${c.k})`;
+  r.style.setProperty('--sy', y.toFixed(2)+'px');
+  r.style.setProperty('--sh', h.toFixed(2)+'px');
+  bar.appendChild(r);
+  cursor = y;
+}
+const xl = el('text',{x:PLOT.x+PLOT.w/2, y:PLOT.bottom+22, 'text-anchor':'middle', class:'xlab'});
+xl.textContent = '2026-09-11'; bar.appendChild(xl);
+
+/* ---- 环形图 ---- */
+const donutG = document.getElementById('donutG');
+const CIRC = 2*Math.PI*80;
+let start = 0;
+for (const c of CH){
+  const len = c.v/TOTAL*CIRC;
+  const seg = el('circle',{cx:110, cy:110, r:80, class:'seg'});
+  seg.style.stroke = `var(--ch-${c.k})`;
+  seg.style.setProperty('--len',  len.toFixed(3)+'px');
+  seg.style.setProperty('--start',start.toFixed(3)+'px');
+  donutG.appendChild(seg);
+  start += len;
+}
+
+/* ---- 图例 / 色板 ---- */
+function legendInto(node){
+  for (const c of CH){
+    const s = document.createElement('span');
+    const d = document.createElement('span'); d.className='dot';
+    d.style.background = `var(--ch-${c.k})`;
+    s.appendChild(d); s.appendChild(document.createTextNode(c.label));
+    node.appendChild(s);
+  }
+}
+legendInto(document.getElementById('legend'));
+legendInto(document.getElementById('legend2'));
+const swBox = document.getElementById('swatches');
+for (const c of CH){
+  const div = document.createElement('div'); div.className='sw';
+  const d = document.createElement('span'); d.className='dot';
+  d.style.background = `var(--ch-${c.k})`;
+  const name = document.createElement('span'); name.textContent = c.label;
+  const code = document.createElement('code'); code.id = 'hex-'+c.k;
+  div.append(d, name, code); swBox.appendChild(div);
+}
+
+/* ---- 方案切换 ---- */
+const DESC = {
+  current:'现状 —— Tailwind 混档位：codex 用 fuchsia-500 偏响、dsh 是 slate-400 偏灰、bai 偏荧光，明度彩度不成体系，整体偏「彩虹感」',
+  a:'方案 A —— 只调 3 个色：codex 降为 fuchsia-400、bai 换 amber-400 去荧光、dsh 加蓝倾向去「占位感」；zcode / commandcode / claudecode 保持不动',
+  ac:'方案 A + C（推荐）—— 在 A 的调色上叠加氛围细节：柱顶圆角、环形分段留缝、网格减淡、图例圆点降不透明度；改动最小、观感提升最大',
+  b:'方案 B —— OkLCH 等感知带整套重排（约 L0.75 / C0.11）：六色全部更换为同一明度彩度带，观感最「策划过」，但需连亮色主题一起重调',
+};
+function refreshHex(){
+  const cs = getComputedStyle(document.documentElement);
+  for (const c of CH)
+    document.getElementById('hex-'+c.k).textContent = cs.getPropertyValue('--ch-'+c.k).trim();
+}
+document.getElementById('desc').textContent = DESC.current;
+document.getElementById('switch').addEventListener('click', (ev)=>{
+  const b = ev.target.closest('button'); if (!b) return;
+  document.documentElement.dataset.scheme = b.dataset.scheme;
+  document.querySelectorAll('#switch button').forEach(x=>x.classList.toggle('on', x===b));
+  document.getElementById('desc').textContent = DESC[b.dataset.scheme];
+  refreshHex();
+});
+refreshHex();
+</script>
+</body>
+</html>

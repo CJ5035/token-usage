@@ -27,20 +27,21 @@ _CSS = _ROOT / "app" / "web" / "style.css"
 _APP_JS = _ROOT / "app" / "web" / "app.js"
 
 # ④表 13 项换值 (底色/文字类, 固定 hex 断言; --text3 固定 #8a8a90)
+# 20260911 arena2 对齐: 蓝调灰层次 (doc/20260911-暗色主题arena2风格对齐实施计划.md §3)
 _DARK_EXPECTED = {
-    "--bg": "#111112",
-    "--card": "#1a1a1c",
-    "--sidebar": "#151516",
-    "--titlebar": "#1a1a1c",
-    "--border": "#2a2a2c",
-    "--text": "#e8e8ea",
-    "--text1": "#e8e8ea",
-    "--text2": "#a3a3a8",
+    "--bg": "#0A0B0F",
+    "--card": "#111218",
+    "--sidebar": "#111218",
+    "--titlebar": "#111218",
+    "--border": "#1F2230",
+    "--text": "#E6E8EF",
+    "--text1": "#E6E8EF",
+    "--text2": "#9BA1B0",
     "--text3": "#8a8a90",
-    "--muted": "#202022",
-    "--hover": "#262628",
-    "--grid": "#242426",
-    "--primary-soft": "#2a2440",
+    "--muted": "#171922",
+    "--hover": "#1B1E29",
+    "--grid": "#1F2230",
+    "--primary-soft": "#1C2030",
 }
 
 # 20260909 界面优化 §3.2: 25 个语义令牌 (:root 值=现状逐像素一致, dark 值对比度见 §6 测试)
@@ -61,6 +62,37 @@ _ROOT_ADDED_ALLOWED = {"--up", "--down", "--ch-codex"} | _THEME_TOKENS
 
 # 20260907 Codex 渠道色换品红 (与 commandcode 撞色修复, 用户指定): :root/dark 改值豁免 + 新值锚定
 _ROOT_RECOLOR_ALLOWED = {"--ch-codex", "--ch-claudecode", "--ch-bai"}   # 20260908 三渠道终局配色
+
+# 20260911 浅色 slate/indigo 重定标 (doc/20260911-浅色Slate-Indigo配色实施计划.md 令牌映射表):
+# :root 基础令牌新值锚定 (语义令牌 25 项见 _ROOT_THEME_EXPECTED)
+_ROOT_LIGHT_EXPECTED = {
+    "--bg": "#f8fafc",
+    "--border": "#e2e8f0",
+    "--text": "#0f172a",
+    "--text1": "#0f172a",
+    "--text2": "#475569",
+    "--text3": "#94a3b8",
+    "--primary": "#4f46e5",
+    "--primary-strong": "#4338ca",
+    "--primary-soft": "#eef2ff",
+    "--muted": "#f1f5f9",
+    "--sidebar": "#ffffff",
+    "--hover": "#f1f5f9",
+    "--shadow": "0 1px 2px rgba(15, 23, 42, 0.05), 0 6px 20px rgba(15, 23, 42, 0.06)",
+    "--grid": "#f1f5f9",
+    "--grad-brand": "linear-gradient(135deg, #4f46e5, #2563eb)",
+    "--ch-opencode": "#2563eb",
+    "--ch-bai": "#7c3aed",
+    "--ch-commandcode": "#0891b2",
+    "--ch-zcode": "#4f46e5",
+    "--ch-claudecode": "#d97706",
+    "--ch-codex": "#e11d48",
+}
+
+# 20260911 浅色重定标 :root 语义令牌换值 (新值已由 _ROOT_THEME_EXPECTED 锚定, HEAD 对比豁免)
+_ROOT_LIGHT_SEMANTIC_CHANGED = {
+    "--button-primary-bg", "--button-primary-hover", "--focus-ring", "--border-popover", "--account-1",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -149,18 +181,27 @@ def test_dark_thirteen_tokens_match_plan_table():
 
 
 def test_dark_tokens_fixed_in_plan_are_frozen():
-    """--text3 按计划固定 #8a8a90 (实测 card 5.06:1 / muted 4.74:1, >=4.5 达标)."""
+    """--text3 按计划固定 #8a8a90 (20260911 arena2 新卡面上实测 card 5.45:1 / muted 5.11:1, >=4.5 达标)."""
     assert _DARK_EXPECTED["--text3"] == "#8a8a90"
     assert _dark_vars(_css())["--text3"] == "#8a8a90"
 
 
 def test_dark_untouched_tokens_unchanged_from_head():
-    """dark 块保留项程序化保证: 除 13 项换值与新增 --up/--down/--ch-codex 外, 其余
-    token (--primary/--primary-strong/--shadow/--danger-soft/--ch-* 其余项) 与 HEAD 一致."""
+    """dark 块保留项程序化保证: 除历次换值名单外, 其余 token 与 HEAD 一致.
+    20260911 arena2 对齐换值: --primary/--primary-strong/--grad-brand(新增)/--ch-bai/
+    --ch-commandcode/--ch-claudecode/--ch-codex + 25 语义令牌部分换值."""
     head = _dark_vars(_head_css())
     cur = _dark_vars(_css())
-    changed = set(_DARK_EXPECTED) | {"--up", "--down", "--ch-codex", "--ch-claudecode", "--ch-bai", "--shadow"}   # 20260909: --shadow 深色减弱 (D2)
-    assert set(cur) - set(head) <= {"--up", "--down", "--ch-codex"} | _THEME_TOKENS   # 20260909 语义令牌
+    changed = set(_DARK_EXPECTED) | {
+        "--up", "--down", "--shadow",                    # EVOLUTION-6 / 20260909 D2
+        "--ch-codex", "--ch-claudecode", "--ch-bai",     # 20260907-08 渠道色
+        # 20260911 arena2: 主色族 + 渠道色 + 语义令牌换值 (10 项, 以 _DARK_THEME_EXPECTED 为准)
+        "--primary", "--primary-strong", "--grad-brand", "--ch-commandcode",
+        "--button-primary-bg", "--button-primary-hover", "--button-primary-text",
+        "--surface-popover", "--border-popover", "--focus-ring",
+        "--account-1", "--chart-tooltip-bg", "--chart-tooltip-text", "--chart-tooltip-border",
+    }
+    assert set(cur) - set(head) <= {"--up", "--down", "--grad-brand"} | _THEME_TOKENS   # 新增声明白名单
     for token, value in head.items():
         if token in changed:
             continue
@@ -193,16 +234,21 @@ def test_root_up_down_values_equal_original_hardcodes():
 
 def test_root_tokens_unchanged_from_head():
     """亮色 :root 既有声明零改动: 与 git show HEAD 基准逐项对比,
-    仅允许白名单声明新增 (--up/--down: EVOLUTION-6; --ch-codex: T5)."""
+    仅允许白名单声明新增 (--up/--down: EVOLUTION-6; --ch-codex: T5).
+    20260911 浅色 slate/indigo 重定标的 :root 换值不再以 HEAD 为基准,
+    改由 _ROOT_LIGHT_EXPECTED 锚定新值 (语义令牌 25 项已由 _ROOT_THEME_EXPECTED 锚定)."""
     head = _root_vars(_head_css())
     cur = _root_vars(_css())
     assert set(cur) - set(head) <= _ROOT_ADDED_ALLOWED, (
         f":root 出现白名单外的新增声明: {set(cur) - set(head)}"
     )
+    recolor = _ROOT_RECOLOR_ALLOWED | set(_ROOT_LIGHT_EXPECTED) | _ROOT_LIGHT_SEMANTIC_CHANGED
     for token, value in head.items():
-        if token in _ROOT_RECOLOR_ALLOWED:
+        if token in recolor:
             continue
         assert cur.get(token) == value, f":root 变量被改动: {token}: {value!r} -> {cur.get(token)!r}"
+    for token, expected in _ROOT_LIGHT_EXPECTED.items():   # 新值锚定 (20260911 浅色重定标)
+        assert cur.get(token) == expected, f":root {token} 应为 {expected}, 实际 {cur.get(token)!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +308,7 @@ def test_skeleton_surfaces_use_muted_token():
 
 
 def test_dark_text3_up_down_contrast_on_card_and_muted():
-    """--text3/--up/--down dark 值对最浅两个承载面 (--card #1a1a1c / --muted #202022) >=4.5:1."""
+    """--text3/--up/--down dark 值对最浅两个承载面 (--card #111218 / --muted #171922) >=4.5:1."""
     dark = _dark_vars(_css())
     for token in ("--text3", "--up", "--down"):
         for surface_token in ("--card", "--muted"):
@@ -296,71 +342,72 @@ def test_plan_badge_dead_code_removed():
 
 
 def test_codex_channel_color_recolored_20260907():
-    """20260907-08 渠道配色终局: Codex 梅子紫 #c026d3/#d946ef; claudecode 品牌橙 #c2410c/#d97757;
-    bai 亮 #f59e0b 不变 / 暗金黄 #facc15 (全量审计见 artifacts/dark-theme-full-audit.html)."""
+    """渠道配色演变终局: 20260907-08 Codex 梅子紫/claudecode 品牌橙/bai 暗金黄 →
+    20260911 arena2 对齐暗档改 hue: codex #F43F5E(rose-500) / claudecode #F59E0B(amber-500) /
+    bai #A78BFA(violet-400, 演示稿 #8B5CF6 提亮档保 4.5:1); 亮档 slate/indigo 值不变。"""
     root = _root_vars(_css())
     dark = _dark_vars(_css())
-    assert root["--ch-codex"] == "#c026d3"
-    assert dark["--ch-codex"] == "#d946ef"
-    assert root["--ch-claudecode"] == "#c2410c"
-    assert dark["--ch-claudecode"] == "#d97757"
-    assert root["--ch-bai"] == "#f59e0b"
-    assert dark["--ch-bai"] == "#facc15"
+    assert root["--ch-codex"] == "#e11d48"
+    assert dark["--ch-codex"] == "#F43F5E"
+    assert root["--ch-claudecode"] == "#d97706"
+    assert dark["--ch-claudecode"] == "#F59E0B"
+    assert root["--ch-bai"] == "#7c3aed"
+    assert dark["--ch-bai"] == "#A78BFA"
 
 
 # ---------------------------------------------------------------------------
 # 8. 20260909 语义令牌: dark 固定值 + 亮色等于现状值 + WCAG 对比度 + 消费点
 # ---------------------------------------------------------------------------
 
-# dark 块 25 令牌固定值 (对比度: 按钮文字 6.00/5.01, 刷新hover 5.92, 危险 5.12/5.02,
-# 焦点环 9.41/10.22, tooltip 12.34 — 由下方测试程序化复核, 不凭此注释验收)
+# dark 块 25 令牌固定值 (20260911 arena2 换值: 主按钮白字 4.85/6.27, 焦点环 9.38/9.87,
+# tooltip 14.31 — 由下方测试程序化复核, 不凭此注释验收; 其余项沿用 20260909 值)
 _DARK_THEME_EXPECTED = {
-    "--button-primary-bg": "#9d7cf8",
-    "--button-primary-hover": "#8b6cf6",
-    "--button-primary-text": "#111112",
+    "--button-primary-bg": "#5B5FEF",
+    "--button-primary-hover": "#4A4ED6",
+    "--button-primary-text": "#FFFFFF",
     "--refresh-hover-text": "#111112",
     "--danger-text": "#f87171",
     "--danger-hover-bg": "#ef4444",
     "--danger-hover-text": "#111112",
-    "--surface-popover": "#262628",
-    "--border-popover": "#3d3d42",
-    "--focus-ring": "#c4b5fd",
+    "--surface-popover": "#171922",
+    "--border-popover": "#2A2E3F",
+    "--focus-ring": "#A5B4FC",
     "--chart-input": "#6ba3ff",
     "--chart-output": "#4ade80",
     "--chart-reasoning": "#c4b5fd",
     "--chart-cache": "#22d3ee",
     "--chart-cost": "#fbbf24",
     "--chart-extra": "#f472b6",
-    "--account-1": "#9d7cf8",
+    "--account-1": "#818CF8",
     "--account-2": "#6ba3ff",
     "--account-3": "#4ade80",
     "--account-4": "#fbbf24",
     "--account-5": "#22d3ee",
     "--account-6": "#f472b6",
-    "--chart-tooltip-bg": "#262628",
-    "--chart-tooltip-text": "#e8e8ea",
-    "--chart-tooltip-border": "#3d3d42",
+    "--chart-tooltip-bg": "#171922",
+    "--chart-tooltip-text": "#E6E8EF",
+    "--chart-tooltip-border": "#2A2E3F",
 }
 
 # :root 25 令牌亮色锚 (= 改动前生效值, 浅色逐像素不变的程序化保证)
 _ROOT_THEME_EXPECTED = {
-    "--button-primary-bg": "#7c5cf6",
-    "--button-primary-hover": "#6a46ea",
+    "--button-primary-bg": "#4f46e5",
+    "--button-primary-hover": "#4338ca",
     "--button-primary-text": "#ffffff",
     "--refresh-hover-text": "#ffffff",
     "--danger-text": "#ef4444",
     "--danger-hover-bg": "#ef4444",
     "--danger-hover-text": "#ffffff",
     "--surface-popover": "#ffffff",
-    "--border-popover": "#eae7f2",
-    "--focus-ring": "#7c5cf6",
+    "--border-popover": "#e2e8f0",
+    "--focus-ring": "#4f46e5",
     "--chart-input": "#4f8ef7",
     "--chart-output": "#22c55e",
     "--chart-reasoning": "#a78bfa",
     "--chart-cache": "#06b6d4",
     "--chart-cost": "#d97706",
     "--chart-extra": "#ec4899",
-    "--account-1": "#7c5cf6",
+    "--account-1": "#4f46e5",
     "--account-2": "#4f8ef7",
     "--account-3": "#22c55e",
     "--account-4": "#d97706",
@@ -456,4 +503,63 @@ def test_color_scheme_declared_per_theme():
     dark_block = _extract_block(css, 'html[data-theme="dark"]')
     assert "color-scheme: light;" in root_block
     assert "color-scheme: dark;" in dark_block
+
+
+# ---------------------------------------------------------------------------
+# 10. 20260911 arena2 图表几何 (doc/20260911-暗色主题arena2风格对齐实施计划.md §4;
+#     两主题共用一份几何配置, 源码级静态断言, 参照本文件既有模式)
+# ---------------------------------------------------------------------------
+
+
+def test_arena2_stack_bar_geometry():
+    """堆叠柱: 顶部系列圆角 [6,6,0,0] + 柱厚上限 28 + 垂直渐变 (chartArea 未就绪回退平色)."""
+    js = _js()
+    assert "maxBarThickness: 28" in js, "堆叠柱缺少柱厚上限 28"
+    assert "[6, 6, 0, 0]" in js, "堆叠柱缺少顶部系列圆角"
+    assert "createLinearGradient" in js, "堆叠柱缺少垂直渐变"
+    m = re.search(r"chartReportStack[\s\S]{0,2400}?borderRadius", js)
+    assert m, "chartReportStack 内未找到 borderRadius"
+
+
+def test_arena2_donut_thin_ring_geometry():
+    """环形: 细环 radius 82% + cutout 62% + 扇区间隙 padAngle 2 + 扇区圆角 4."""
+    js = _js()
+    m = re.search(r"function chartReportDonut", js)
+    assert m, "未找到环形图函数 chartReportDonut"
+    block = js[m.start():m.start() + 2600]
+    assert 'radius: "82%"' in block, "环形图缺少 radius 82% (细环)"
+    assert 'cutout: "62%"' in block, "环形图缺少 cutout 62%"
+    assert "padAngle: 2" in block, "环形图缺少扇区间隙"
+    assert "borderRadius: 4" in block, "环形图缺少扇区圆角"
+
+
+def test_arena2_donut_center_two_lines():
+    """环心两行: 范围标签 (i18n 映射) + 数值; 标签在上 (11px) 数值在下 (22px)."""
+    js = _js()
+    assert 'const RANGE_LABEL_KEY = { today: "today", yesterday: "yesterday", "7d": "d7", "30d": "d30", all: "all" };' in js, \
+        "缺少范围标签 i18n 映射"
+    assert '600 22px sans-serif' in js, "环心数值行应为 22px/600"
+    assert "500 11px sans-serif" in js, "环心标签行应为 11px/500"
+
+
+def test_arena2_dark_component_overrides():
+    """dark 组件: 刷新按钮渐变主按钮化 + 今天卡靛蓝描边光晕 (均限 dark 作用域)."""
+    css = _css()
+    assert 'html[data-theme="dark"] .pill.small.refresh { border-color: transparent; background: var(--grad-brand); color: #fff; }' in css
+    assert "html[data-theme=\"dark\"] .pill.small.refresh:hover" in css
+    assert "html[data-theme=\"dark\"] .windows-bar .wb-cell:first-child { border-color: rgba(99,102,241,.35);" in css
+    # 渐变 token 深色覆写 (135° 靛蓝→紫, 同演示稿主按钮)
+    assert "--grad-brand: linear-gradient(135deg, #6366F1, #7C3AED);" in _extract_block(css, 'html[data-theme="dark"]')
+
+
+def test_arena2_dark_channel_palette():
+    """暗档渠道色对齐 arena2: 演示稿原值 3 个 + 同色相 400 提亮档 3 个 (文字 >=4.5:1)."""
+    dark = _dark_vars(_css())
+    assert dark["--ch-bai"] == "#A78BFA"            # violet-400 (演示稿 #8B5CF6 提亮档, 6.87:1)
+    assert dark["--ch-commandcode"] == "#06B6D4"    # 演示稿原值 cyan-500, 7.70:1
+    assert dark["--ch-zcode"] == "#818cf8"          # indigo-400 (演示稿 #6366F1 提亮档)
+    assert dark["--ch-claudecode"] == "#F59E0B"     # 演示稿原值 amber-500, 8.70:1
+    assert dark["--ch-codex"] == "#F43F5E"          # 演示稿原值 rose-500, 5.09:1
+    assert dark["--ch-dsh"] == "#94a3b8"            # slate-400 (演示稿 #64748B 提亮档)
+    assert dark["--primary"] == "#818CF8"           # indigo-400, 新卡 6.27:1
 

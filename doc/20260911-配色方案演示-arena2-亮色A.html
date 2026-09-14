@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GoGauge · 方案 A · 亮色（Linear / Vercel 风）</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+
+  <style>
+    :root {
+      /* ===== 页面层级 ===== */
+      --bg-0: #F8FAFC;       /* 页面背景：冷灰白 */
+      --bg-1: #FFFFFF;       /* 卡片、顶栏 */
+      --bg-2: #F1F5F9;       /* 次级背景 / Tab 容器 */
+      --bg-3: #EAF0F8;       /* hover / 表格斑马 */
+
+      --border: #E2E8F0;
+      --border-strong: #CBD5E1;
+
+      /* ===== 文本 ===== */
+      --text-1: #0F172A;     /* 主标题 */
+      --text-2: #475569;     /* 正文 */
+      --text-3: #94A3B8;     /* 辅助说明 */
+
+      /* ===== 品牌色：靛蓝 ===== */
+      --brand: #4F46E5;
+      --brand-hover: #4338CA;
+      --brand-soft: rgba(79, 70, 229, 0.10);
+      --brand-ring: rgba(79, 70, 229, 0.18);
+
+      /* ===== 方案 A：6 个渠道颜色（亮色专用）===== */
+      --c-zcode:       #4F46E5; /* 靛蓝，核心渠道 */
+      --c-dsh:         #64748B; /* 石板灰，低干扰 */
+      --c-commandcode: #0891B2; /* 深青蓝 */
+      --c-claudecode:  #D97706; /* 琥珀橙 */
+      --c-codex:       #E11D48; /* 玫瑰红 */
+      --c-bai:         #7C3AED; /* 紫罗兰 */
+
+      /* ===== 语义色 ===== */
+      --success: #059669;
+      --success-soft: rgba(5, 150, 105, 0.10);
+      --danger: #DC2626;
+      --danger-soft: rgba(220, 38, 38, 0.10);
+      --warning: #D97706;
+
+      /* ===== 阴影 ===== */
+      --shadow-xs: 0 1px 1px rgba(15, 23, 42, 0.03);
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04),
+                   0 1px 3px rgba(15, 23, 42, 0.03);
+      --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.05),
+                   0 1px 3px rgba(15, 23, 42, 0.04);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-width: 1180px;
+      min-height: 100%;
+      background: var(--bg-0);
+      color: var(--text-1);
+      font-family:
+        Inter,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        "PingFang SC",
+        "Microsoft YaHei",
+        Arial,
+        sans-serif;
+      font-size: 13px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .app {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* ===== 左侧导航 ===== */
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 60px;
+      padding: 16px 0;
+      background: rgba(255, 255, 255, 0.92);
+      border-right: 1px solid var(--border);
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      margin-bottom: 18px;
+      place-items: center;
+      border-radius: 10px;
+      color: #FFFFFF;
+      background: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+      box-shadow: 0 4px 10px rgba(79, 70, 229, 0.22);
+      font-size: 15px;
+      font-weight: 800;
+    }
+
+    .nav-list {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .nav-item {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      place-items: center;
+      border: 0;
+      border-radius: 10px;
+      color: var(--text-3);
+      background: transparent;
+      cursor: pointer;
+      transition: all 160ms ease;
+    }
+
+    .nav-item:hover {
+      color: var(--text-2);
+      background: var(--bg-2);
+    }
+
+    .nav-item.active {
+      color: var(--brand);
+      background: var(--brand-soft);
+      box-shadow: inset 0 0 0 1px rgba(79, 70, 229, 0.10);
+    }
+
+    .nav-item svg {
+      width: 19px;
+      height: 19px;
+    }
+
+    /* ===== 主区域 ===== */
+
+    .main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      height: 58px;
+      padding: 0 24px;
+      background: rgba(255, 255, 255, 0.94);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .topbar-brand {
+      margin-right: 12px;
+      color: var(--text-1);
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+    }
+
+    .topbar-meta {
+      color: var(--text-3);
+      font-size: 12px;
+    }
+
+    .topbar-spacer {
+      flex: 1;
+    }
+
+    .topbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .topbar-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 30px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-2);
+      background: var(--bg-1);
+      box-shadow: var(--shadow-xs);
+      font-size: 12px;
+    }
+
+    .sync-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 0 3px var(--success-soft);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 31px;
+      padding: 0 11px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-2);
+      background: var(--bg-1);
+      box-shadow: var(--shadow-xs);
+      cursor: pointer;
+      transition: all 160ms ease;
+    }
+
+    .btn:hover {
+      border-color: var(--border-strong);
+      color: var(--text-1);
+      background: var(--bg-2);
+    }
+
+    .btn-primary {
+      border-color: var(--brand);
+      color: #FFFFFF;
+      background: var(--brand);
+      box-shadow: 0 2px 5px rgba(79, 70, 229, 0.18);
+    }
+
+    .btn-primary:hover {
+      border-color: var(--brand-hover);
+      color: #FFFFFF;
+      background: var(--brand-hover);
+    }
+
+    /* ===== 页面内容 ===== */
+
+    .content {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 22px 26px 32px;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .page-title {
+      margin: 0;
+      color: var(--text-1);
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+
+    .page-subtitle {
+      margin-top: 7px;
+      color: var(--text-3);
+      font-size: 12px;
+    }
+
+    .filters {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .tab-group {
+      display: inline-flex;
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: var(--bg-1);
+      box-shadow: var(--shadow-xs);
+    }
+
+    .tab {
+      padding: 6px 10px;
+      border-radius: 6px;
+      color: var(--text-2);
+      font-size: 12px;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: all 150ms ease;
+    }
+
+    .tab:hover {
+      color: var(--text-1);
+      background: var(--bg-2);
+    }
+
+    .tab.active {
+      color: var(--brand);
+      background: var(--brand-soft);
+      font-weight: 600;
+    }
+
+    /* ===== 通用卡片 ===== */
+
+    .card {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* ===== 时间维度汇总卡 ===== */
+
+    .period-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .period-card {
+      min-height: 130px;
+      padding: 16px 17px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .period-card.active {
+      border-color: rgba(79, 70, 229, 0.26);
+      background:
+        radial-gradient(
+          420px 140px at 0% 0%,
+          rgba(79, 70, 229, 0.10),
+          transparent 62%
+        ),
+        var(--bg-1);
+      box-shadow:
+        0 4px 14px rgba(79, 70, 229, 0.08),
+        var(--shadow-sm);
+    }
+
+    .period-label {
+      color: var(--text-3);
+      font-size: 12px;
+    }
+
+    .period-value {
+      margin-top: 7px;
+      color: var(--text-1);
+      font-size: 25px;
+      font-weight: 700;
+      letter-spacing: -0.7px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .period-cost {
+      margin-top: 4px;
+      color: var(--text-2);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .period-extra {
+      margin-top: 9px;
+      color: var(--text-3);
+      font-size: 11px;
+    }
+
+    .period-extra.up {
+      color: var(--success);
+    }
+
+    .period-extra.down {
+      color: var(--danger);
+    }
+
+    /* ===== 数据说明 ===== */
+
+    .hint-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin: -2px 0 0;
+      color: var(--text-3);
+      font-size: 11px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      height: 19px;
+      padding: 0 6px;
+      border: 1px solid rgba(79, 70, 229, 0.18);
+      border-radius: 5px;
+      color: var(--brand);
+      background: var(--brand-soft);
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    /* ===== KPI ===== */
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .kpi-card {
+      min-height: 114px;
+      padding: 15px 16px;
+    }
+
+    .kpi-accent {
+      width: 26px;
+      height: 3px;
+      margin-bottom: 11px;
+      border-radius: 999px;
+    }
+
+    .kpi-label {
+      color: var(--text-3);
+      font-size: 12px;
+    }
+
+    .kpi-value {
+      margin-top: 7px;
+      color: var(--text-1);
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.6px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ===== 配额 ===== */
+
+    .section-card {
+      padding: 17px;
+    }
+
+    .section-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .section-title {
+      margin: 0;
+      color: var(--text-1);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .section-subtitle {
+      color: var(--text-3);
+      font-size: 11px;
+    }
+
+    .quota-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .quota-card {
+      padding: 15px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: linear-gradient(180deg, #FFFFFF 0%, #FBFCFE 100%);
+    }
+
+    .quota-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--text-1);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .channel-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .channel-tag {
+      padding: 2px 6px;
+      border-radius: 5px;
+      color: var(--brand);
+      background: var(--brand-soft);
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    .quota-main {
+      margin-top: 12px;
+      color: var(--text-1);
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .quota-sub {
+      margin-top: 5px;
+      color: var(--text-3);
+      font-size: 11px;
+    }
+
+    .progress {
+      height: 6px;
+      margin-top: 13px;
+      overflow: hidden;
+      border-radius: 99px;
+      background: #E9EEF5;
+    }
+
+    .progress > span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+    }
+
+    /* ===== 图表区域 ===== */
+
+    .chart-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(400px, 1fr);
+      gap: 12px;
+    }
+
+    .chart-card {
+      min-height: 430px;
+      padding: 17px;
+    }
+
+    .chart-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .segmented {
+      display: inline-flex;
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-2);
+    }
+
+    .segment {
+      padding: 5px 10px;
+      border-radius: 5px;
+      color: var(--text-2);
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .segment.active {
+      color: #FFFFFF;
+      background: var(--brand);
+      box-shadow: 0 1px 3px rgba(79, 70, 229, 0.20);
+    }
+
+    .custom-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px 16px;
+      padding: 16px 2px 6px;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-2);
+      font-size: 12px;
+      cursor: pointer;
+      transition: opacity 160ms ease;
+    }
+
+    .legend-item:hover {
+      color: var(--text-1);
+    }
+
+    .legend-color {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .chart {
+      width: 100%;
+      height: 305px;
+    }
+
+    .donut-chart {
+      height: 340px;
+      margin-top: 2px;
+    }
+
+    /* ===== 响应式 ===== */
+
+    @media (max-width: 1440px) {
+      .filters {
+        gap: 7px;
+      }
+
+      .tab {
+        padding: 6px 8px;
+      }
+
+      .content {
+        padding: 18px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+    <!-- 左侧导航 -->
+    <aside class="sidebar">
+      <div class="brand-mark">G</div>
+
+      <div class="nav-list">
+        <button class="nav-item active" title="总览">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+            <rect x="3.5" y="3.5" width="7" height="7" rx="1.2"></rect>
+            <rect x="13.5" y="3.5" width="7" height="7" rx="1.2"></rect>
+            <rect x="3.5" y="13.5" width="7" height="7" rx="1.2"></rect>
+            <rect x="13.5" y="13.5" width="7" height="7" rx="1.2"></rect>
+          </svg>
+        </button>
+
+        <button class="nav-item" title="趋势">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+            <path d="M4 19V5"></path>
+            <path d="M4 19H20"></path>
+            <path d="M7.5 15.5L11.2 11.8L14.3 13.6L19 7.8"></path>
+          </svg>
+        </button>
+
+        <button class="nav-item" title="明细">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+            <path d="M7 3.5H15L19.5 8V20.5H7C5.9 20.5 5 19.6 5 18.5V5.5C5 4.4 5.9 3.5 7 3.5Z"></path>
+            <path d="M15 3.8V8H19.2"></path>
+            <path d="M8.5 12H16"></path>
+            <path d="M8.5 15.5H16"></path>
+          </svg>
+        </button>
+      </div>
+
+      <button class="nav-item" title="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9">
+          <path d="M4 7H14"></path>
+          <path d="M18 7H20"></path>
+          <circle cx="16" cy="7" r="2"></circle>
+          <path d="M4 17H8"></path>
+          <path d="M12 17H20"></path>
+          <circle cx="10" cy="17" r="2"></circle>
+        </svg>
+      </button>
+    </aside>
+
+    <main class="main">
+      <!-- 顶部栏 -->
+      <header class="topbar">
+        <div class="topbar-brand">GoGauge</div>
+        <div class="topbar-meta">上次同步 刚刚 · 593 条记录</div>
+
+        <div class="topbar-spacer"></div>
+
+        <div class="topbar-actions">
+          <div class="topbar-status">
+            <span class="sync-dot"></span>
+            同步中
+          </div>
+
+          <button class="btn">☾ 暗色</button>
+          <button class="btn btn-primary">↻ 刷新</button>
+
+          <div class="topbar-meta">更新于 2026-09-11 17:57</div>
+          <div class="topbar-meta">已登录 · f8d265c9…</div>
+        </div>
+      </header>
+
+      <section class="content">
+        <!-- 标题和筛选 -->
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">用量统计总览</h1>
+            <div class="page-subtitle">6 渠道 · 2 账号 · 聚合显示所有 Token 消耗来源</div>
+          </div>
+
+          <div class="filters">
+            <div class="tab-group">
+              <span class="tab active">全部渠道</span>
+              <span class="tab">bai</span>
+              <span class="tab">commandcode</span>
+              <span class="tab">zcode</span>
+              <span class="tab">claudecode</span>
+              <span class="tab">Codex</span>
+              <span class="tab">dsh</span>
+            </div>
+
+            <div class="tab-group">
+              <span class="tab active">今天</span>
+              <span class="tab">昨天</span>
+              <span class="tab">近7天</span>
+              <span class="tab">近30天</span>
+              <span class="tab">全部</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 时间范围汇总 -->
+        <div class="period-grid">
+          <div class="card period-card active">
+            <div class="period-label">今天</div>
+            <div class="period-value">197.84M</div>
+            <div class="period-cost">¥83.62</div>
+            <div class="period-extra up">↑ 157.9% vs 昨日同时段</div>
+          </div>
+
+          <div class="card period-card">
+            <div class="period-label">昨天</div>
+            <div class="period-value">362.55M</div>
+            <div class="period-cost">¥302.28</div>
+            <div class="period-extra">较前日 -12.4%</div>
+          </div>
+
+          <div class="card period-card">
+            <div class="period-label">近7天</div>
+            <div class="period-value">1.85B</div>
+            <div class="period-cost">¥1,984.34</div>
+            <div class="period-extra">日均 263.66M</div>
+          </div>
+
+          <div class="card period-card">
+            <div class="period-label">近30天</div>
+            <div class="period-value">5.26B</div>
+            <div class="period-cost">¥4,417.13</div>
+            <div class="period-extra">日均 175.18M</div>
+          </div>
+        </div>
+
+        <div class="hint-row">
+          数据起点 2026-07-29 ·
+          <span class="badge">估算费用</span>
+          · 涨跌比较未含 DSH 的仅全量明细数据
+        </div>
+
+        <!-- KPI -->
+        <div class="kpi-grid">
+          <div class="card kpi-card">
+            <div class="kpi-accent" style="background: var(--c-zcode);"></div>
+            <div class="kpi-label">总 TOKEN 消耗</div>
+            <div class="kpi-value">197.84M</div>
+          </div>
+
+          <div class="card kpi-card">
+            <div class="kpi-accent" style="background: var(--c-commandcode);"></div>
+            <div class="kpi-label">输入</div>
+            <div class="kpi-value">196.38M</div>
+          </div>
+
+          <div class="card kpi-card">
+            <div class="kpi-accent" style="background: var(--c-claudecode);"></div>
+            <div class="kpi-label">输出</div>
+            <div class="kpi-value">1.21M</div>
+          </div>
+
+          <div class="card kpi-card">
+            <div class="kpi-accent" style="background: var(--c-bai);"></div>
+            <div class="kpi-label">总请求</div>
+            <div class="kpi-value">1,151</div>
+          </div>
+
+          <div class="card kpi-card">
+            <div class="kpi-accent" style="background: var(--c-codex);"></div>
+            <div class="kpi-label">总费用</div>
+            <div class="kpi-value">¥83.62</div>
+          </div>
+        </div>
+
+        <!-- 渠道配额 -->
+        <section class="card section-card">
+          <div class="section-title-row">
+            <h2 class="section-title">各渠道配额</h2>
+            <span class="section-subtitle">仅展示支持余额 / 配额查询的渠道</span>
+          </div>
+
+          <div class="quota-grid">
+            <div class="quota-card">
+              <div class="quota-head">
+                <span class="channel-dot" style="background: var(--c-bai);"></span>
+                bai
+              </div>
+              <div class="quota-main">余额 300,000 积分</div>
+              <div class="quota-sub">1 个账号 · 约 4 分钟前同步</div>
+              <div class="progress">
+                <span style="width: 82%; background: linear-gradient(90deg, #7C3AED, #A78BFA);"></span>
+              </div>
+            </div>
+
+            <div class="quota-card">
+              <div class="quota-head">
+                <span class="channel-dot" style="background: var(--c-commandcode);"></span>
+                commandcode
+              </div>
+              <div class="quota-main">$17.38</div>
+              <div class="quota-sub">剩余余额 · 1 个账号 · 3 分钟前同步</div>
+              <div class="progress">
+                <span style="width: 47%; background: linear-gradient(90deg, #0891B2, #22C1DC);"></span>
+              </div>
+            </div>
+
+            <div class="quota-card">
+              <div class="quota-head">
+                <span class="channel-dot" style="background: var(--c-zcode);"></span>
+                zcode
+                <span class="channel-tag">Pro</span>
+              </div>
+              <div class="quota-main">滚动用量 23% · 每周 21%</div>
+              <div class="quota-sub">GLM Coding Plan · 配额充足</div>
+              <div class="progress">
+                <span style="width: 23%; background: linear-gradient(90deg, #4F46E5, #818CF8);"></span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 图表 -->
+        <div class="chart-grid">
+          <section class="card chart-card">
+            <div class="chart-head">
+              <h2 class="section-title">分渠道消耗趋势</h2>
+
+              <div class="segmented">
+                <span class="segment active">Token</span>
+                <span class="segment">成本</span>
+                <span class="segment">请求数</span>
+              </div>
+            </div>
+
+            <div class="custom-legend" id="trendLegend"></div>
+            <div id="trendChart" class="chart"></div>
+          </section>
+
+          <section class="card chart-card">
+            <div class="chart-head">
+              <h2 class="section-title">渠道占比</h2>
+              <span class="badge">今日</span>
+            </div>
+
+            <div id="donutChart" class="chart donut-chart"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    /*
+     * 方案 A · 亮色版渠道色
+     *
+     * zcode:       靛蓝，核心数据
+     * dsh:         石板灰，降低次级数据干扰
+     * commandcode: 青蓝
+     * claudecode:  琥珀
+     * Codex:       玫瑰
+     * bai:         紫罗兰
+     */
+    const channels = [
+      { key: 'bai',         label: 'bai',         color: '#7C3AED' },
+      { key: 'commandcode', label: 'commandcode', color: '#0891B2' },
+      { key: 'zcode',       label: 'zcode',       color: '#4F46E5' },
+      { key: 'claudecode',  label: 'claudecode',  color: '#D97706' },
+      { key: 'codex',       label: 'Codex',       color: '#E11D48' },
+      { key: 'dsh',         label: 'dsh',         color: '#64748B' }
+    ];
+
+    const dates = ['09-05', '09-06', '09-07', '09-08', '09-09', '09-10', '09-11'];
+
+    /* 单位：M Token */
+    const usageData = {
+      bai:         [1.2, 0.8, 1.6, 2.4, 1.1, 0.9, 1.8],
+      commandcode: [5.4, 6.2, 4.8, 7.1, 12.3, 15.6, 10.4],
+      zcode:       [80.2, 92.4, 65.1, 78.9, 110.2, 140.6, 120.5],
+      claudecode:  [3.1, 2.4, 5.2, 4.1, 6.8, 4.3, 5.7],
+      codex:       [12.4, 15.6, 14.8, 18.2, 22.4, 25.1, 26.3],
+      dsh:         [40.3, 55.2, 48.7, 66.1, 78.4, 90.2, 82.1]
+    };
+
+    const chartTheme = {
+      cardBg: '#FFFFFF',
+      tooltipBg: '#FFFFFF',
+      tooltipBorder: '#E2E8F0',
+      textMain: '#0F172A',
+      textSub: '#475569',
+      textMuted: '#94A3B8',
+      splitLine: '#EDF1F5',
+      axisLine: '#DCE3EC',
+      hoverShadow: 'rgba(79, 70, 229, 0.18)'
+    };
+
+    function createLinearGradient(color) {
+      return {
+        type: 'linear',
+        x: 0,
+        y: 0,
+        x2: 0,
+        y2: 1,
+        colorStops: [
+          { offset: 0, color: color },
+          { offset: 1, color: color + 'D4' }
+        ]
+      };
+    }
+
+    /* ===== 自定义图例 ===== */
+    const legendContainer = document.getElementById('trendLegend');
+
+    channels.forEach((channel) => {
+      const item = document.createElement('span');
+      item.className = 'legend-item';
+      item.dataset.name = channel.label;
+      item.innerHTML = `
+        <span class="legend-color" style="background: ${channel.color};"></span>
+        ${channel.label}
+      `;
+      legendContainer.appendChild(item);
+    });
+
+    /* ===== 堆叠柱状图 ===== */
+    const trendChart = echarts.init(document.getElementById('trendChart'));
+
+    const trendSeries = channels.map((channel) => ({
+      name: channel.label,
+      type: 'bar',
+      stack: 'total',
+      barWidth: 30,
+      emphasis: {
+        focus: 'series',
+        itemStyle: {
+          shadowBlur: 8,
+          shadowColor: chartTheme.hoverShadow
+        }
+      },
+      itemStyle: {
+        color: createLinearGradient(channel.color)
+      },
+      data: usageData[channel.key]
+    }));
+
+    /*
+     * 仅最后一层添加顶部圆角。
+     * 在真实数据中，“最后一层”可能有 0 值，因此可进一步按每一天
+     * 动态判断顶部序列；演示版先保持代码简洁。
+     */
+    trendSeries[trendSeries.length - 1].itemStyle.borderRadius = [5, 5, 0, 0];
+
+    trendChart.setOption({
+      animationDuration: 650,
+      animationEasing: 'cubicOut',
+
+      grid: {
+        top: 18,
+        right: 18,
+        bottom: 37,
+        left: 54
+      },
+
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: {
+          type: 'shadow',
+          shadowStyle: {
+            color: 'rgba(79, 70, 229, 0.055)'
+          }
+        },
+        backgroundColor: chartTheme.tooltipBg,
+        borderColor: chartTheme.tooltipBorder,
+        borderWidth: 1,
+        padding: [10, 12],
+        extraCssText: `
+          border-radius: 8px;
+          box-shadow: 0 8px 22px rgba(15, 23, 42, 0.10);
+        `,
+        textStyle: {
+          color: chartTheme.textMain,
+          fontSize: 12
+        },
+        formatter(params) {
+          let total = 0;
+          let html = `<div style="margin-bottom:7px;font-weight:700;color:#0F172A;">${params[0].axisValue}</div>`;
+
+          params
+            .slice()
+            .reverse()
+            .forEach((item) => {
+              total += item.value;
+              html += `
+                <div style="display:flex;justify-content:space-between;gap:22px;line-height:21px;">
+                  <span style="color:#475569;">${item.marker} ${item.seriesName}</span>
+                  <b style="color:#0F172A;">${item.value.toFixed(1)}M</b>
+                </div>
+              `;
+            });
+
+          html += `
+            <div style="height:1px;background:#E2E8F0;margin:7px 0;"></div>
+            <div style="display:flex;justify-content:space-between;gap:22px;">
+              <span style="color:#475569;">合计</span>
+              <b style="color:#4F46E5;">${total.toFixed(1)}M</b>
+            </div>
+          `;
+
+          return html;
+        }
+      },
+
+      xAxis: {
+        type: 'category',
+        data: dates,
+        boundaryGap: true,
+        axisLine: {
+          lineStyle: {
+            color: chartTheme.axisLine
+          }
+        },
+        axisTick: {
+          show: false
+        },
+        axisLabel: {
+          color: chartTheme.textMuted,
+          fontSize: 11,
+          margin: 13
+        }
+      },
+
+      yAxis: {
+        type: 'value',
+        min: 0,
+        axisLine: {
+          show: false
+        },
+        axisTick: {
+          show: false
+        },
+        splitLine: {
+          lineStyle: {
+            color: chartTheme.splitLine,
+            type: 'solid'
+          }
+        },
+        axisLabel: {
+          color: chartTheme.textMuted,
+          fontSize: 11,
+          formatter(value) {
+            return `${value}M`;
+          }
+        }
+      },
+
+      series: trendSeries
+    });
+
+    /* 图例点击控制显示与隐藏 */
+    document.querySelectorAll('.legend-item').forEach((item) => {
+      item.addEventListener('click', () => {
+        const channelName = item.dataset.name;
+        const option = trendChart.getOption();
+        const isSelected = option.legend?.[0]?.selected?.[channelName] !== false;
+
+        trendChart.dispatchAction({
+          type: isSelected ? 'legendUnSelect' : 'legendSelect',
+          name: channelName
+        });
+
+        item.style.opacity = isSelected ? '0.38' : '1';
+      });
+    });
+
+    /* 这里放一个隐藏 legend，让 dispatchAction 工作 */
+    trendChart.setOption({
+      legend: {
+        show: false,
+        selected: Object.fromEntries(channels.map((item) => [item.label, true]))
+      }
+    });
+
+    /* ===== 环形图 ===== */
+    const donutChart = echarts.init(document.getElementById('donutChart'));
+    const lastDateIndex = dates.length - 1;
+
+    const donutData = channels.map((channel) => ({
+      name: channel.label,
+      value: usageData[channel.key][lastDateIndex],
+      itemStyle: {
+        color: channel.color
+      }
+    }));
+
+    const totalToday = donutData
+      .reduce((sum, item) => sum + item.value, 0)
+      .toFixed(2);
+
+    donutChart.setOption({
+      animationDuration: 700,
+      animationEasing: 'cubicOut',
+
+      tooltip: {
+        trigger: 'item',
+        backgroundColor: chartTheme.tooltipBg,
+        borderColor: chartTheme.tooltipBorder,
+        borderWidth: 1,
+        padding: [9, 11],
+        extraCssText: `
+          border-radius: 8px;
+          box-shadow: 0 8px 22px rgba(15, 23, 42, 0.10);
+        `,
+        textStyle: {
+          color: chartTheme.textMain,
+          fontSize: 12
+        },
+        formatter(params) {
+          return `
+            <div style="font-weight:700;margin-bottom:4px;">${params.marker} ${params.name}</div>
+            <div style="color:#475569;">
+              ${params.value.toFixed(1)}M Token
+              <b style="margin-left:6px;color:#0F172A;">${params.percent}%</b>
+            </div>
+          `;
+        }
+      },
+
+      legend: {
+        bottom: 2,
+        left: 'center',
+        icon: 'circle',
+        itemWidth: 8,
+        itemHeight: 8,
+        itemGap: 13,
+        textStyle: {
+          color: chartTheme.textSub,
+          fontSize: 11
+        }
+      },
+
+      series: [
+        {
+          type: 'pie',
+          radius: ['62%', '81%'],
+          center: ['50%', '44%'],
+          avoidLabelOverlap: true,
+          padAngle: 2,
+          minAngle: 2,
+
+          itemStyle: {
+            borderColor: chartTheme.cardBg,
+            borderWidth: 3,
+            borderRadius: 4
+          },
+
+          label: {
+            show: true,
+            position: 'center',
+            formatter: `{label|今日总消耗}\n{value|${totalToday}M}`,
+            rich: {
+              label: {
+                color: chartTheme.textMuted,
+                fontSize: 11,
+                lineHeight: 19
+              },
+              value: {
+                color: chartTheme.textMain,
+                fontSize: 23,
+                fontWeight: 700,
+                lineHeight: 30
+              }
+            }
+          },
+
+          labelLine: {
+            show: false
+          },
+
+          emphasis: {
+            scale: true,
+            scaleSize: 5,
+            itemStyle: {
+              shadowBlur: 13,
+              shadowColor: 'rgba(79, 70, 229, 0.22)'
+            }
+          },
+
+          data: donutData
+        }
+      ]
+    });
+
+    window.addEventListener('resize', () => {
+      trendChart.resize();
+      donutChart.resize();
+    });
+  </script>
+</body>
+</html>

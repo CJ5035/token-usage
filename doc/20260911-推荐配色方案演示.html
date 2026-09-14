@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoGauge 推荐配色方案演示</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg-outer); color: var(--tx-1);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 13px; -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
+
+  /* ============ 现状：Tailwind 混档位 + 靛蓝强调 ============ */
+  body[data-scheme="current"] {
+    --bg-outer:#0a0a0f; --bg-card:#16161d; --bg-raise:#1c1c24; --line:#26262f;
+    --tx-1:#ececf2; --tx-2:#9a9aac; --tx-3:#66667a;
+    --accent:#818cf8; --accent-soft:rgba(129,140,248,.14);
+    --ch-bai:#facc15; --ch-commandcode:#34d399; --ch-zcode:#818cf8;
+    --ch-claudecode:#d97757; --ch-codex:#d946ef; --ch-dsh:#94a3b8;
+    --ok:#4ade80;
+    --seg-gap:0; --dgap:0px; --top-r:0;
+    --scheme-desc:"现状 —— 靛蓝强调 + Tailwind 默认渠道色：codex 偏响、dsh 偏灰、bai 偏荧光，明度彩度不成体系";
+  }
+
+  /* ============ 推荐：琥珀强调 + 统一明度带六色相 ============ */
+  body[data-scheme="reco"] {
+    --bg-outer:#0a0a0f; --bg-card:#16161d; --bg-raise:#1c1c24; --line:#26262f;
+    --tx-1:#ececf2; --tx-2:#9a9aac; --tx-3:#66667a;
+    --accent:#e8b45f; --accent-soft:rgba(232,180,95,.14);
+    --ch-bai:#ddd06c;       /* 柠檬黄：避开琥珀强调色 (~36°) 与陶土 (~18°) */
+    --ch-commandcode:#6fc79b; /* 翡翠绿：与 ok 草绿、ds h 青各留 40°+ */
+    --ch-zcode:#909aee;     /* 长春花蓝：主渠道，与靛蓝强调脱钩 */
+    --ch-claudecode:#dc8f6a;/* 陶土：比现状 #d97757 降饱和 */
+    --ch-codex:#cf8fc7;     /* 兰紫：修复 fuchsia 过响 */
+    --ch-dsh:#72bed2;       /* 青：修复 slate 发灰"占位感" */
+    --ok:#86d67e;           /* 草绿：与 commandcode 翡翠拉开 */
+    --seg-gap:1.5; --dgap:3px; --top-r:3.5px;
+    --scheme-desc:"推荐 —— 琥珀强调 + 六色相同明度带：保留渠道身份、修复三个问题色、分段留缝 + 柱顶圆角";
+  }
+
+  .switcher {
+    position: sticky; top: 0; z-index: 9;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 18px; background: var(--bg-outer); border-bottom: 1px solid var(--line);
+  }
+  .switcher .title { font-weight: 500; margin-right: 6px; }
+  .switcher button {
+    font: inherit; font-size: 12px; color: var(--tx-2); background: transparent;
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 14px; cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .switcher button:hover { color: var(--tx-1); border-color: var(--tx-3); }
+  .switcher button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .switcher .hint { color: var(--tx-3); font-size: 12px; margin-left: auto; }
+  .switcher .hint::before { content: var(--scheme-desc); }
+
+  .app { max-width: 1120px; margin: 0 auto; padding: 0 18px 40px; }
+
+  /* ---- 色板条 ---- */
+  .swatches { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 12px; }
+  .sw { display: flex; align-items: center; gap: 7px; background: var(--bg-card);
+        border: 1px solid var(--line); border-radius: 9px; padding: 6px 11px; font-size: 12px; }
+  .sw .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .sw code { font-family: var(--mono-font, "SF Mono", Menlo, Consolas, monospace); color: var(--tx-3); font-size: 11px; }
+  .sw.accent { border-color: var(--accent); }
+
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 8px 0 14px; color: var(--tx-2); font-size: 12px; }
+  .topbar .brand { color: var(--tx-1); font-weight: 500; display: flex; align-items: center; gap: 7px; }
+  .topbar .brand i { width: 14px; height: 14px; border-radius: 4px; background: var(--accent); display: block; }
+  .topbar .spacer { flex: 1; }
+  .chipbar { display: flex; gap: 8px; }
+  .chipbar span { border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; }
+
+  h2.section { font-size: 15px; font-weight: 500; margin: 6px 0 10px; display: flex; align-items: center; gap: 8px; }
+  h2.section .sq { width: 15px; height: 15px; border-radius: 4px; background: var(--accent); opacity: .85; }
+
+  .panel { background: var(--bg-card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+  .filterrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .filterrow .grp { display: flex; gap: 4px; background: var(--bg-raise); border-radius: 8px; padding: 3px; }
+  .filterrow .left { display: flex; gap: 8px; margin-right: auto; }
+  .filterrow b, .filterrow a {
+    font-weight: 400; font-size: 12px; color: var(--tx-2);
+    padding: 4px 11px; border-radius: 6px; text-decoration: none; cursor: pointer; white-space: nowrap;
+  }
+  .filterrow b { color: var(--accent); background: var(--accent-soft); font-weight: 500; }
+  .filterrow a:hover { color: var(--tx-1); }
+  .stamp { color: var(--tx-3); font-size: 12px; padding: 9px 2px 0; }
+
+  .grid4 { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; }
+  .grid5 { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 10px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
+  @media (max-width: 800px) { .grid4, .grid5, .grid3 { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+
+  .kpi { background: var(--bg-raise); border-radius: 9px; padding: 11px 13px; }
+  .kpi .lbl { color: var(--tx-2); font-size: 12px; }
+  .kpi .num { font-size: 21px; font-weight: 500; margin: 5px 0 3px; letter-spacing: -.2px; }
+  .kpi .sub { color: var(--tx-2); font-size: 12px; }
+  .kpi .dim { color: var(--tx-3); font-size: 12px; }
+  .delta { display: inline-block; font-size: 12px; color: var(--ok); }
+
+  .mini { background: var(--bg-raise); border-radius: 9px; padding: 10px 12px; }
+  .mini .lbl { color: var(--tx-2); font-size: 12px; }
+  .mini .num { font-size: 18px; font-weight: 500; margin-top: 5px; }
+
+  .prov { background: var(--bg-raise); border-radius: 9px; padding: 11px 13px; min-height: 92px; }
+  .prov .head { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+  .prov .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .prov .big { font-size: 17px; font-weight: 500; margin: 12px 0 6px; }
+  .prov .dim { color: var(--tx-3); font-size: 12px; }
+  .prov .row { color: var(--tx-2); font-size: 12px; line-height: 1.75; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); }
+
+  .tabs { display: flex; gap: 4px; background: var(--bg-raise); border-radius: 9px; padding: 4px; width: fit-content; margin-bottom: 12px; }
+  .tabs b, .tabs a { font-weight: 400; font-size: 12px; color: var(--tx-2); padding: 5px 13px; border-radius: 6px; text-decoration: none; }
+  .tabs b { color: var(--accent); background: var(--accent-soft); font-weight: 500; }
+
+  .charts { display: grid; grid-template-columns: 1.35fr 1fr; gap: 12px; }
+  @media (max-width: 900px) { .charts { grid-template-columns: minmax(0,1fr); } }
+  .card { background: var(--bg-card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 14px; }
+  .card h3 { font-size: 13px; font-weight: 500; margin: 0 0 4px; }
+  .card .cap { color: var(--tx-3); font-size: 11px; margin-bottom: 10px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 13px; justify-content: center; margin-bottom: 10px; font-size: 12px; color: var(--tx-2); }
+  .legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; vertical-align: -1px; }
+
+  svg { display: block; width: 100%; height: auto; }
+  .ax { fill: var(--tx-3); font-size: 11px; }
+  .gridline { stroke: var(--line); stroke-width: 1; opacity: .55; }
+
+  /* 推荐方案：柱顶圆角（向上延长 4px，把底部圆角藏进下一段） */
+  rect.top { rx: var(--top-r); }
+
+  #donut circle.seg {
+    fill: none; stroke-width: 34;
+    stroke-dasharray: calc(var(--len) - var(--dgap)) calc(502.655px - var(--len) + var(--dgap));
+    stroke-dashoffset: calc(502.655px - var(--start));
+  }
+  .donutwrap { display: flex; justify-content: center; padding: 4px 0 10px; }
+  .donutwrap svg { max-width: 300px; }
+  .center-num { fill: var(--tx-1); font-size: 19px; font-weight: 500; }
+  .center-sub { fill: var(--tx-3); font-size: 11px; }
+
+  /* 压力测试条 */
+  .strip { display: flex; height: 30px; border-radius: 7px; overflow: hidden; }
+  .strip i { display: block; height: 100%; }
+  body[data-scheme="reco"] .strip i + i { border-left: 2px solid var(--bg-card); }
+  .striplegend { margin-top: 10px; }
+
+  .notes { color: var(--tx-2); font-size: 12px; line-height: 1.9; }
+  .notes b { color: var(--tx-1); font-weight: 500; }
+  .footnote { color: var(--tx-3); font-size: 12px; line-height: 1.7; padding: 10px 2px 0; }
+</style>
+</head>
+<body data-scheme="reco">
+
+<div class="switcher">
+  <span class="title">配色方案</span>
+  <button data-go="current" aria-pressed="false">现状</button>
+  <button data-go="reco" aria-pressed="true">推荐 · 琥珀强调 + 统一色带</button>
+  <span class="hint"></span>
+</div>
+
+<div class="app">
+  <div class="swatches" id="swatches"></div>
+
+  <div class="topbar">
+    <span class="brand"><i></i>GoGauge</span>
+    <span>上次刷新 3 分钟前 · 593 条记录</span>
+    <span class="spacer"></span>
+    <span class="chipbar"><span>亮色</span><span>刷新</span></span>
+    <span>更新于 2026-09-11 16:33</span>
+  </div>
+
+  <h2 class="section"><span class="sq"></span>用量统计总览</h2>
+
+  <div class="panel">
+    <div class="filterrow">
+      <div class="left">
+        <div class="grp"><b>全部渠道</b></div>
+        <div class="grp"><a>bai</a><a>commandcode</a><a>zcode</a><a>claudeCode</a><a>Codex</a><a>dsh</a></div>
+      </div>
+      <div class="grp"><b>今天</b><a>昨天</a><a>近7天</a><a>近30天</a><a>全部</a></div>
+    </div>
+    <div class="stamp">更新于 2026-09-11 16:33:29</div>
+  </div>
+
+  <div class="grid4" style="margin-bottom:12px">
+    <div class="kpi"><div class="lbl">今天</div><div class="num mono">135.07M</div>
+      <div class="sub mono">¥77.84</div><div class="delta">↓ 49.4% <span class="dim">vs 昨日同时段</span></div></div>
+    <div class="kpi"><div class="lbl">昨天</div><div class="num mono">362.55M</div>
+      <div class="sub mono">¥302.28</div></div>
+    <div class="kpi"><div class="lbl">近7天</div><div class="num mono">1.78B</div>
+      <div class="sub mono">¥1978.55</div><div class="dim">日均 254.69M</div></div>
+    <div class="kpi"><div class="lbl">近30天</div><div class="num mono">5.19B</div>
+      <div class="sub mono">¥4411.34</div><div class="dim">日均 173.09M</div></div>
+  </div>
+
+  <div class="grid5" style="margin-bottom:12px">
+    <div class="mini"><div class="lbl">总 TOKEN 消耗</div><div class="num mono">135.07M</div></div>
+    <div class="mini"><div class="lbl">输入</div><div class="num mono">134.26M</div></div>
+    <div class="mini"><div class="lbl">输出</div><div class="num mono">791.0k</div></div>
+    <div class="mini"><div class="lbl">总请求</div><div class="num mono">972</div></div>
+    <div class="mini"><div class="lbl">总费用</div><div class="num mono">¥77.84</div></div>
+  </div>
+
+  <div class="panel" style="margin-bottom:12px">
+    <h3 style="font-size:13px;font-weight:500;margin:2px 0 12px">各渠道配额</h3>
+    <div class="grid3">
+      <div class="prov">
+        <div class="head"><span class="dot" style="background:var(--ch-bai)"></span><span style="color:var(--ch-bai)">bai</span></div>
+        <div class="big mono">余额 300,000 <span style="font-size:12px;color:var(--tx-2)">积分</span></div>
+        <div class="dim">1账号 · 0min</div>
+      </div>
+      <div class="prov">
+        <div class="head"><span class="dot" style="background:var(--ch-commandcode)"></span><span style="color:var(--ch-commandcode)">commandcode</span></div>
+        <div class="big mono">$17.38</div>
+        <div class="dim">剩余</div><div class="dim">1账号 · 0min</div>
+      </div>
+      <div class="prov">
+        <div class="head"><span class="dot" style="background:var(--ch-zcode)"></span><span style="color:var(--ch-zcode)">zcode</span><span class="tag">Pro</span></div>
+        <div class="row">滚动用量 15% · 每周用量 19%</div>
+        <div class="row">GLM Coding Plan</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabs"><b>Token</b><a>成本</a><a>请求/Token</a></div>
+
+  <div class="charts" style="margin-bottom:12px">
+    <div class="card">
+      <h3>分渠道消耗趋势 · 近 7 天</h3>
+      <div class="cap">跨天追踪同一渠道，是渠道色的真实考验（09-08 为 dsh &gt; zcode 的反转日）</div>
+      <div class="legend" id="legend1"></div>
+      <svg id="bars" viewBox="0 0 560 300" role="img" aria-label="近 7 天分渠道消耗堆叠柱状图"></svg>
+    </div>
+    <div class="card">
+      <h3>渠道占比 · 今天</h3>
+      <div class="cap">真实比例：zcode 62.9% / dsh 22.7% / Codex 9.3%，另三个合计 5.1%</div>
+      <div class="donutwrap">
+        <svg id="donut" viewBox="0 0 220 220">
+          <g id="donutG" transform="rotate(-90 110 110)"></g>
+          <text x="110" y="107" text-anchor="middle" class="center-num mono">135.07M</text>
+          <text x="110" y="128" text-anchor="middle" class="center-sub">2026-09-11 当日</text>
+        </svg>
+      </div>
+      <div class="legend" id="legend2" style="margin-bottom:0"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:12px">
+    <h3>压力测试 · 六渠道全部在场</h3>
+    <div class="cap">今天 commandcode 实际无消耗，掩盖了最坏情况；此处用 45 / 20 / 15 / 8 / 7 / 5 的构造数据检验小占比可区分性</div>
+    <div class="strip" id="strip"></div>
+    <div class="legend striplegend" id="legend3"></div>
+  </div>
+
+  <div class="panel notes">
+    <b>推荐方案设计说明</b><br>
+    ① 渠道色保留 6 个色相（不坍缩身份），统一压到同一明度/彩度带，消除现状的"彩虹感"；<br>
+    ② 修复三个问题色：Codex fuchsia-500 → 兰紫 <span class="mono">#cf8fc7</span>（降响）、dsh slate-400 → 青 <span class="mono">#72bed2</span>（去灰）、bai yellow-400 → 柠檬 <span class="mono">#ddd06c</span>（去荧光）；<br>
+    ③ UI 强调色改琥珀 <span class="mono">#e8b45f</span>，暖色高级感只给选中态/品牌位；bai 因此从琥珀家族挪到柠檬黄，claudeCode 陶土与琥珀差 18°+ 且饱和度更低，二者不撞；<br>
+    ④ 结构细节：堆叠分段 1.5px 留缝、环形 3px 留缝、柱顶 3.5px 圆角、网格降不透明度 —— 小细条靠缝隙而不是色相也能定位；<br>
+    ⑤ 语义色草绿 <span class="mono">#86d67e</span> 与 commandcode 翡翠 <span class="mono">#6fc79b</span> 拉开 40°，涨跌色不再和渠道色混淆；<br>
+    ⑥ 色相分布避开红绿相邻，主区分轴为蓝-黄，红绿色弱可辨；<br>
+    ⑦ 亮色主题联动：同色相压暗到 L0.45–0.55 带（zcode→#5b64d8、dsh→#2f8ba0、Codex→#a855a0、claudeCode→#c06a44、bai→#a89a2e、commandcode→#3d9a72、accent→#b57f2a），落地前需过 tests/test_dark_theme.py 对比度校验。
+  </div>
+
+  <p class="footnote">数据：09-11 为真实比例（总计 135.07M），09-05 ~ 09-10 与压力测试条为构造数据。切换方案时数据不变，仅颜色与结构细节变化。</p>
+</div>
+
+<script>
+/* ---------- 数据 ---------- */
+var ORDER = ['bai','commandcode','zcode','claudeCode','codex','dsh'];   /* 堆叠顺序：底 → 顶 */
+var VAR   = { bai:'--ch-bai', commandcode:'--ch-commandcode', zcode:'--ch-zcode',
+              claudeCode:'--ch-claudecode', codex:'--ch-codex', dsh:'--ch-dsh' };
+var LABEL = { bai:'bai', commandcode:'commandcode', zcode:'zcode', claudeCode:'claudeCode', codex:'Codex', dsh:'dsh' };
+
+/* 近 7 天（M），09-11 为真实值；09-08 故意构造 dsh > zcode */
+var DAYS = [
+  { d:'09-05', v:{ bai:2,   commandcode:3,   zcode:60, claudeCode:5,  codex:10,   dsh:25   } },
+  { d:'09-06', v:{ bai:4,   commandcode:0,   zcode:45, claudeCode:6,  codex:22,   dsh:18   } },
+  { d:'09-07', v:{ bai:1,   commandcode:5,   zcode:72, claudeCode:2,  codex:8,    dsh:30   } },
+  { d:'09-08', v:{ bai:3,   commandcode:6,   zcode:38, claudeCode:9,  codex:15,   dsh:42   } },
+  { d:'09-09', v:{ bai:6,   commandcode:2,   zcode:55, claudeCode:4,  codex:18,   dsh:12   } },
+  { d:'09-10', v:{ bai:2,   commandcode:4,   zcode:80, claudeCode:12, codex:20,   dsh:35   } },
+  { d:'09-11', v:{ bai:1.8, commandcode:0.9, zcode:85, claudeCode:4.2,codex:12.5, dsh:30.67} },
+];
+var TODAY  = DAYS[6].v;
+var STRESS = { zcode:45, dsh:20, codex:15, claudeCode:8, commandcode:7, bai:5 };
+
+var NS = 'http://www.w3.org/2000/svg';
+function el(name, attrs){ var e = document.createElementNS(NS, name); for (var k in attrs) e.setAttribute(k, attrs[k]); return e; }
+function segGap(){ return parseFloat(getComputedStyle(document.body).getPropertyValue('--seg-gap')) || 0; }
+
+/* ---------- 近 7 天堆叠柱（由 apply()/初始化统一调用 drawBars 绘制） ---------- */
+var bars = document.getElementById('bars');
+var PLOT = { x:44, w:504, top:14, bottom:262, max:160 };
+var SCALE = (PLOT.bottom - PLOT.top) / PLOT.max;
+var slot = PLOT.w / DAYS.length, bw = 40;
+
+/* ---------- 今日环形图 ---------- */
+var donutG = document.getElementById('donutG');
+var CIRC = 2*Math.PI*80, total = 0;
+ORDER.forEach(function(k){ total += TODAY[k]; });
+var start = 0;
+ORDER.forEach(function(k){
+  var v = TODAY[k]; if (!v) return;
+  var len = v/total*CIRC;
+  var seg = el('circle', { cx:110, cy:110, r:80, 'class':'seg' });
+  seg.style.stroke = 'var(' + VAR[k] + ')';
+  seg.style.setProperty('--len', len.toFixed(3)+'px');
+  seg.style.setProperty('--start', start.toFixed(3)+'px');
+  donutG.appendChild(seg);
+  start += len;
+});
+
+/* ---------- 压力测试条 ---------- */
+var strip = document.getElementById('strip');
+ORDER.forEach(function(k){
+  var v = STRESS[k]; if (!v) return;
+  var i = document.createElement('i');
+  i.style.width = v + '%'; i.style.background = 'var(' + VAR[k] + ')';
+  strip.appendChild(i);
+});
+
+/* ---------- 图例 ---------- */
+function fillLegend(node, withPct){
+  ORDER.forEach(function(k){
+    var s = document.createElement('span');
+    var d = document.createElement('i'); d.style.background = 'var(' + VAR[k] + ')';
+    s.appendChild(d);
+    s.appendChild(document.createTextNode(withPct ? LABEL[k]+' '+withPct[k]+'%' : LABEL[k]));
+    node.appendChild(s);
+  });
+}
+fillLegend(document.getElementById('legend1'));
+fillLegend(document.getElementById('legend2'));
+var pct = {}; ORDER.forEach(function(k){ pct[k] = STRESS[k]; });
+fillLegend(document.getElementById('legend3'), pct);
+
+/* ---------- 色板 ---------- */
+var swBox = document.getElementById('swatches');
+var SW = ORDER.concat(['accent','ok']);
+SW.forEach(function(k){
+  var div = document.createElement('div'); div.className = 'sw' + (k==='accent' ? ' accent' : '');
+  var d = document.createElement('span'); d.className = 'dot';
+  d.style.background = 'var(--' + (VAR[k] ? VAR[k].slice(2) : k) + ')';
+  var name = document.createElement('span'); name.textContent = k==='accent' ? 'UI 强调' : (k==='ok' ? '语义 ok' : LABEL[k]);
+  var code = document.createElement('code'); code.id = 'hex-' + k;
+  div.append(d, name, code); swBox.appendChild(div);
+});
+function refreshHex(){
+  var cs = getComputedStyle(document.body);
+  SW.forEach(function(k){
+    var varName = VAR[k] || '--' + k;
+    document.getElementById('hex-'+k).textContent = cs.getPropertyValue(varName).trim();
+  });
+}
+
+/* ---------- 方案切换（堆叠柱留缝随方案变化，需重绘） ---------- */
+var btns = document.querySelectorAll('.switcher button');
+function apply(key){
+  document.body.setAttribute('data-scheme', key);
+  btns.forEach(function(b){ b.setAttribute('aria-pressed', b.dataset.go === key ? 'true' : 'false'); });
+  /* 重绘柱图以应用/取消留缝与圆角 */
+  while (bars.firstChild) bars.removeChild(bars.firstChild);
+  drawBars();
+  refreshHex();
+}
+function drawBars(){
+  for (var g = 0; g <= 160; g += 40) {
+    var gy = PLOT.bottom - g*SCALE;
+    bars.appendChild(el('line', { x1:PLOT.x, x2:PLOT.x+PLOT.w, y1:gy, y2:gy, 'class':'gridline' }));
+    var gt = el('text', { x:PLOT.x-7, y:gy+3.5, 'text-anchor':'end', 'class':'ax' });
+    gt.textContent = g ? g+'M' : '0'; bars.appendChild(gt);
+  }
+  DAYS.forEach(function(day, i){
+    var x = PLOT.x + slot*i + (slot-bw)/2;
+    var cursor = PLOT.bottom, gap = segGap();
+    var topKey = null;
+    ORDER.forEach(function(k){ if (day.v[k] > 0) topKey = k; });
+    ORDER.forEach(function(k){
+      var v = day.v[k]; if (!v) return;
+      var h = Math.max(v*SCALE, 1.2), y = cursor - h;
+      var isTop = (k === topKey);
+      var ry = isTop ? y - (gap ? 3.5 : 0) : y + gap;
+      var rh = isTop ? h + (gap ? 3.5 : 0) : h - gap;
+      var r = el('rect', { x:x.toFixed(1), y:ry.toFixed(2), width:bw,
+                           height:Math.max(rh,1).toFixed(2), 'class': isTop ? 'top' : '' });
+      r.style.fill = 'var(' + VAR[k] + ')';
+      bars.appendChild(r);
+      cursor = y;
+    });
+    var xl = el('text', { x:x+bw/2, y:PLOT.bottom+20, 'text-anchor':'middle', 'class':'ax' });
+    xl.textContent = day.d; bars.appendChild(xl);
+  });
+}
+btns.forEach(function(b){ b.addEventListener('click', function(){ apply(b.dataset.go); }); });
+
+/* 初始绘制 */
+drawBars();
+refreshHex();
+</script>
+</body>
+</html>
