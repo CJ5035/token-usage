@@ -27,6 +27,7 @@ def fresh_progress(**overrides):
              event_mode="", last_model=None, model_revision=0,
              has_turn_context=False, last_event_seq=0,
              last_token_usage_fingerprint=None,
+             last_request_start_ts=None,
              parser_version=codex_api.PARSER_VERSION, updated_at=None)
     p.update(overrides)
     return p
@@ -432,3 +433,127 @@ def test_import_throttled_without_force(monkeypatch):
     monkeypatch.setattr(codex_api, "_last_import_at", time.monotonic())
     monkeypatch.setattr(codex_api, "scan_session_files", lambda: [])
     assert codex_api.import_incremental({}) == []
+
+
+def test_timeline_speed_derivation_turn_context(tmp_path):
+    p = rollout(tmp_path, 30)
+    ctx = {"type": "turn_context", "timestamp": "2026-09-06T01:00:00.000Z",
+           "payload": {"model": "gpt-5.6-sol"}}
+    rec = {"type": "token_usage_record", "timestamp": "2026-09-06T01:00:02.000Z",
+           "payload": {"response_id": "resp-timeline-1", "usage": {
+               "input_tokens": 100, "cached_input_tokens": 0,
+               "cache_write_input_tokens": 0, "output_tokens": 40,
+               "reasoning_output_tokens": 0, "total_tokens": 140}}}
+    write_lines(p, [ctx, rec])
+    res = codex_api.parse_session_file(p, fresh_progress())
+    assert len(res["rows"]) == 1
+    row = res["rows"][0]
+    assert row["duration_ms"] == pytest.approx(2000.0)
+    assert row["speed_tps"] == pytest.approx(20.0)
+    assert row["speed_source"] == "timeline"
+
+
+def test_timeline_speed_derivation_custom_tool_call_output(tmp_path):
+    p = rollout(tmp_path, 31)
+    tool_ret = {"type": "response_item", "timestamp": "2026-09-06T01:00:10.000Z",
+                "payload": {"type": "custom_tool_call_output", "call_id": "call-1", "output": "ok"}}
+    rec = {"type": "token_usage_record", "timestamp": "2026-09-06T01:00:12.500Z",
+           "payload": {"response_id": "resp-timeline-2", "usage": {
+               "input_tokens": 200, "cached_input_tokens": 0,
+               "cache_write_input_tokens": 0, "output_tokens": 50,
+               "reasoning_output_tokens": 0, "total_tokens": 250}}}
+    write_lines(p, [tool_ret, rec])
+    res = codex_api.parse_session_file(p, fresh_progress())
+    assert len(res["rows"]) == 1
+    row = res["rows"][0]
+    assert row["duration_ms"] == pytest.approx(2500.0)
+    assert row["speed_tps"] == pytest.approx(20.0)
+    assert row["speed_source"] == "timeline"
+
+
+def test_timeline_speed_noise_filtering(tmp_path):
+    p = rollout(tmp_path, 32)
+    # 1. window < 100ms
+    ctx1 = {"type": "turn_context", "timestamp": "2026-09-06T01:00:00.000Z", "payload": {"model": "m1"}}
+    rec_short = {"type": "token_usage_record", "timestamp": "2026-09-06T01:00:00.050Z",
+                 "payload": {"response_id": "resp-short", "usage": {
+                     "input_tokens": 100, "cached_input_tokens": 0,
+                     "cache_write_input_tokens": 0, "output_tokens": 20,
+                     "reasoning_output_tokens": 0, "total_tokens": 120}}}
+    # 2. output < 10
+    ctx2 = {"type": "turn_context", "timestamp": "2026-09-06T01:00:10.000Z", "payload": {"model": "m1"}}
+    rec_small = {"type": "token_usage_record", "timestamp": "2026-09-06T01:00:11.000Z",
+                 "payload": {"response_id": "resp-small", "usage": {
+                     "input_tokens": 100, "cached_input_tokens": 0,
+                     "cache_write_input_tokens": 0, "output_tokens": 9,
+                     "reasoning_output_tokens": 0, "total_tokens": 109}}}
+    # 3. speed > 500 (100ms window, 60 tokens -> 600 tok/s)
+    ctx3 = {"type": "turn_context", "timestamp": "2026-09-06T01:00:20.000Z", "payload": {"model": "m1"}}
+    rec_fast = {"type": "token_usage_record", "timestamp": "2026-09-06T01:00:20.100Z",
+                "payload": {"response_id": "resp-fast", "usage": {
+                    "input_tokens": 100, "cached_input_tokens": 0,
+                    "cache_write_input_tokens": 0, "output_tokens": 60,
+                    "reasoning_output_tokens": 0, "total_tokens": 160}}}
+    write_lines(p, [ctx1, rec_short, ctx2, rec_small, ctx3, rec_fast])
+    res = codex_api.parse_session_file(p, fresh_progress())
+    assert len(res["rows"]) == 3
+    for r in res["rows"]:
+        assert r["speed_tps"] is None
+        assert r["duration_ms"] is None
+        assert r["speed_source"] is None
+
+
+def test_timeline_speed_progress_continuity(tmp_path):
+    p = rollout(tmp_path, 33)
+    ctx = {"type": "turn_context", "timestamp": "2026-09-06T01:00:00.000Z", "payload": {"model": "m1"}}
+    rec1 = {"type": "token_usage_record", "timestamp": "2026-09-06T01:00:02.000Z",
+            "payload": {"response_id": "resp-cont-1", "usage": {
+                "input_tokens": 100, "cached_input_tokens": 0,
+                "cache_write_input_tokens": 0, "output_tokens": 40,
+                "reasoning_output_tokens": 0, "total_tokens": 140}}}
+    tool_ret = {"type": "response_item", "timestamp": "2026-09-06T01:00:10.000Z",
+                "payload": {"type": "custom_tool_call_output", "call_id": "call-1", "output": "ok"}}
+    write_lines(p, [ctx, rec1, tool_ret])
+    res1 = codex_api.parse_session_file(p, fresh_progress())
+    assert len(res1["rows"]) == 1
+    assert res1["event_mode"] == "token_usage_record"
+    # tool_ret timestamp saved in last_request_start_ts
+    assert res1["last_request_start_ts"] is not None
+
+    rec2 = {"type": "token_usage_record", "timestamp": "2026-09-06T01:00:12.000Z",
+            "payload": {"response_id": "resp-cont-2", "usage": {
+                "input_tokens": 100, "cached_input_tokens": 0,
+                "cache_write_input_tokens": 0, "output_tokens": 50,
+                "reasoning_output_tokens": 0, "total_tokens": 150}}}
+    append_lines(p, [rec2])
+    prog = fresh_progress(offset=res1["offset"], file_size=res1["offset"],
+                          event_mode=res1["event_mode"], last_model=res1["last_model"],
+                          model_revision=res1["model_revision"],
+                          has_turn_context=res1["has_turn_context"],
+                          last_event_seq=res1["last_event_seq"],
+                          last_token_usage_fingerprint=res1["last_token_usage_fingerprint"],
+                          last_request_start_ts=res1["last_request_start_ts"])
+    res2 = codex_api.parse_session_file(p, prog)
+    assert len(res2["rows"]) == 1
+    assert res2["rows"][0]["duration_ms"] == pytest.approx(2000.0)
+    assert res2["rows"][0]["speed_tps"] == pytest.approx(25.0)
+    assert res2["rows"][0]["speed_source"] == "timeline"
+
+
+def test_official_duration_priority_over_timeline(tmp_path):
+    p = rollout(tmp_path, 34)
+    ctx = {"type": "turn_context", "timestamp": "2026-09-06T01:00:00.000Z", "payload": {"model": "m1"}}
+    rec = {"type": "token_usage_record", "timestamp": "2026-09-06T01:00:05.000Z",
+           "duration_ms": 1000.0,
+           "payload": {"response_id": "resp-official", "usage": {
+               "input_tokens": 100, "cached_input_tokens": 0,
+               "cache_write_input_tokens": 0, "output_tokens": 50,
+               "reasoning_output_tokens": 0, "total_tokens": 150}}}
+    write_lines(p, [ctx, rec])
+    res = codex_api.parse_session_file(p, fresh_progress())
+    assert len(res["rows"]) == 1
+    row = res["rows"][0]
+    assert row["duration_ms"] == pytest.approx(1000.0)
+    assert row["speed_tps"] == pytest.approx(50.0)
+    assert row["speed_source"] == "duration"
+

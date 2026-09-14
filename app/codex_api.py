@@ -61,6 +61,7 @@ class FileProgress(TypedDict):
     has_turn_context: bool
     last_event_seq: int
     last_token_usage_fingerprint: str | None
+    last_request_start_ts: Optional[float]
     parser_version: int
     updated_at: str | None
 
@@ -105,6 +106,7 @@ class ParseResult(TypedDict):
     model_revision: int
     has_turn_context: bool
     last_token_usage_fingerprint: str | None
+    last_request_start_ts: Optional[float]
     warnings: list[str]
 
 
@@ -112,7 +114,7 @@ class ParseResult(TypedDict):
 # 常量
 # ---------------------------------------------------------------------------
 
-PARSER_VERSION = 1  # 解析规则升级时 +1；进度中旧版本失效并触发从头重建
+PARSER_VERSION = 2  # 解析规则升级时 +1；进度中旧版本失效并触发从头重建
 
 # scan 递归下钻层数 (rollout 实际位于 sessions/<年>/<月>/<日>/ 共 3 层, 5 层留富余)
 MAX_SCAN_DEPTH = 5
@@ -363,6 +365,15 @@ def parse_session_file(
     has_ctx = bool(progress.get("has_turn_context"))
     seq = int(progress.get("last_event_seq") or 0)
     fp = progress.get("last_token_usage_fingerprint")
+    raw_start = progress.get("last_request_start_ts")
+    request_start_ts: datetime | None = None
+    if isinstance(raw_start, datetime):
+        request_start_ts = raw_start if raw_start.tzinfo else raw_start.replace(tzinfo=timezone.utc)
+    elif raw_start is not None:
+        try:
+            request_start_ts = datetime.fromtimestamp(float(raw_start), tz=timezone.utc)
+        except (ValueError, TypeError, OverflowError, OSError):
+            request_start_ts = None
     rows: list[UsageRow] = []
     warnings: list[str] = []
     session_id = _session_id_for(path)
@@ -374,8 +385,9 @@ def parse_session_file(
                 data = f.read()
         except OSError as exc:
             warnings.append(f"{path}: 读取失败: {exc}")
+            last_req_ts = request_start_ts.timestamp() if request_start_ts is not None else None
             return _parse_result(rows, offset, seq, last_model, mode,
-                                 revision, has_ctx, fp, warnings)
+                                 revision, has_ctx, fp, last_req_ts, warnings)
         file_start = offset  # data 的下标 0 对应的文件偏移
     else:
         data = snapshot
@@ -390,7 +402,7 @@ def parse_session_file(
         warnings.append(f"{path.name}@{file_start + rel_pos}: {message}")
 
     def process_line(rel_pos: int, raw: bytes) -> None:
-        nonlocal mode, last_model, revision, has_ctx, seq, fp
+        nonlocal mode, last_model, revision, has_ctx, seq, fp, request_start_ts
         try:
             rec = json.loads(raw.decode("utf-8", errors="replace"))
         except ValueError:
@@ -402,6 +414,9 @@ def parse_session_file(
         rec_type = rec.get("type")
         payload = rec.get("payload")
         if rec_type == "turn_context":
+            ctx_ts = _parse_ts(rec.get("timestamp"))
+            if ctx_ts is not None:
+                request_start_ts = ctx_ts
             model = payload.get("model") if isinstance(payload, dict) else None
             if isinstance(model, str) and model:
                 last_model = model
@@ -411,6 +426,17 @@ def parse_session_file(
                 for row in rows:
                     if not row["model"]:
                         row["model"] = model
+            return
+        if rec_type == "response_item":
+            if isinstance(payload, dict) and payload.get("type") == "custom_tool_call_output":
+                tool_ts = _parse_ts(rec.get("timestamp"))
+                if tool_ts is not None:
+                    request_start_ts = tool_ts
+            return
+        if rec_type == "custom_tool_call_output":
+            tool_ts = _parse_ts(rec.get("timestamp"))
+            if tool_ts is not None:
+                request_start_ts = tool_ts
             return
         if rec_type == "event_msg":
             if not isinstance(payload, dict) or payload.get("type") != "token_count":
@@ -455,6 +481,25 @@ def parse_session_file(
             warn(rel_pos, "零总量, 不产出记录")
             return
         duration_ms, speed, speed_source = _speed_fields(rec, usage["output_tokens"])
+        if duration_ms is not None and duration_ms > 0:
+            pass  # 官方显式 duration 优先
+        elif request_start_ts is not None:
+            window_s = (ts - request_start_ts).total_seconds()
+            window_ms = window_s * 1000.0
+            if window_ms >= 100 and usage["output_tokens"] >= 10:
+                speed_val = usage["output_tokens"] * 1000.0 / window_ms
+                if speed_val <= 500.0:
+                    duration_ms = window_ms
+                    speed = speed_val
+                    speed_source = "timeline"
+                else:
+                    duration_ms = None
+                    speed = None
+                    speed_source = None
+            else:
+                duration_ms = None
+                speed = None
+                speed_source = None
         if row_mode == "token_count":
             if not mode:
                 mode = "token_count"  # 快速路径空模式兜底; 首扫/重建已由预扫描判定
@@ -492,8 +537,9 @@ def parse_session_file(
             process_line(pos, data[pos:nl])
             pos = nl + 1
         offset = file_start + last_nl + 1
+    last_req_ts = request_start_ts.timestamp() if request_start_ts is not None else None
     return _parse_result(rows, offset, seq, last_model, mode,
-                         revision, has_ctx, fp, warnings)
+                         revision, has_ctx, fp, last_req_ts, warnings)
 
 
 def _parse_result(
@@ -505,6 +551,7 @@ def _parse_result(
     revision: int,
     has_ctx: bool,
     fp: str | None,
+    last_request_start_ts: float | None,
     warnings: list[str],
 ) -> ParseResult:
     return {
@@ -516,6 +563,7 @@ def _parse_result(
         "model_revision": revision,
         "has_turn_context": has_ctx,
         "last_token_usage_fingerprint": fp,
+        "last_request_start_ts": last_request_start_ts,
         "warnings": warnings,
     }
 
@@ -711,6 +759,7 @@ def _process_file(
             "has_turn_context": parsed["has_turn_context"],
             "last_event_seq": parsed["last_event_seq"],
             "last_token_usage_fingerprint": parsed["last_token_usage_fingerprint"],
+            "last_request_start_ts": parsed["last_request_start_ts"],
             "parser_version": PARSER_VERSION,
             "updated_at": _now_iso(),
         },
