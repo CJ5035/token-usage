@@ -379,7 +379,7 @@ class WindowApi:
         """
         if self._on_open_login:
             self._on_open_login(
-                mode if mode in ("add", "relogin", "add_bai", "add_commandcode") else "relogin",
+                mode if mode in ("add", "relogin", "add_bai", "add_commandcode", "add_workbuddy") else "relogin",
                 account_id,
             )
         return True
@@ -636,6 +636,11 @@ def main() -> None:
                     credential, workspace_hint,
                     switch=True, source="commandcode", dedupe_key=workspace_hint,
                 )
+            elif account_type == "workbuddy":
+                db.add_account(
+                    credential, workspace_hint,
+                    switch=True, source="workbuddy", dedupe_key=workspace_hint,
+                )
             elif mode == "add":
                 db.add_account(credential, workspace_hint, switch=True)
             else:
@@ -711,6 +716,8 @@ def main() -> None:
             return ("add", "bai")
         if mode == "add_commandcode":
             return ("add", "commandcode")
+        if mode == "add_workbuddy":
+            return ("add", "workbuddy")
         return (mode if mode in ("add", "relogin") else "relogin", "opencode")
 
     def open_login(mode: str = "relogin", account_id: int | None = None) -> None:

@@ -1825,9 +1825,10 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             return
 
         if action == "add":
-            # 触发登录窗口; 带 source="bai" 时走 "add_bai" (BAI 登录页).
+            # 触发登录窗口; source 映射到对应登录页.
             # 无窗口环境 (纯浏览器/冒烟) 时返回未打开状态
-            mode = "add_bai" if body.get("source") == "bai" else "add"
+            mode = {"bai": "add_bai", "commandcode": "add_commandcode",
+                    "workbuddy": "add_workbuddy"}.get(body.get("source"), "add")
             opened = bool(_on_open_login)
             if opened:
                 _on_open_login(mode)

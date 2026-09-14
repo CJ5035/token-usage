@@ -23,6 +23,8 @@ from typing import Callable, Optional
 from urllib import request as _urllib_request
 from urllib.parse import urlencode
 
+from .workbuddy_api import WorkBuddyAPI
+
 import webview
 
 LOGIN_BASE = "https://auth.opencode.ai/authorize"
@@ -50,7 +52,11 @@ CC_DOMAIN = "https://commandcode.ai"
 CC_ACCOUNT_TYPE = "commandcode"
 
 # on_success 共用的工作区提示随实例而定, _extract_bai_session/_build_bai_cookie_jar 不依赖全局
-_ACCOUNT_TYPES = ("opencode", "bai", "commandcode")
+WB_LOGIN_URL = "https://www.workbuddy.cn/profile/plans-usage"
+WB_DOMAIN = "https://www.workbuddy.cn"
+WB_ACCOUNT_TYPE = "workbuddy"
+WB_SESSION_COOKIE = "session"
+_ACCOUNT_TYPES = ("opencode", "bai", "commandcode", "workbuddy")
 
 
 def _log(msg: str) -> None:
@@ -69,6 +75,8 @@ def build_login_url(account_type: str = "opencode") -> str:
         return BAI_LOGIN_URL
     if account_type == CC_ACCOUNT_TYPE:
         return CC_LOGIN_URL
+    if account_type == WB_ACCOUNT_TYPE:
+        return WB_LOGIN_URL
     params = {
         "client_id": LOGIN_CLIENT_ID,
         "redirect_uri": LOGIN_REDIRECT_URI,
@@ -198,6 +206,8 @@ def _login_window_title(account_type: str) -> str:
         return "GoGauge - BAI Login"
     if account_type == CC_ACCOUNT_TYPE:
         return "GoGauge - Command Code Login"
+    if account_type == WB_ACCOUNT_TYPE:
+        return "GoGauge - WorkBuddy Login"
     return "GoGauge - OpenCode Go Login"
 
 
@@ -257,6 +267,9 @@ class LoginWatcher:
                     return
             elif self.account_type == CC_ACCOUNT_TYPE:
                 if self._handle_commandcode(url):
+                    return
+            elif self.account_type == WB_ACCOUNT_TYPE:
+                if self._handle_workbuddy(url):
                     return
             else:
                 if self._handle_opencode(url):
@@ -377,4 +390,45 @@ class LoginWatcher:
         self.done = True
         self._stop.set()
         self.on_success(jar, user_id, "bai")
+        return True
+
+    def _handle_workbuddy(self, url: str) -> bool:
+        """WorkBuddy success: same-site URL plus non-empty session cookie.
+
+        Account lookup is best-effort because the response field set is still
+        being verified against the real service; an empty user id disables
+        deduplication but must not block an otherwise valid session.
+        """
+        if not url.startswith(WB_DOMAIN):
+            return False
+        try:
+            cookies = self.win.get_cookies() or []
+        except Exception:  # noqa: BLE001
+            return False
+        jar_entries: list[dict[str, str]] = []
+        session_value = ""
+        for cookie in cookies:
+            for name in _cookie_names(cookie):
+                value = _cookie_value(cookie, name)
+                if not value:
+                    continue
+                jar_entries.append({"name": name, "value": value})
+                if name == WB_SESSION_COOKIE:
+                    session_value = value
+        if not session_value:
+            return False
+        jar = json.dumps(jar_entries, ensure_ascii=False)
+        user_id = ""
+        try:
+            accounts = WorkBuddyAPI(jar).fetch_accounts()
+            if isinstance(accounts, dict):
+                value = accounts.get("userId")
+                if value is not None:
+                    user_id = value if isinstance(value, str) else str(value)
+        except Exception:  # noqa: BLE001 best-effort dedupe lookup
+            pass
+        _log(f"[login] WorkBuddy SUCCESS: session captured (len={len(session_value)}), userId={user_id!r}")
+        self.done = True
+        self._stop.set()
+        self.on_success(jar, user_id, WB_ACCOUNT_TYPE)
         return True

@@ -84,7 +84,7 @@ const I18N = {
     noUsers: "暂无账号，点击右上角「添加用户」登录",
     setToCurrent: "设为当前", loggedOut: "已退出登录",
     logoutUserConfirm: "将退出「{name}」，仅清除登录凭证，本地用量数据保留。确定？",
-    sourceCommandcode: "CommandCode", loginCommandcode: "登录 Command Code",
+    sourceCommandcode: "CommandCode", loginCommandcode: "登录 Command Code", loginWorkbuddy: "登录 WorkBuddy",
     ccSummaryTitle: "账期汇总", ccRequests: "请求", ccTokens: "Token", ccCost: "费用", ccSuccessRate: "成功率",
     ccHistoryNote: "API 仅提供最近 24 小时明细，更早历史自接入起本地积累",
     zcodeQuotaTitle: "GLM Coding Plan · ZCode",
@@ -206,7 +206,7 @@ const I18N = {
     noUsers: "No accounts yet — click \"Add User\" to sign in",
     setToCurrent: "Make Active", loggedOut: "Signed out",
     logoutUserConfirm: "Sign out \"{name}\"? This only clears the credential — local usage data is kept. Continue?",
-    sourceCommandcode: "CommandCode", loginCommandcode: "Add CommandCode Account",
+    sourceCommandcode: "CommandCode", loginCommandcode: "Add CommandCode Account", loginWorkbuddy: "Add WorkBuddy Account",
     ccSummaryTitle: "Billing Summary", ccRequests: "Requests", ccTokens: "Tokens", ccCost: "Cost", ccSuccessRate: "Success Rate",
     ccHistoryNote: "API provides only the last 24h of details; older history accumulates locally since first sync",
     zcodeQuotaTitle: "GLM Coding Plan · ZCode",
@@ -2721,6 +2721,16 @@ function bindEvents() {
     if (a && a.open_login) { a.open_login("add_commandcode"); return; }
     try {  // 浏览器环境兜底
       await api("/api/accounts/add", { method: "POST", body: JSON.stringify({ source: "commandcode" }) });
+      toast(t("loginNote"));
+    } catch (e) { toast(e.message || t("loadFailed"), "err"); }
+  });
+  // 添加 WorkBuddy 账号: pywebview 打开 WorkBuddy 登录页; 浏览器兜底走 source=workbuddy
+  $("btn-add-workbuddy").addEventListener("click", async () => {
+    startLoginWatch();
+    const a = await pywebviewApi();
+    if (a && a.open_login) { a.open_login("add_workbuddy"); return; }
+    try {
+      await api("/api/accounts/add", { method: "POST", body: JSON.stringify({ source: "workbuddy" }) });
       toast(t("loginNote"));
     } catch (e) { toast(e.message || t("loadFailed"), "err"); }
   });
