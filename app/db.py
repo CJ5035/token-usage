@@ -832,6 +832,7 @@ def delete_account(account_id: int) -> int:
         conn = get_db()
         aid = int(account_id)
         conn.execute("DELETE FROM usage_records WHERE account_id = ?", (aid,))
+        conn.execute("DELETE FROM workbuddy_usage WHERE account_id = ?", (aid,))
         conn.execute("DELETE FROM usage_sync_state WHERE account_id = ?", (aid,))
         conn.execute("DELETE FROM charts_buckets WHERE account_id = ?", (aid,))
         conn.execute("DELETE FROM accounts WHERE id = ?", (aid,))
@@ -1001,7 +1002,7 @@ def insert_workbuddy_rows(rows: list[dict[str, Any]], account_id: Optional[int] 
 def workbuddy_summary(range_: str = "7d", account_id: Optional[int] = None) -> dict[str, Any]:
     """Aggregate WorkBuddy credits without converting them to token/USD metrics."""
     range_sql, params = _report_range_sql(range_, "w.request_time")
-    aid = _resolve_account_id(account_id)
+    aid = int(account_id) if account_id else None
     account_sql = " AND w.account_id = ?" if aid else ""
     all_params = params + ([aid] if aid else [])
     conn = get_db()

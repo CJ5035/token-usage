@@ -71,6 +71,24 @@ def test_workbuddy_report_channel_has_unknown_cost_and_credits(tmp_workbuddy_db)
     assert wb["data_since"] == "2026-09-14"
 
 
+def test_workbuddy_summary_defaults_to_all_workbuddy_accounts(tmp_workbuddy_db):
+    aid1 = _workbuddy_account("session-1", "u1")
+    aid2 = _workbuddy_account("session-2", "u2", switch=False)
+    db.insert_workbuddy_rows([_row("r1", "2026-09-14 10:00:00", 1.0)], aid1)
+    db.insert_workbuddy_rows([_row("r2", "2026-09-14 11:00:00", 2.0)], aid2)
+    summary = db.workbuddy_summary("today")
+    assert summary["requests"] == 2
+    assert summary["credits"] == pytest.approx(3.0)
+    assert db.workbuddy_summary("today", account_id=aid1)["requests"] == 1
+
+
+def test_delete_account_removes_workbuddy_usage(tmp_workbuddy_db):
+    aid = _workbuddy_account()
+    db.insert_workbuddy_rows([_row("r1", "2026-09-14 10:00:00")], aid)
+    db.delete_account(aid)
+    assert db.get_db().execute("SELECT COUNT(*) c FROM workbuddy_usage WHERE account_id=?", (aid,)).fetchone()["c"] == 0
+
+
 def test_workbuddy_channel_order_and_summary(tmp_workbuddy_db):
     _workbuddy_account()
     channels = db.list_channel_summary()
