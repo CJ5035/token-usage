@@ -179,6 +179,20 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           newest_record_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS workbuddy_usage (
+          account_id INTEGER NOT NULL,
+          request_id TEXT NOT NULL,
+          request_time TEXT NOT NULL,
+          model TEXT NOT NULL DEFAULT '',
+          client TEXT NOT NULL DEFAULT '',
+          credit REAL,
+          synced_at TEXT NOT NULL,
+          PRIMARY KEY (account_id, request_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_workbuddy_usage_time ON workbuddy_usage(request_time DESC);
+        CREATE INDEX IF NOT EXISTS idx_workbuddy_usage_model ON workbuddy_usage(model);
+        CREATE INDEX IF NOT EXISTS idx_workbuddy_usage_account ON workbuddy_usage(account_id);
+
         CREATE TABLE IF NOT EXISTS settings (
           id INTEGER PRIMARY KEY CHECK (id = 1),
           payload TEXT NOT NULL,
@@ -949,7 +963,67 @@ def update_sync_state(
             (_now_iso(), status, error, inserted, aid),
         )
         _refresh_sync_totals(conn, aid)
-        conn.commit()
+    conn.commit()
+
+
+def insert_workbuddy_rows(rows: list[dict[str, Any]], account_id: Optional[int] = None) -> int:
+    """Insert WorkBuddy request rows idempotently per account."""
+    with _DB_LOCK:
+        if not rows:
+            return 0
+        aid = _resolve_account_id(account_id)
+        if not aid:
+            return 0
+        conn = get_db()
+        stmt = (
+            "INSERT OR IGNORE INTO workbuddy_usage "
+            "(account_id,request_id,request_time,model,client,credit,synced_at) "
+            "VALUES (?,?,?,?,?,?,?)"
+        )
+        inserted = 0
+        synced_at = _now_iso()
+        conn.execute("BEGIN")
+        try:
+            for row in rows:
+                cur = conn.execute(stmt, (
+                    aid, str(row.get("request_id") or ""),
+                    str(row.get("request_time") or ""), str(row.get("model") or ""),
+                    str(row.get("client") or ""), row.get("credit"), synced_at,
+                ))
+                inserted += cur.rowcount
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return inserted
+
+
+def workbuddy_summary(range_: str = "7d", account_id: Optional[int] = None) -> dict[str, Any]:
+    """Aggregate WorkBuddy credits without converting them to token/USD metrics."""
+    range_sql, params = _report_range_sql(range_, "w.request_time")
+    aid = _resolve_account_id(account_id)
+    account_sql = " AND w.account_id = ?" if aid else ""
+    all_params = params + ([aid] if aid else [])
+    conn = get_db()
+    totals = conn.execute(
+        f"SELECT COUNT(*) requests, SUM(w.credit) credits, MIN(substr(w.request_time,1,10)) data_since "
+        f"FROM workbuddy_usage w WHERE {range_sql}{account_sql}", all_params
+    ).fetchone()
+    models = conn.execute(
+        f"SELECT w.model, COUNT(*) requests, SUM(w.credit) credits FROM workbuddy_usage w "
+        f"WHERE {range_sql}{account_sql} GROUP BY w.model ORDER BY requests DESC, w.model", all_params
+    ).fetchall()
+    daily = conn.execute(
+        f"SELECT substr(w.request_time,1,10) date, COUNT(*) requests, SUM(w.credit) credits "
+        f"FROM workbuddy_usage w WHERE {range_sql}{account_sql} GROUP BY date ORDER BY date", all_params
+    ).fetchall()
+    return {
+        "requests": int(totals["requests"] or 0),
+        "credits": float(totals["credits"] or 0.0),
+        "models": [{"model": r["model"], "requests": r["requests"], "credits": float(r["credits"] or 0.0)} for r in models],
+        "daily": [{"date": r["date"], "requests": r["requests"], "credits": float(r["credits"] or 0.0)} for r in daily],
+        "data_since": totals["data_since"],
+    }
 
 
 def _refresh_sync_totals(conn: sqlite3.Connection, account_id: int) -> None:
@@ -2370,7 +2444,7 @@ def claudecode_last_import_at() -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 _REPORT_RANGE_DAYS = {"7d": 6, "30d": 29}  # 自然日窗口: 含今天共 N 天
-_CHANNEL_ORDER = ["opencode", "bai", "commandcode", "zcode", "claudecode", "dsh"]
+_CHANNEL_ORDER = ["opencode", "bai", "commandcode", "zcode", "claudecode", "workbuddy", "dsh"]
 _LOCAL_EST_CHANNELS = {"bai", "zcode", "claudecode"}  # 费用为估算的渠道 (spec v6 est-badge)
 
 
@@ -2779,6 +2853,19 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
         range_params,
     ).fetchall()
     agg = {r["ch"]: dict(r) for r in rows}
+    wb_range_sql, wb_params = _report_range_sql(range_, "w.request_time")
+    wb = get_db().execute(
+        f"SELECT COUNT(*) requests, MIN(substr(w.request_time,1,10)) data_since, "
+        f"SUM(CASE WHEN w.credit IS NOT NULL THEN w.credit ELSE 0 END) credits "
+        f"FROM workbuddy_usage w WHERE {wb_range_sql}", wb_params
+    ).fetchone()
+    if wb and wb["requests"]:
+        agg["workbuddy"] = {
+            "tokens": 0, "input": 0, "output": 0, "cache_read": 0,
+            "cache_write": 0, "reasoning": 0, "requests": wb["requests"],
+            "cost": None, "credits": wb["credits"] or 0.0,
+            "wb_data_since": wb["data_since"],
+        }
     # R6: 本地渠道行 (各一次聚合, 同构 dict 并入)
     for ch, alias, table, ts in (("zcode", "z", "zcode_usage", "z.started_at"),
                                  ("claudecode", "c", "claudecode_usage", "c.started_at")):
@@ -2824,7 +2911,11 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
 
     def _channel_row(ch: str, a: dict[str, Any]) -> dict[str, Any]:
         requests = int(a["requests"] or 0)
-        if ch == "codex":
+        if ch == "workbuddy":
+            cost = None
+            cost_available, cost_partial = False, True
+            exact = requests > 0
+        elif ch == "codex":
             cost = None                                  # NULL 不是 0
             cost_available, cost_partial = False, True
             exact = bool(a.get("request_count_exact"))
@@ -2838,7 +2929,9 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
                 "requests": requests, "cost": cost,
                 "cost_available": cost_available, "cost_partial": cost_partial,
                 "request_count_exact": exact,
-                "data_since": since.get(ch), "estimated": ch in _LOCAL_EST_CHANNELS}
+                "data_since": a.get("wb_data_since") if ch == "workbuddy" else since.get(ch),
+                "credits": a.get("credits") if ch == "workbuddy" else None,
+                "estimated": ch in _LOCAL_EST_CHANNELS}
 
     return [_channel_row(ch, agg[ch]) for ch in order]
 
