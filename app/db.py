@@ -741,16 +741,16 @@ def add_account(
             else:
                 conn.commit()
             return aid
-        if source == "commandcode":
+        if source in ("commandcode", "workbuddy"):
             # dedupe_key = userId; 登录流程若只把它放进 workspace_hint (照 bai 约定两者同值),
             # 兜底取 hint, 保证只传 hint 的调用方也能正确去重
             dedupe_key = (dedupe_key or "").strip() or hint
             existing = None
             if dedupe_key:
                 existing = conn.execute(
-                    "SELECT id FROM accounts WHERE source = 'commandcode' AND workspace_id = ?"
+                    "SELECT id FROM accounts WHERE source = ? AND workspace_id = ?"
                     " ORDER BY id LIMIT 1",
-                    (dedupe_key,),
+                    (source, dedupe_key),
                 ).fetchone()
             if existing is not None:
                 aid = int(existing["id"])
@@ -769,8 +769,8 @@ def add_account(
             now = _now_iso()
             cur = conn.execute(
                 """INSERT INTO accounts (name, workspace_id, resolved_workspace_id, token, source, created_at, updated_at)
-                   VALUES (?, ?, NULL, ?, 'commandcode', ?, ?)""",
-                (name, dedupe_key or hint or "Default", token, now, now),
+                   VALUES (?, ?, NULL, ?, ?, ?, ?)""",
+                (name, dedupe_key or hint or "Default", token, source, now, now),
             )
             aid = int(cur.lastrowid or nxt)
             _ensure_state_row(conn, aid)
