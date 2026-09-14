@@ -176,6 +176,14 @@
         </div>
         <div class="chart-box" id="claudecode-trend-box" style="min-height:220px"><canvas id="claudecode-trend-chart"></canvas><div class="zcode-chart-empty" id="claudecode-trend-empty" hidden></div></div>
       </div>
+      <div class="card zcode-stats workbuddy-stats" id="workbuddy-stats" hidden>
+        <div class="card-h"><h3 data-i18n="workbuddyStatsTitle">WorkBuddy 积分用量</h3><span class="hint" data-i18n="workbuddyCredits">积分</span></div>
+        <div class="zcode-missing" id="workbuddy-missing" data-i18n="workbuddyStatsMissing" hidden>暂无 WorkBuddy 用量数据</div>
+        <div class="kpi-row kpi4" id="workbuddy-kpis"></div>
+        <div id="workbuddy-tables">
+          <table class="tbl"><thead><tr><th data-i18n="zcodeModel">模型</th><th class="num" data-i18n="totalRequests">请求</th><th class="num" data-i18n="workbuddyCredits">积分</th></tr></thead><tbody id="workbuddy-model-body"></tbody></table>
+        </div>
+      </div>
       <section id="codex-stats" class="codex-stats" hidden>
         <div class="card-h"><h3 data-i18n="codexStatsTitle">Codex 本地用量</h3></div>
         <div id="codex-error" role="status" hidden></div>

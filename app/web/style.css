@@ -34,6 +34,7 @@
   --ch-commandcode: #0891b2;    /* 20260911 slate/indigo 方案: cyan-600 (用户给定) */
   --ch-zcode: #4f46e5;          /* 20260911 slate/indigo 方案: indigo-600 = 品牌主色 (用户给定) */
   --ch-claudecode: #d97706;     /* 20260911 slate/indigo 方案: amber-600 (用户给定) */
+  --ch-workbuddy: #0f766e;
   --ch-dsh: #64748b;            /* slate-500, 新旧方案同值 */
   --ch-codex: #e11d48;          /* 20260911 slate/indigo 方案: rose-600 (用户给定) */
   --up: #16a34a;                /* 涨/成功语义色 (EVOLUTION-6 新增, 值=原 .wb-s .up 硬编码, 亮色逐像素不变) */
@@ -96,6 +97,7 @@ html[data-theme="dark"] {
   --ch-commandcode: #06B6D4;    /* 20260911 arena2: 演示稿原值 cyan-500 (新卡 7.70:1); 原翡翠绿 #34d399 */
   --ch-zcode: #818cf8;          /* indigo-400 = 演示稿 #6366F1 提亮档 (新卡 6.27:1), 20260908 起未变 */
   --ch-claudecode: #F59E0B;     /* 20260911 arena2: 演示稿原值 amber-500 (新卡 8.70:1); 原陶土橙 #d97757 */
+  --ch-workbuddy: #2dd4bf;
   --ch-dsh: #94a3b8;            /* slate-400 = 演示稿 #64748B 提亮档 (新卡 7.29:1), 20260908 起未变 */
   --ch-codex: #F43F5E;          /* 20260911 arena2: 演示稿原值 rose-500 (新卡 5.09:1); 原 fuchsia #d946ef */
 

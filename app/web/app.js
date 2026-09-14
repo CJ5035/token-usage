@@ -85,6 +85,7 @@ const I18N = {
     setToCurrent: "设为当前", loggedOut: "已退出登录",
     logoutUserConfirm: "将退出「{name}」，仅清除登录凭证，本地用量数据保留。确定？",
     sourceCommandcode: "CommandCode", loginCommandcode: "登录 Command Code", loginWorkbuddy: "登录 WorkBuddy",
+    workbuddyStatsTitle: "WorkBuddy 积分用量", workbuddyStatsMissing: "暂无 WorkBuddy 用量数据", workbuddyCredits: "积分",
     ccSummaryTitle: "账期汇总", ccRequests: "请求", ccTokens: "Token", ccCost: "费用", ccSuccessRate: "成功率",
     ccHistoryNote: "API 仅提供最近 24 小时明细，更早历史自接入起本地积累",
     zcodeQuotaTitle: "GLM Coding Plan · ZCode",
@@ -207,6 +208,7 @@ const I18N = {
     setToCurrent: "Make Active", loggedOut: "Signed out",
     logoutUserConfirm: "Sign out \"{name}\"? This only clears the credential — local usage data is kept. Continue?",
     sourceCommandcode: "CommandCode", loginCommandcode: "Add CommandCode Account", loginWorkbuddy: "Add WorkBuddy Account",
+    workbuddyStatsTitle: "WorkBuddy Credit Usage", workbuddyStatsMissing: "No WorkBuddy usage data", workbuddyCredits: "Credits",
     ccSummaryTitle: "Billing Summary", ccRequests: "Requests", ccTokens: "Tokens", ccCost: "Cost", ccSuccessRate: "Success Rate",
     ccHistoryNote: "API provides only the last 24h of details; older history accumulates locally since first sync",
     zcodeQuotaTitle: "GLM Coding Plan · ZCode",
@@ -604,6 +606,7 @@ function switchPage(page) {
   if (page === "stats") loadZcodeSummary().catch(() => {});  // ZCode 本地用量区块
   if (page === "stats") loadDshUsage().catch(() => {});  // DSH 本地用量区块
   if (page === "stats") loadClaudecodeSummary().catch(() => {});  // Claude Code 本地用量区块
+  if (page === "stats") loadWorkbuddySummary().catch(() => {});  // WorkBuddy 积分用量区块
   if (page === "stats") loadCodexSummary().catch(() => {});  // Codex 本地用量区块
   if (page === "overview") loadOverview().catch(() => {});
   if (page === "records") { loadSessions().catch(() => {}); loadRecords().catch(() => {}); }
@@ -792,6 +795,18 @@ function renderUsageBlocks(quota, box) {
       blocks.push({ usd: true, html: usdWindowHtml(w, "") });
       continue;
     }
+    if (w.unit === "credits") {
+      const usedCredits = Number(w.used);
+      const totalCredits = Number(w.total);
+      const remainingCredits = Number(w.remaining);
+      const pctCredits = totalCredits > 0 && Number.isFinite(usedCredits) ? Math.min(100, Math.max(0, usedCredits / totalCredits * 100)) : 0;
+      blocks.push({ credits: true, label: (QUOTA_LABEL[w.label] || (() => w.label))(),
+        used: Number.isFinite(usedCredits) ? usedCredits : null,
+        total: Number.isFinite(totalCredits) ? totalCredits : null,
+        remaining: Number.isFinite(remainingCredits) ? remainingCredits : null,
+        pct: pctCredits, reset: `${t("resetsIn")} ${fmtDur(w.reset_in_sec)}` });
+      continue;
+    }
     const used = Number(w.used) || 0;
     blocks.push({
       cls: w.label === "5h Rolling" ? "c-rolling" : w.label === "Weekly" ? "c-week" : "c-month",
@@ -805,7 +820,11 @@ function renderUsageBlocks(quota, box) {
       <div class="ub-head"><span class="ub-l">${b.label}</span></div>
       <div class="ub-bal">${b.balance}</div>
       ${b.expiring ? `<div class="ub-exp">${b.expiring}</div>` : ""}
-    </div>` : b.usd ? b.html : `<div class="ub ${b.cls}">
+    </div>` : b.usd ? b.html : b.credits ? `<div class="ub c-month">
+      <div class="ub-head"><span class="ub-l">${b.label}</span><span class="ub-rem">${t("remaining")} ${b.remaining == null ? "—" : fmtInt(b.remaining)}</span></div>
+      <div class="ub-bar"><div class="ub-bar-fill" style="width:${b.pct.toFixed(1)}%"></div></div>
+      <div class="ub-meta"><span>${b.used == null || b.total == null ? "—" : `${fmtInt(b.used)} / ${fmtInt(b.total)} ${t("workbuddyCredits")}`}</span><span>${b.reset}</span></div>
+    </div>` : `<div class="ub ${b.cls}">
       <div class="ub-head"><span class="ub-l">${b.label}</span><span class="ub-rem">${t("remaining")} ${b.remaining}</span></div>
       <div class="ub-bar"><div class="ub-bar-fill" style="width:${b.used}%"></div></div>
       <div class="ub-meta"><span>${t("used")} ${b.used.toFixed(0)}%</span><span>${b.reset}</span></div>
@@ -1473,6 +1492,41 @@ function chartClaudecodeTrend(daily7, noAnim) {
 }
 
 
+/* ---------------- 统计页: WorkBuddy 积分用量区块 ---------------- */
+let workbuddySummaryLast = null;
+let workbuddySumSeq = 0;
+async function loadWorkbuddySummary() {
+  const seq = ++workbuddySumSeq;
+  const box = $("workbuddy-stats");
+  if (!box) return;
+  try {
+    const data = await api("/api/workbuddy/summary?range=" + encodeURIComponent(state.statsRange));
+    if (seq !== workbuddySumSeq) return;
+    workbuddySummaryLast = data;
+    renderWorkbuddySummary(data);
+  } catch (e) {
+    if (seq === workbuddySumSeq) { workbuddySummaryLast = null; box.hidden = true; }
+  }
+}
+function renderWorkbuddySummary(data) {
+  const box = $("workbuddy-stats");
+  if (!box) return;
+  const missing = $("workbuddy-missing");
+  const kpis = $("workbuddy-kpis");
+  const table = $("workbuddy-model-body");
+  const requests = Number(data && data.requests) || 0;
+  const credits = Number(data && data.credits) || 0;
+  box.hidden = false;
+  missing.hidden = requests > 0;
+  kpis.hidden = requests === 0;
+  table.innerHTML = requests === 0 ? `<tr><td colspan="3" class="empty-cell">${t("workbuddyStatsMissing")}</td></tr>`
+    : (data.models || []).map((m) => `<tr><td>${escapeHtml(m.model || "—")}</td><td class="num">${fmtInt(m.requests)}</td><td class="num">${fmtInt(m.credits)} ${t("workbuddyCredits")}</td></tr>`).join("");
+  kpis.innerHTML = [
+    ["c-blue", t("totalRequests"), fmtInt(requests)],
+    ["c-amber", t("workbuddyCredits"), `${fmtInt(credits)} ${t("workbuddyCredits")}`],
+  ].map(([cls, label, value]) => `<div class="card kpi ${cls}"><div class="kpi-l">${label}</div><div class="kpi-v">${value}</div></div>`).join("");
+}
+
 /* ---------------- 统计页: Codex 本地用量区块 ---------------- */
 /* 数据源 /api/codex/summary?range=<statsRange> (与 loadDashboard 统计页 range 同源,
    独立于远程账号登录); db_found=false (无 ~/.codex 且镜像表无历史) → 仅显示空态文案;
@@ -1851,7 +1905,7 @@ function chartTrend(trend, noAnim) {
 const SOURCE_OPTIONS = [
   ["all", "allSources"], ["opencode", "srcOpencode"], ["bai", "sourceBai"],
   ["commandcode", "sourceCommandcode"], ["zcode", "srcZcode"],
-  ["claudecode", "srcClaudecode"], ["codex", "srcCodex"]];
+  ["claudecode", "srcClaudecode"], ["workbuddy", "workbuddyStatsTitle"], ["codex", "srcCodex"]];
 function syncSourceFilter() {
   const sel = $("rec-source-filter");
   if (!sel) return;
@@ -2176,6 +2230,15 @@ function renderAccountCard(a) {
       }
       // CommandCode USD 额度窗口 (与首页同模板)
       if (w.unit === "USD") { return usdWindowHtml(w, "ov-ub"); }
+      if (w.unit === "credits") {
+        const used = Number(w.used), total = Number(w.total), remaining = Number(w.remaining);
+        const pct = total > 0 && Number.isFinite(used) ? Math.min(100, Math.max(0, used / total * 100)) : 0;
+        return `<div class="ub c-month ov-ub">
+          <div class="ub-head"><span class="ub-l">${(QUOTA_LABEL[w.label] || (() => w.label))()}</span><span class="ub-rem">${t("remaining")} ${Number.isFinite(remaining) ? fmtInt(remaining) : "—"}</span></div>
+          <div class="ub-bar"><div class="ub-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
+          <div class="ub-meta"><span>${Number.isFinite(used) && Number.isFinite(total) ? `${fmtInt(used)} / ${fmtInt(total)} ${t("workbuddyCredits")}` : "—"}</span><span>${t("resetsIn")} ${fmtDur(w.reset_in_sec)}</span></div>
+        </div>`;
+      }
       const used = Number(w.used) || 0;
       const cls = w.label === "5h Rolling" ? "c-rolling" : w.label === "Weekly" ? "c-week" : "c-month";
       return `<div class="ub ${cls} ov-ub">
@@ -2597,6 +2660,7 @@ function bindEvents() {
     loadZcodeSummary();  // ZCode 区块跟随 range 切换
     loadClaudecodeSummary();  // Claude Code 区块跟随 range 切换
     loadCodexSummary();  // Codex 区块跟随 range 切换
+    loadWorkbuddySummary();  // WorkBuddy 区块跟随 range 切换
   }));
   $("mr-dim").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
@@ -2787,10 +2851,10 @@ function switchChannel(ch) {
 }
 
 const CH_COLOR = { opencode: "var(--ch-opencode)", bai: "var(--ch-bai)", commandcode: "var(--ch-commandcode)",
-  zcode: "var(--ch-zcode)", claudecode: "var(--ch-claudecode)", dsh: "var(--ch-dsh)", codex: "var(--ch-codex)" };   // 新R5 N18: 扩齐六渠道, 防分段同色 (T5 加 codex)
+  zcode: "var(--ch-zcode)", claudecode: "var(--ch-claudecode)", workbuddy: "var(--ch-workbuddy)", dsh: "var(--ch-dsh)", codex: "var(--ch-codex)" };   // WorkBuddy 渠道色
 /* 渠道显示名 (T5): 仅 codex 用品牌大小写, 已有渠道名保持原字符串; tabs/明细表/
    图表 legend 显示用, tabs data-ch 与 donut onClick 仍用原始渠道键 */
-const CH_LABEL = { codex: "Codex" };
+const CH_LABEL = { codex: "Codex", workbuddy: "WorkBuddy" };
 
 /* EVOLUTION-4 模块级缓存: 切主题时 rerenderCharts 零网络请求重渲, 数据源为最近一次拉取结果.
    写入点均带键校验/序号守卫 (防快速连点响应乱序覆盖), 读取点 (rerenderCharts) 再校验一次 */
@@ -3122,7 +3186,7 @@ function renderChannelTable(rows, summary) {
   $("report-table").innerHTML = rows.map((r) => `<tr>
     <td style="color:${CH_COLOR[r.channel] || "#2563eb"}">${escapeHtml(CH_LABEL[r.channel] || r.channel)}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
     <td class="num">${fmtTokens(r.tokens)}</td><td class="num">${fmtTokens(r.input)}</td><td class="num">${fmtTokens(r.output)}</td>
-    <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshRequestsUnavailable") : fmtInt(r.requests)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshCostUnavailable") : fmtOptionalMoney(r.cost)}</td>
+    <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshRequestsUnavailable") : fmtInt(r.requests)}</td><td class="num">${r.channel === "workbuddy" ? (r.credits == null ? "—" : `${fmtInt(r.credits)} ${t("workbuddyCredits")}`) : r.channel === "dsh" ? dshUnavailableCell("dshCostUnavailable") : fmtOptionalMoney(r.cost)}</td>
     <td>${escapeHtml(r.data_since || "—")}</td></tr>`).join("") + foot;
 }
 

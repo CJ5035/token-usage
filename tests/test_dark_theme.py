@@ -58,7 +58,7 @@ _THEME_TOKENS = {
 }
 
 # :root 不可变锚允许的新增 token 白名单 (--up/--down: EVOLUTION-6; --ch-codex: T5 Codex 渠道色; 25 语义令牌: 20260909)
-_ROOT_ADDED_ALLOWED = {"--up", "--down", "--ch-codex"} | _THEME_TOKENS
+_ROOT_ADDED_ALLOWED = {"--up", "--down", "--ch-codex", "--ch-workbuddy"} | _THEME_TOKENS
 
 # 20260907 Codex 渠道色换品红 (与 commandcode 撞色修复, 用户指定): :root/dark 改值豁免 + 新值锚定
 _ROOT_RECOLOR_ALLOWED = {"--ch-codex", "--ch-claudecode", "--ch-bai"}   # 20260908 三渠道终局配色
@@ -194,14 +194,14 @@ def test_dark_untouched_tokens_unchanged_from_head():
     cur = _dark_vars(_css())
     changed = set(_DARK_EXPECTED) | {
         "--up", "--down", "--shadow",                    # EVOLUTION-6 / 20260909 D2
-        "--ch-codex", "--ch-claudecode", "--ch-bai",     # 20260907-08 渠道色
+        "--ch-codex", "--ch-claudecode", "--ch-bai", "--ch-workbuddy",     # 20260907-08 渠道色
         # 20260911 arena2: 主色族 + 渠道色 + 语义令牌换值 (10 项, 以 _DARK_THEME_EXPECTED 为准)
         "--primary", "--primary-strong", "--grad-brand", "--ch-commandcode",
         "--button-primary-bg", "--button-primary-hover", "--button-primary-text",
         "--surface-popover", "--border-popover", "--focus-ring",
         "--account-1", "--chart-tooltip-bg", "--chart-tooltip-text", "--chart-tooltip-border",
     }
-    assert set(cur) - set(head) <= {"--up", "--down", "--grad-brand"} | _THEME_TOKENS   # 新增声明白名单
+    assert set(cur) - set(head) <= {"--up", "--down", "--grad-brand", "--ch-workbuddy"} | _THEME_TOKENS   # 新增声明白名单
     for token, value in head.items():
         if token in changed:
             continue
