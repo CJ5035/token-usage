@@ -86,3 +86,13 @@ def test_workbuddy_summary_route(tmp_workbuddy_server, monkeypatch):
     assert captured["status"] == 200
     assert captured["data"]["requests"] == 1
     assert captured["data"]["credits"] == 2.0
+
+
+def test_workbuddy_counts_in_report_scope(tmp_workbuddy_server, monkeypatch):
+    _account()
+    monkeypatch.setattr(server.dsh_api, "get_dsh_summaries", lambda *args: {
+        key: {"found": False, "totals": {}, "data_since": None, "updated_at": None}
+        for key in ("today", "yesterday", "7d", "30d")
+    })
+    payload = server._report_windows_response(None)
+    assert payload["account_count"] == 2  # seeded default OpenCode account + WorkBuddy

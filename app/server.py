@@ -1497,7 +1497,7 @@ def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
     else:                                # 全部渠道: 渠道 tab (含 codex 若有数据) + dsh(若 found)
         payload["channel_count"] = len(summary) + (1 if dsh_found else 0)
     payload["account_count"] = sum(x["accounts"] for x in summary
-                                   if x["channel"] in ("opencode", "bai", "commandcode"))
+                                   if x["channel"] in ("opencode", "bai", "commandcode", "workbuddy"))
     return payload
 
 
