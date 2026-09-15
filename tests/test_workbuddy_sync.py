@@ -185,3 +185,106 @@ def test_in_flight_old_token_does_not_overwrite_new_quota(tmp_workbuddy_server, 
     assert cached.get("success") is True
     assert not cached.get("auth_error")
 
+
+
+
+# --- Transport auto-route tests (T4) ---------------------------------------
+# These do NOT monkeypatch server.WorkBuddyAPI. Instead they register a fake
+# transport via workbuddy_api.set_transport(fn) and let the REAL WorkBuddyAPI
+# run end-to-end, proving that server._fetch_workbuddy_quota /
+# _sync_workbuddy_account (which build WorkBuddyAPI(token) with no transport=)
+# auto-route through the module-level transport (the T2 channel wiring).
+# CRITICAL: every test resets workbuddy_api._transport = None in a finally so
+# the global transport never leaks into the rest of the suite.
+
+def _envelope(data):
+    """Wrap a data dict in the {"code":0,"data":...} envelope WorkBuddyAPI expects."""
+    return json.dumps({"code": 0, "data": data}, ensure_ascii=False)
+
+
+def test_sync_workbuddy_routes_through_registered_transport(tmp_workbuddy_server):
+    aid = _account()
+    seen = []
+
+    def fake_transport(url, headers, body, timeout):
+        seen.append(url)
+        # request-usage v2 shape: data.data = list of rows, data.nextPageToken = ""
+        payload = {
+            "data": [
+                {
+                    "requestId": "req-1",
+                    "requestTime": "2025-12-02 10:00:00",
+                    "model": "gpt-x",
+                    "client": "desktop",
+                    "credit": 1.5,
+                }
+            ],
+            "total": 1,
+            "nextPageToken": "",
+        }
+        return (200, _envelope(payload), {})
+
+    try:
+        workbuddy_api.set_transport(fake_transport)
+        result = server._sync_workbuddy_account(aid, "WB", "full", None)
+        assert result["ok"] is True
+        assert result["inserted"] == 1
+        assert seen and seen[0].endswith(workbuddy_api.REQUEST_USAGE)
+        row = db.get_db().execute(
+            "SELECT request_id, credit FROM workbuddy_usage WHERE account_id = ?", (aid,)
+        ).fetchone()
+        assert row["request_id"] == "req-1"
+        assert row["credit"] == 1.5
+    finally:
+        workbuddy_api._transport = None
+
+
+def test_sync_workbuddy_transport_redirect_to_login_is_auth_error(tmp_workbuddy_server):
+    aid = _account()
+    db.insert_workbuddy_rows([_row("old")], aid)
+
+    def fake_transport(url, headers, body, timeout):
+        # exactly what workbuddy_channel produces for a redirect-to-login:
+        # 302 with a same-origin /auth/realms/... Location -> WorkBuddyAuthError
+        return (302, "", {"Location": "/auth/realms/copilot/protocol/openid-connect/auth"})
+
+    try:
+        workbuddy_api.set_transport(fake_transport)
+        result = server._sync_workbuddy_account(aid, "WB", "incremental", None)
+        assert result["ok"] is False
+        # existing rows preserved
+        assert db.get_db().execute(
+            "SELECT COUNT(*) c FROM workbuddy_usage WHERE account_id = ?", (aid,)
+        ).fetchone()["c"] == 1
+        assert db.get_sync_state(aid)["last_sync_status"] == "error"
+    finally:
+        workbuddy_api._transport = None
+
+
+def test_quota_workbuddy_routes_through_registered_transport(tmp_workbuddy_server):
+    aid = _account()
+
+    def fake_transport(url, headers, body, timeout):
+        if url.endswith(workbuddy_api.RESOURCE_SUMMARY):
+            return (200, _envelope({}), {})
+        if url.endswith(workbuddy_api.PAID_PACKAGES):
+            return (200, _envelope({"Accounts": []}), {})
+        if url.endswith(workbuddy_api.FREE_PACKAGES):
+            return (200, _envelope({
+                "Accounts": [
+                    {"CycleCapacitySizePrecise": 100, "CycleCapacityRemainPrecise": 60}
+                ]
+            }), {})
+        raise AssertionError(f"unexpected url {url}")
+
+    try:
+        workbuddy_api.set_transport(fake_transport)
+        quota = server._fetch_quota_with_cache(aid, "session", "u")
+        assert quota["success"] is True
+        window = quota["windows"][0]
+        assert window["unit"] == "credits"
+        assert window["total"] == 100
+        assert window["remaining"] == 60
+        assert window["used"] == 40
+    finally:
+        workbuddy_api._transport = None
