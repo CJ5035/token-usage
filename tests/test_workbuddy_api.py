@@ -218,3 +218,15 @@ def test_free_packages_sends_numeric_status_enum():
     assert captured["body"]["PageSize"] == 200
 
 
+def test_http_400_raises_apierror_with_status_not_auth_error():
+    """400 应以带 HTTP status 的 WorkBuddyAPIError 抛出, 不得升级为 AuthError (诊断原因 1/3)."""
+    api = workbuddy_api.WorkBuddyAPI(
+        "session=s", transport=lambda *_a, **_k: (400, "bad request", {})
+    )
+    with pytest.raises(workbuddy_api.WorkBuddyAPIError) as excinfo:
+        api.fetch_resource_summary()
+    assert not isinstance(excinfo.value, workbuddy_api.WorkBuddyAuthError)
+    assert "400" in str(excinfo.value)
+
+
+
