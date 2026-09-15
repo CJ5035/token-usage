@@ -145,3 +145,33 @@ def test_targeted_relogin_lands_on_target_row_no_crosstalk(tmp_db):
     assert db.get_account_credentials(aid_b)[1] == "ws-b-new"
     assert db.get_account_credentials(aid_a)[0] == "tok-a-old"
     assert db.get_active_account_id() == aid_b
+
+
+# ---------------------------------------------------------------------------
+# _parse_login_mode 三元解析与 WorkBuddy 定向重登
+# ---------------------------------------------------------------------------
+
+def test_workbuddy_relogin_resolves_clicked_account(tmp_db):
+    aid = db.add_account("session=old", "wb-u", switch=False,
+                         source="workbuddy", dedupe_key="wb-u")
+    assert app_main._parse_login_mode("relogin", aid) == ("relogin", "workbuddy", aid)
+
+
+def test_parse_login_mode_defaults_to_active_account(tmp_db):
+    aid1 = db.add_account("session=old", "wb-u", switch=True,
+                          source="workbuddy", dedupe_key="wb-u")
+    assert app_main._parse_login_mode("relogin", None) == ("relogin", "workbuddy", aid1)
+
+
+def test_parse_login_mode_unknown_target_raises(tmp_db):
+    with pytest.raises(ValueError, match="不存在"):
+        app_main._parse_login_mode("relogin", 99999)
+
+
+def test_parse_login_mode_no_accounts_returns_opencode_none(tmp_db):
+    assert app_main._parse_login_mode("relogin", None) == ("relogin", "opencode", None)
+
+
+def test_parse_login_mode_add_workbuddy(tmp_db):
+    assert app_main._parse_login_mode("add_workbuddy") == ("add", "workbuddy", None)
+

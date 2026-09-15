@@ -101,7 +101,59 @@ def test_fetch_request_usage_page_falls_back_to_v1(monkeypatch):
     assert calls[1] == {"startTime": "a", "endTime": "b", "pageNum": 3, "pageSize": 50}
 
 
+def _transport_with_response(status, text, headers=None):
+    def transport(url, headers_, body, timeout):
+        return status, text, headers or {}
+
+    return transport
+
+
+def test_auth_redirect_to_keycloak_raises_auth_error():
+    location = (
+        "https://www.workbuddy.cn/auth/realms/copilot/protocol/openid-connect/auth"
+        "?client_id=console&redirect_uri=https%3A%2F%2Fwww.workbuddy.cn%2Fconsole%2Faccounts"
+    )
+    api = workbuddy_api.WorkBuddyAPI(
+        "session=s", transport=_transport_with_response(302, "<html>login-pf</html>", {"Location": location})
+    )
+    with pytest.raises(workbuddy_api.WorkBuddyAuthError):
+        api.fetch_accounts()
+
+
+def test_auth_redirect_relative_location_raises_auth_error():
+    api = workbuddy_api.WorkBuddyAPI(
+        "session=s", transport=_transport_with_response(302, "<html>", {"Location": "/auth/realms/copilot"})
+    )
+    with pytest.raises(workbuddy_api.WorkBuddyAuthError):
+        api.fetch_accounts()
+
+
+def test_non_auth_redirect_raises_api_error_not_auth_error():
+    api = workbuddy_api.WorkBuddyAPI(
+        "session=s", transport=_transport_with_response(302, "<html>", {"Location": "https://www.workbuddy.cn/maintenance"})
+    )
+    with pytest.raises(workbuddy_api.WorkBuddyAPIError) as excinfo:
+        api.fetch_accounts()
+    assert not isinstance(excinfo.value, workbuddy_api.WorkBuddyAuthError)
+
+
 def test_fetch_accounts_unwraps_data(monkeypatch):
+    """契约对齐官网真实结构: 身份在 data.accounts[].uid, 而非 data.userId (20260915 诊断 §11.2)."""
     api = workbuddy_api.WorkBuddyAPI("session=s")
-    monkeypatch.setattr(api, "_get_json", lambda *_args, **_kwargs: {"data": {"userId": "u1"}})
-    assert api.fetch_accounts() == {"userId": "u1"}
+    payload = {"data": {"accounts": [{"uid": "u1", "nickname": "n"}]}}
+    monkeypatch.setattr(api, "_get_json", lambda *_args, **_kwargs: payload)
+    assert api.fetch_accounts() == {"accounts": [{"uid": "u1", "nickname": "n"}]}
+
+
+def test_usage_401_does_not_fallback_to_v1():
+    calls = []
+
+    def transport(url, headers, body, timeout):
+        calls.append(url)
+        return 401, "unauthorized", {}
+
+    api = workbuddy_api.WorkBuddyAPI("session=fake", transport=transport)
+    with pytest.raises(workbuddy_api.WorkBuddyAuthError):
+        api.fetch_request_usage_page("2026-09-01 00:00:00", "2026-09-14 23:59:59", 50)
+    assert len(calls) == 1
+

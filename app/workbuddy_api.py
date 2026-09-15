@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -31,12 +32,22 @@ class WorkBuddyAuthError(WorkBuddyAPIError):
     """WorkBuddy session is missing or expired."""
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """禁止 urllib 自动跟随重定向: 认证跳转必须以错误形态上抛 (20260915 诊断 §11)."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_transport_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def _default_transport(
     url: str, headers: dict[str, str], body: bytes | None, timeout: float
 ) -> tuple[int, str, dict[str, str]]:
     req = urllib.request.Request(url, data=body, headers=headers, method="POST" if body is not None else "GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _transport_opener.open(req, timeout=timeout) as resp:
             return resp.status, resp.read(MAX_BODY_BYTES).decode("utf-8", errors="replace"), dict(resp.headers.items())
     except urllib.error.HTTPError as exc:
         payload = exc.read(MAX_BODY_BYTES).decode("utf-8", errors="replace")
@@ -124,6 +135,8 @@ class WorkBuddyAPI:
         for attempt in range(len(RETRY_BACKOFF) + 1):
             try:
                 status, text, _headers = self._transport(BASE_URL + path, headers, encoded, REQUEST_TIMEOUT)
+                if status in (301, 302, 303, 307, 308):
+                    raise self._redirect_error(status, _headers)
                 if status == 401:
                     raise WorkBuddyAuthError("WorkBuddy session expired (HTTP 401)")
                 if status < 200 or status >= 300:
@@ -155,6 +168,19 @@ class WorkBuddyAPI:
         return self._request(path, None)
 
     @staticmethod
+    def _redirect_error(status: int, headers: dict[str, str]) -> WorkBuddyAPIError:
+        """3xx 分类: 同域 /auth/realms/ 跳转 = 会话被网关拒绝 (不重试), 其余为普通重定向."""
+        location = ""
+        for key, value in headers.items():
+            if key.lower() == "location":
+                location = value
+                break
+        target = urllib.parse.urlsplit(urllib.parse.urljoin(BASE_URL, location))
+        if target.netloc == urllib.parse.urlsplit(BASE_URL).netloc and target.path.startswith("/auth/realms/"):
+            return WorkBuddyAuthError("WorkBuddy session rejected (redirect to login)")
+        return WorkBuddyAPIError(f"WorkBuddy request redirected (HTTP {status})")
+
+    @staticmethod
     def _data(payload: dict[str, Any]) -> dict[str, Any]:
         data = payload.get("data")
         if not isinstance(data, dict):
@@ -172,6 +198,8 @@ class WorkBuddyAPI:
             v2["pageToken"] = page_token
         try:
             data = self._data(self._post_json(REQUEST_USAGE, v2))
+        except WorkBuddyAuthError:
+            raise
         except WorkBuddyAPIError:
             v1 = {"startTime": start_time, "endTime": end_time, "pageNum": page_num or 1, "pageSize": page_size}
             data = self._data(self._post_json(REQUEST_USAGE, v1))

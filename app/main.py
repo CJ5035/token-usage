@@ -164,6 +164,31 @@ def _get_process_image_name(pid: int) -> str:
         ctypes.windll.kernel32.CloseHandle(handle)
 
 
+def _parse_login_mode(mode: str, account_id: int | None = None) -> tuple[str, str, int | None]:
+    """把 open_login 的 mode 与 account_id 解析为 (mode, account_type, target_id) 三元组.
+
+    - add_bai / add_commandcode / add_workbuddy 显式添加指定渠道
+    - add 默认添加 opencode 渠道
+    - 无已登录账号的欢迎页默认回退 ("relogin", "opencode", None)
+    - relogin 依据目标账号 (显式 account_id 或当前活跃账号) 的 source 解析渠道并固定 target_id
+    - 显式指定不存在的 target_id 时抛出 ValueError
+    """
+    add_types = {"add_bai": "bai", "add_commandcode": "commandcode", "add_workbuddy": "workbuddy"}
+    if mode in add_types:
+        return "add", add_types[mode], None
+    normalized = mode if mode in ("add", "relogin") else "relogin"
+    if normalized == "add":
+        return "add", "opencode", None
+    if account_id is None and db.count_logged_in_accounts() == 0:
+        return "relogin", "opencode", None
+    target_id = account_id if account_id is not None else db.get_active_account_id()
+    account = next((a for a in db.list_accounts() if a["id"] == target_id), None)
+    if account_id is not None and account is None:
+        raise ValueError("登录目标账号不存在")
+    source = "workbuddy" if account and account["source"] == "workbuddy" else "opencode"
+    return "relogin", source, target_id
+
+
 def _is_gogauge_process(pid: int) -> bool:
     """确认指定 PID 的进程确为本程序 (打包 GoGauge.exe, 开发 python.exe).
 
@@ -610,19 +635,20 @@ def main() -> None:
     # 登录模式: open_login(mode) 记录意图(mode + account_type + account_id), on_login_success 按模式落库
     pending_mode = {"mode": "relogin", "account_type": "opencode", "account_id": None}
 
-    def on_login_success(credential: str, workspace_hint: str, account_type: str) -> None:
+    def on_login_success(credential: str, workspace_hint: str, account_type: str, intent: dict) -> None:
         """登录成功: 按模式保存 → 隐藏登录窗口 → 主窗口进入面板 → 全量同步.
 
         - add: 新建账号 (同 token 自动去重为既有账号) 并切换为活跃
-        - relogin: 定向更新目标账号凭证 (pending_mode["account_id"], None=活跃行)
+        - relogin: 定向更新目标账号凭证 (intent["account_id"], None=活跃行)
           并切换活跃到目标行 (决策="点谁登谁", switch=True 先例)
         - bai: 一律按 add 处理新建/去重 BAI 账号 (save_token 无法区分 source);
           workspace_hint = BAI userId 作 dedupe_key, source="bai"
         - commandcode: 一律按 add 处理新建/去重 CommandCode 账号;
           workspace_hint = userId 作 dedupe_key (订阅信息不可用时为 "", 不去重),
           credential = 会话 cookie jar JSON, source="commandcode"
+        - workbuddy: relogin 按目标 ID 校验并定向保存; add 按去重键新增
         """
-        mode = pending_mode.get("mode", "relogin")
+        mode = intent.get("mode", "relogin")
         _mlog(f"on_login_success: ws={workspace_hint} mode={mode} type={account_type}")
         try:
             if account_type == "bai":
@@ -637,10 +663,20 @@ def main() -> None:
                     switch=True, source="commandcode", dedupe_key=workspace_hint,
                 )
             elif account_type == "workbuddy":
-                db.add_account(
-                    credential, workspace_hint,
-                    switch=True, source="workbuddy", dedupe_key=workspace_hint,
-                )
+                if intent.get("mode") == "relogin":
+                    aid = intent.get("account_id")
+                    if aid is None:
+                        raise ValueError("WorkBuddy 重登缺少目标账号")
+                    db.save_workbuddy_token(aid, credential, workspace_hint)
+                    if not db.set_active_account(aid):
+                        raise ValueError("WorkBuddy 登录目标已删除")
+                else:
+                    aid = db.add_account(
+                        credential, workspace_hint,
+                        switch=True, source="workbuddy", dedupe_key=workspace_hint,
+                    )
+                server._quota_cache.pop(aid, None)
+                server._invalidate_overview_cache()
             elif mode == "add":
                 db.add_account(credential, workspace_hint, switch=True)
             else:
@@ -648,7 +684,7 @@ def main() -> None:
                 # 同一 try 内 save_token 成功后才切活跃 (save_token 异常不切,
                 # 避免活跃指针移到凭证未更新的行). 目标行若在登录完成前被删除
                 # (UPDATE 0 行 / set_active False), 仅记录日志不阻断.
-                target_id = pending_mode.get("account_id")
+                target_id = intent.get("account_id")
                 db.save_token(credential, workspace_hint, account_id=target_id)
                 if target_id and not db.set_active_account(target_id):
                     _mlog(f"  set_active_account ERROR: target row {target_id} missing")
@@ -657,6 +693,7 @@ def main() -> None:
             server._invalidate_overview_cache()
         except Exception as exc:  # noqa: BLE001
             _mlog(f"  save_token ERROR: {exc}")
+            return  # 持久化异常立即 return 并保持窗口可见，不能继续 hide
         try:
             login_win().hide()
             _mlog("  login window hidden")
@@ -681,7 +718,12 @@ def main() -> None:
     def _start_watcher(lw) -> None:
         """启动登录监听: 优先等 shown 事件 (避免 hidden 窗口调用窗口方法抛内部异常);
         复用窗口 (已显示过) 直接启动; 事件不触发时 3s 兜底启动 (LoginWatcher 对未就绪窗口有重试)."""
-        w = LoginWatcher(lw, on_login_success, account_type=pending_mode.get("account_type", "opencode"))
+        intent = dict(pending_mode)
+        w = LoginWatcher(
+            lw,
+            lambda credential, hint, kind: on_login_success(credential, hint, kind, intent),
+            account_type=intent.get("account_type", "opencode"),
+        )
         watcher["ref"] = w
         if getattr(lw, "_gousage_shown", False):
             w.start()
@@ -706,28 +748,8 @@ def main() -> None:
         except Exception:  # noqa: BLE001
             return False
 
-    def _parse_login_mode(mode: str) -> tuple[str, str]:
-        """把 open_login 的 mode 分为 (mode, account_type).
-
-        "add_bai" → ("add", "bai"); "add_commandcode" → ("add", "commandcode");
-        其余 ("add"/"relogin") → (同值, "opencode"); 非法值回退 ("relogin", "opencode").
-        """
-        if mode == "add_bai":
-            return ("add", "bai")
-        if mode == "add_commandcode":
-            return ("add", "commandcode")
-        if mode == "add_workbuddy":
-            return ("add", "workbuddy")
-        return (mode if mode in ("add", "relogin") else "relogin", "opencode")
-
     def open_login(mode: str = "relogin", account_id: int | None = None) -> None:
         """弹出独立登录窗口并开始监听 (欢迎页/设置页按钮). 单飞守卫: 已有登录流程时忽略."""
-        sub_mode, account_type = _parse_login_mode(mode)
-        pending_mode["mode"] = sub_mode
-        pending_mode["account_type"] = account_type
-        # 定向目标 id 无条件覆盖 (含 None): 防上次定向 id 残留导致活跃行重登串号落错行;
-        # 单飞守卫下重复点击也走到这里, 以最后一次调用为准
-        pending_mode["account_id"] = account_id
         # 登录窗已被手动关闭 => 旧监听已失效: 先停旧线程再重建窗口.
         # (修复: 依赖"线程存活"的单飞守卫会把死窗口场景永久拦截, 导致再次点击无响应)
         if not _login_win_alive():
@@ -741,6 +763,13 @@ def main() -> None:
         w = watcher.get("ref")
         if isinstance(w, LoginWatcher) and w._thread and w._thread.is_alive() and not w.done:
             return  # 已有登录监听进行中 (窗口存活)
+
+        sub_mode, account_type, target_id = _parse_login_mode(mode, account_id)
+        pending_mode["mode"] = sub_mode
+        pending_mode["account_type"] = account_type
+        # 定向目标 id 无条件覆盖 (含 None): 防上次定向 id 残留导致活跃行重登串号落错行;
+        # 单飞守卫下重复点击也走到这里, 以最后一次调用为准
+        pending_mode["account_id"] = target_id
         lw = login_win()
         try:
             lw.show()

@@ -221,6 +221,20 @@ def _cc_cookie_header(token: str) -> str:
     return "; ".join(parts)
 
 
+def _workbuddy_auth_status(account: dict[str, Any]) -> str | None:
+    """计算 WorkBuddy 账号只读认证状态: missing/unknown/valid/required; 非 WorkBuddy 返回 None."""
+    if account.get("source") != "workbuddy":
+        return None
+    if not account.get("has_token"):
+        return "missing"
+    quota = (_quota_cache.get(account["id"]) or {}).get("data") or {}
+    if quota.get("auth_error"):
+        return "required"
+    if quota.get("success") or quota.get("mapping_unverified"):
+        return "valid"
+    return "unknown"
+
+
 def _fetch_quota_with_cache(account_id: int, token: str, workspace_hint: str) -> dict[str, Any]:
     slot = _quota_cache.setdefault(account_id, {"at": 0.0, "data": None})
     now = time.time()
@@ -233,11 +247,19 @@ def _fetch_quota_with_cache(account_id: int, token: str, workspace_hint: str) ->
         result = commandcode_api.fetch_quota(_cc_cookie_header(token))
     elif source == "workbuddy":
         result = _fetch_workbuddy_quota(token)
+        with db._DB_LOCK:
+            current_token, _ = db.get_account_credentials(account_id)
+            if current_token != token or _quota_cache.get(account_id) is not slot:
+                return result
+            slot.update(at=time.time(), data=result)
+        _invalidate_overview_cache()
+        return result
     else:
         result = fetch_quota(token, workspace_hint).to_dict()
     slot["at"] = now
     slot["data"] = result
     return slot["data"]
+
 
 
 def _fetch_workbuddy_quota(token: str) -> dict[str, Any]:
@@ -301,11 +323,23 @@ def _ensure_quota_async(account_id: Optional[int] = None) -> None:
             # 失败也写入缓存 (None), TTL 内不再重试, 避免前端无限刷新
             _fetch_quota_with_cache(aid, token, workspace_hint)
         except Exception:  # noqa: BLE001
-            _quota_cache.setdefault(aid, {"at": 0.0, "data": None})
-            _quota_cache[aid]["at"] = time.time()
-            _quota_cache[aid]["data"] = None
+            source = _account_source(aid)
+            if source == "workbuddy":
+                with db._DB_LOCK:
+                    current_token, _ = db.get_account_credentials(aid)
+                    if current_token == token and _quota_cache.get(aid) is slot:
+                        _quota_cache.setdefault(aid, {"at": 0.0, "data": None})
+                        _quota_cache[aid]["at"] = time.time()
+                        _quota_cache[aid]["data"] = None
+            else:
+                _quota_cache.setdefault(aid, {"at": 0.0, "data": None})
+                _quota_cache[aid]["at"] = time.time()
+                _quota_cache[aid]["data"] = None
         finally:
             _quota_refreshing.discard(aid)
+            curr_tok, _ = db.get_account_credentials(aid)
+            if curr_tok and curr_tok != token:
+                _ensure_quota_async(aid)
 
     threading.Thread(target=worker, daemon=True, name="gousage-quota").start()
 
@@ -712,7 +746,13 @@ def _sync_workbuddy_account(
         conn.commit()
         return {"ok": True, "inserted": inserted_total, "pages": page_count}
     except workbuddy_api.WorkBuddyAuthError as exc:
-        db.update_sync_state("error", "认证失败，请重新登录 WorkBuddy", inserted_total, account_id)
+        with db._DB_LOCK:
+            current_token, _ = db.get_account_credentials(account_id)
+            if current_token == token:
+                db.update_sync_state("error", "认证失败，请重新登录 WorkBuddy", inserted_total, account_id)
+                slot = _quota_cache.setdefault(account_id, {})
+                slot.update(at=time.time(), data={"success": False, "auth_error": True, "error": str(exc)})
+        _invalidate_overview_cache()
         return {"ok": False, "error": str(exc), "partial_inserted": inserted_total}
     except Exception as exc:  # noqa: BLE001 preserve rows and sync cursor on failure
         db.update_sync_state("error", str(exc), inserted_total, account_id)
@@ -1653,6 +1693,7 @@ def _accounts_overview_payload() -> dict[str, Any]:
                 "name": acc["name"],
                 "source": acc["source"],
                 "logged_in": True,
+                "auth_status": _workbuddy_auth_status(acc),
                 "active": aid == active_id,
                 "quota": quota,
                 "today": db.totals("today", aid),
@@ -1697,6 +1738,9 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
 
     if route == "/api/state" and method == "GET":
         account = db.get_account()
+        if account:
+            account = dict(account, auth_status=_workbuddy_auth_status(account))
+        accounts = [dict(a, auth_status=_workbuddy_auth_status(a)) for a in db.list_accounts()]
         sync = db.get_sync_state()
         dsh_found = bool(dsh_api.get_dsh_summary("all").get("found"))
         _json_response(
@@ -1704,7 +1748,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             {
                 "logged_in": bool(db.count_logged_in_accounts()),
                 "account": account,
-                "accounts": db.list_accounts(),
+                "accounts": accounts,
                 "accounts_total": db.count_accounts(),
                 "accounts_logged_in": db.count_logged_in_accounts(),
                 "sync": sync,
@@ -1759,6 +1803,9 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         slot = _quota_cache.get(active_id) or {}
         quota = slot.get("data") if token else None
         account = db.get_account()
+        if account:
+            account = dict(account, auth_status=_workbuddy_auth_status(account))
+        auth_status = _workbuddy_auth_status(account) if account else None
         # commandcode 账户: 六个统计键改由 charts_buckets 聚合产出 (明细只有最近
         # 24h, 桶表是其历史统计唯一来源; days 映射 all→None 其余照 range), 并附
         # 账期 summary 快照; 其余数据源路径不变
@@ -1779,8 +1826,9 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             {
                 "scope": "account",   # 原六个账号聚合键保持原义, 供统计页主区/旧客户
                 "logged_in": bool(token),
+                "auth_status": auth_status,
                 "account": account,
-                "account_name": account.get("name", ""),
+                "account_name": account.get("name", "") if account else "",
                 "accounts_total": db.count_accounts(),
                 "accounts_logged_in": db.count_logged_in_accounts(),
                 "quota": quota,
@@ -1878,11 +1926,12 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
     # ---------------- 多账号管理 ----------------
 
     if route == "/api/accounts" and method == "GET":
+        accounts = [dict(a, auth_status=_workbuddy_auth_status(a)) for a in db.list_accounts()]
         _json_response(
             handler,
             {
                 "ok": True,
-                "accounts": db.list_accounts(),
+                "accounts": accounts,
                 "active_id": db.get_active_account_id(),
             },
         )

@@ -85,6 +85,8 @@ const I18N = {
     setToCurrent: "设为当前", loggedOut: "已退出登录",
     logoutUserConfirm: "将退出「{name}」，仅清除登录凭证，本地用量数据保留。确定？",
     sourceCommandcode: "CommandCode", loginCommandcode: "登录 Command Code", loginWorkbuddy: "登录 WorkBuddy",
+    authRequired: "需要重新登录", authUnknown: "会话待验证",
+    workbuddyReloginHint: "WorkBuddy 身份验证失败，请重新登录后获取用量。",
     workbuddyStatsTitle: "WorkBuddy 积分用量", workbuddyStatsMissing: "暂无 WorkBuddy 用量数据", workbuddyCredits: "积分",
     ccSummaryTitle: "账期汇总", ccRequests: "请求", ccTokens: "Token", ccCost: "费用", ccSuccessRate: "成功率",
     ccHistoryNote: "API 仅提供最近 24 小时明细，更早历史自接入起本地积累",
@@ -209,6 +211,8 @@ const I18N = {
     setToCurrent: "Make Active", loggedOut: "Signed out",
     logoutUserConfirm: "Sign out \"{name}\"? This only clears the credential — local usage data is kept. Continue?",
     sourceCommandcode: "CommandCode", loginCommandcode: "Add CommandCode Account", loginWorkbuddy: "Add WorkBuddy Account",
+    authRequired: "Sign-in required", authUnknown: "Session not yet verified",
+    workbuddyReloginHint: "WorkBuddy authentication failed. Sign in again to load usage.",
     workbuddyStatsTitle: "WorkBuddy Credit Usage", workbuddyStatsMissing: "No WorkBuddy usage data", workbuddyCredits: "Credits",
     ccSummaryTitle: "Billing Summary", ccRequests: "Requests", ccTokens: "Tokens", ccCost: "Cost", ccSuccessRate: "Success Rate",
     ccHistoryNote: "API provides only the last 24h of details; older history accumulates locally since first sync",
@@ -764,9 +768,20 @@ function usdWindowHtml(w, extraCls) {
     <div class="ub-meta"><span>${fmtUsd(used)} / ${fmtUsd(total)}</span><span>${t("resetsIn")} ${fmtDur(w.reset_in_sec)}</span></div>
   </div>`;
 }
-function renderUsageBlocks(quota, box) {
+function renderUsageBlocks(quota, box, accountId = null) {
   const row = box || $("usage-blocks");
   if (!quota || !quota.success) {
+    if (quota?.auth_error && accountId != null) {
+      clearTimeout(state.quotaRetryTimer);
+      row.innerHTML = `<div class="ub ub-error">${t("workbuddyReloginHint")} <button class="btn" data-workbuddy-relogin="${Number(accountId)}">${t("relogin")}</button></div>`;
+      const btn = row.querySelector("[data-workbuddy-relogin]");
+      if (btn) {
+        btn.addEventListener("click", () => {
+          onUserRowAction(Number(accountId), "relogin").catch((e) => toast(e.message || t("loadFailed"), "err"));
+        });
+      }
+      return;
+    }
     if (quota && !quota.success) {
       clearTimeout(state.quotaRetryTimer);
       row.innerHTML = `<div class="ub ub-error">${t("quotaFail")}：${escapeHtml(quota.error || "?")}，${t("retryTip")}</div>`;
@@ -2072,7 +2087,7 @@ function refreshIcons() {
 function renderAll(data) {
   state.data = data;
   if (data.exchange_rate?.usd_cny) state.exchangeRate = data.exchange_rate.usd_cny;
-  renderUsageBlocks(data.quota);
+  renderUsageBlocks(data.quota, null, data.account?.id);
   renderCcSummary(data);
   renderOverview(data.totals, data.account?.source);
   const homeVisible = !document.getElementById("page-home").hidden;
@@ -2093,8 +2108,12 @@ function renderAll(data) {
 function syncTopBar(data) {   // EVOLUTION-9: renderAll 顶栏段逐行提取, applyLang 切语言仅刷顶栏
   $("tb-sync").textContent = data.logged_in ? `${t("lastSync")} ${fmtRelative(data.sync?.last_sync_at)} · ${fmtInt(data.sync?.total_records || 0)} ${t("records")}` : t("notLoggedIn");
   const accLabel = data.account_name || maskWs(data);
-  $("tb-login").innerHTML = data.logged_in ? `<b>${t("loggedIn")}</b> · ${escapeHtml(accLabel)}` : t("notLoggedIn");
-  $("tb-login").style.color = data.logged_in ? "" : "var(--red)";
+  const authStatus = data.auth_status || data.account?.auth_status;
+  const loginLabel = authStatus === "required" ? t("authRequired")
+    : authStatus === "unknown" ? t("authUnknown")
+    : data.logged_in ? t("loggedIn") : t("notLoggedIn");
+  $("tb-login").innerHTML = `<b>${loginLabel}</b> · ${escapeHtml(accLabel)}`;
+  $("tb-login").style.color = authStatus === "required" ? "var(--red)" : (data.logged_in ? "" : "var(--red)");
   $("tb-login").title = t("userSwitchTip");
   const uc = $("tb-user-count");
   if (uc) {
@@ -2221,6 +2240,12 @@ function renderAccountOverview(data) {
   $("ov-accounts").innerHTML = accounts.length
     ? accounts.map((a) => renderAccountCard(a)).join("")
     : `<div class="card ov-acc"><div class="ov-quota-empty">${t("noUsers")}</div></div>`;
+  $("ov-accounts").querySelectorAll("[data-ov-relogin]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const aid = Number(btn.dataset.ovRelogin);
+      onUserRowAction(aid, "relogin").catch((e) => toast(e.message || t("loadFailed"), "err"));
+    });
+  });
 }
 
 function renderAccountCard(a) {
@@ -2256,6 +2281,8 @@ function renderAccountCard(a) {
         <div class="ub-meta"><span>${t("used")} ${used.toFixed(0)}%</span><span>${t("resetsIn")} ${fmtDur(w.reset_in_sec)}</span></div>
       </div>`;
     }).join("")}</div>`;
+  } else if (a.quota?.auth_error) {
+    quotaHtml = `<div class="ov-quota-empty" style="color:var(--red)">${t("workbuddyReloginHint")} <button class="btn" data-ov-relogin="${Number(a.id)}" style="margin-left:8px">${t("relogin")}</button></div>`;
   } else {
     quotaHtml = `<div class="ov-quota-empty">${t("quotaNotReady")}</div>`;
   }
@@ -2414,14 +2441,17 @@ async function toggleUserMenu(force) {
 }
 function renderUserMenu(accounts, activeId) {
   const menu = $("user-menu");
-  menu.innerHTML = (accounts.length ? accounts.map((a) => `
+  menu.innerHTML = (accounts.length ? accounts.map((a) => {
+    const authLabel = !a.has_token ? t("notLoggedIn") : a.auth_status === "required" ? t("authRequired") : a.auth_status === "unknown" ? t("authUnknown") : "";
+    return `
     <div class="um-item" data-id="${a.id}">
       <span class="um-check">${a.id === activeId ? "✓" : ""}</span>
       <span class="um-meta">
         <span class="um-name-row"><span class="um-name">${escapeHtml(a.name)}</span>${a.source === "bai" ? `<span class="src-badge">${t("sourceBai")}</span>` : a.source === "commandcode" ? `<span class="src-badge">${t("sourceCommandcode")}</span>` : ""}</span>
-        <span class="um-ws">${escapeHtml(a.workspace_id || "—")}${a.has_token ? "" : " · " + t("notLoggedIn")}</span>
+        <span class="um-ws">${escapeHtml(a.workspace_id || "—")}${authLabel ? " · " + authLabel : ""}</span>
       </span>
-    </div>`).join("") : `<div class="um-item um-empty">${t("noUsers")}</div>`) +
+    </div>`;
+  }).join("") : `<div class="um-item um-empty">${t("noUsers")}</div>`) +
     `<div class="um-item um-manage" id="um-manage"><span class="um-check">⚙</span><span class="um-meta"><span class="um-name">${t("setUsers")}</span></span></div>`;
   menu.querySelectorAll(".um-item[data-id]").forEach((el) => {
     el.addEventListener("click", async () => {
@@ -2455,9 +2485,15 @@ function renderUsersList(accounts, activeId) {
     return;
   }
   box.innerHTML = (accounts || []).map((a) => {
+    const authStatus = a.auth_status;
+    const isRequired = authStatus === "required";
     const isActive = a.id === activeId && a.has_token;  // 活跃态只对已登录行生效
     const actions = !a.has_token
       ? `<button class="btn" data-act="login">${t("loginRow")}</button>
+         <button class="btn" data-act="rename">${t("renameBtn")}</button>
+         <button class="btn btn-danger" data-act="delete">${t("deleteUser")}</button>`
+      : isRequired
+      ? `<button class="btn" data-act="relogin">${t("relogin")}</button>
          <button class="btn" data-act="rename">${t("renameBtn")}</button>
          <button class="btn btn-danger" data-act="delete">${t("deleteUser")}</button>`
       : isActive
@@ -2469,12 +2505,17 @@ function renderUsersList(accounts, activeId) {
          <button class="btn btn-danger" data-act="delete">${t("deleteUser")}</button>`;
     const badge = !a.has_token
       ? `<span class="badge no ur-badge">${t("notLoggedIn")}</span>`
+      : isRequired
+      ? `<span class="badge no ur-badge" style="background:var(--red);color:#fff">${t("authRequired")}</span>`
+      : authStatus === "unknown"
+      ? `<span class="badge no ur-badge">${t("authUnknown")}</span>`
       : isActive ? `<span class="badge ok ur-badge">${t("currentUserBadge")}</span>` : "";
+    const wsStatus = !a.has_token ? "" : isRequired ? " · " + t("authRequired") : authStatus === "unknown" ? " · " + t("authUnknown") : " · " + t("loggedIn");
     return `
     <div class="user-row${isActive ? " active" : ""}" data-id="${a.id}">
       <div class="ur-meta">
         <div class="ur-name">${escapeHtml(a.name)}${a.source === "bai" ? `<span class="src-badge ur-badge">${t("sourceBai")}</span>` : a.source === "commandcode" ? `<span class="src-badge ur-badge">${t("sourceCommandcode")}</span>` : ""}${badge}</div>
-        <div class="ur-ws">${escapeHtml(a.workspace_id || "—")}${a.has_token ? " · " + t("loggedIn") : ""}</div>
+        <div class="ur-ws">${escapeHtml(a.workspace_id || "—")}${wsStatus}</div>
         ${a.source === "commandcode" ? `<div class="ur-note">${t("ccHistoryNote")}</div>` : ""}
       </div>
       <div class="ur-actions">${actions}</div>
@@ -2505,9 +2546,9 @@ async function onUserRowAction(id, act) {
   if (act === "relogin") {
     startLoginWatch();
     const a = await pywebviewApi();
-    if (a && a.open_login) { a.open_login("relogin"); return; }
+    if (a && a.open_login) { a.open_login("relogin", id); return; }
     try {  // 浏览器兜底
-      await api("/api/relogin", { method: "POST", body: "{}" });
+      await api("/api/relogin", { method: "POST", body: JSON.stringify({ id }) });
       toast(t("loginNote"));
     } catch (e) { toast(e.message || t("loadFailed"), "err"); }
     return;

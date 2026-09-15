@@ -17,13 +17,12 @@ import os
 import re
 import tempfile
 import threading
+import time
 import uuid
 from http.cookies import SimpleCookie as SimpleCookieCls
 from typing import Callable, Optional
 from urllib import request as _urllib_request
-from urllib.parse import urlencode
-
-from .workbuddy_api import WorkBuddyAPI
+from urllib.parse import urlencode, urlsplit
 
 import webview
 
@@ -55,7 +54,12 @@ CC_ACCOUNT_TYPE = "commandcode"
 WB_LOGIN_URL = "https://www.workbuddy.cn/profile/plans-usage"
 WB_DOMAIN = "https://www.workbuddy.cn"
 WB_ACCOUNT_TYPE = "workbuddy"
-WB_SESSION_COOKIE = "session"
+_WB_PROBE_INTERVAL = 3.0    # 两次窗口内探测的最小间隔 (秒)
+_WB_JS_FETCH_TIMEOUT = 8.0  # 窗口内 fetch 的 abort 超时 (秒)
+_WB_POLL_TIMEOUT = 10.0     # 等待结果槽写入的总超时 (秒)
+_WB_POLL_INTERVAL = 0.2     # 结果槽轮询间隔 (秒)
+_WB_LOG_INTERVAL = 5.0      # 探测失败日志节流 (秒)
+_WB_MAX_BODY = 1 << 20      # 窗口内响应体截断 (字符)
 _ACCOUNT_TYPES = ("opencode", "bai", "commandcode", "workbuddy")
 
 
@@ -84,6 +88,43 @@ def build_login_url(account_type: str = "opencode") -> str:
         "state": uuid.uuid4().hex,
     }
     return f"{LOGIN_BASE}?{urlencode(params)}"
+
+
+def _build_wb_probe_js(slot: str) -> str:
+    """构造登录窗口内探测 /console/accounts 的 JS (bai_channel.build_fetch_js 同款槽模式).
+
+    异步 fetch 结果写 window.__gousage[slot] 后立即返回 slot, 规避 evaluate_js 对
+    Promise 返回值的平台差异; status/path/ct/body 全部带回, 分类在 Python 侧完成
+    (便于单测). credentials:'include' 使浏览器自动携带全套会话 Cookie 与同域
+    Keycloak 静默链, 与页面自身请求完全同链路 (20260915 诊断 §11.5).
+    """
+    return (
+        "(function(){"
+        f'var slot = "{slot}";'
+        'window.__gousage = window.__gousage || {};'
+        'window.__gousage[slot] = null;'
+        "var ctrl = new AbortController();"
+        f"setTimeout(function(){{ ctrl.abort(); }}, {int(_WB_JS_FETCH_TIMEOUT * 1000)});"
+        'fetch("/console/accounts", {'
+        'method: "GET", '
+        'credentials: "include", '
+        'headers: { "Accept": "application/json, text/plain, */*" }, '
+        "signal: ctrl.signal"
+        "}).then(function(r){"
+        'var path = "";'
+        'try { path = new URL(r.url).pathname; } catch (e) {}'
+        'var ct = r.headers.get("content-type") || "";'
+        "return r.text().then(function(t){"
+        f"return {{ status: r.status, path: path, ct: ct, body: t.substr(0, {_WB_MAX_BODY}) }};"
+        "});"
+        "}).catch(function(e){"
+        "return { status: 0, error: String(e) };"
+        "}).then(function(v){"
+        "window.__gousage[slot] = v;"
+        "});"
+        "return slot;"
+        "})()"
+    )
 
 
 def _cookie_value(cookie, name: str) -> str:
@@ -228,16 +269,23 @@ class LoginWatcher:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self.done = False
+        self._start_lock = threading.Lock()
+        self._wb_next_probe_at = 0.0
+        self._wb_last_failure_log_at = float("-inf")
+        self._wb_probe_seq = 0
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="gousage-login")
-        self._thread.start()
+        with self._start_lock:
+            if self.done or self._stop.is_set():
+                return
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(target=self._run, daemon=True, name="gousage-login")
+            self._thread.start()
 
     def stop(self) -> None:
-        self._stop.set()
+        with self._start_lock:
+            self._stop.set()
 
     def _window_alive(self) -> bool:
         try:
@@ -259,7 +307,11 @@ class LoginWatcher:
                 continue
 
             if url != last_url:  # 诊断: 记录完整 URL 轨迹 (含非 chat.b.ai 域)
-                _log(f"[login] url -> {url[:200]}")
+                if self.account_type == WB_ACCOUNT_TYPE:
+                    p = urlsplit(url)
+                    _log(f"[login] url -> {p.scheme}://{p.netloc}{p.path}")
+                else:
+                    _log(f"[login] url -> {url[:200]}")
                 last_url = url
 
             if self.account_type == "bai":
@@ -393,42 +445,129 @@ class LoginWatcher:
         return True
 
     def _handle_workbuddy(self, url: str) -> bool:
-        """WorkBuddy success: same-site URL plus non-empty session cookie.
+        """WorkBuddy success: same-site profile URL + 登录窗口内 /console/accounts 校验成功.
 
-        Account lookup is best-effort because the response field set is still
-        being verified against the real service; an empty user id disables
-        deduplication but must not block an otherwise valid session.
+        站点鉴权为同源 Cookie + 同域 Keycloak 静默链 (doc/Bug诊断报告/
+        bug-diagnosis-WorkBuddy网页登录后未回填账号-20260915.md §11): 匿名访客
+        也存在 7 天 session Cookie, "有 session"不是登录证据; Python 重放 Cookie
+        快照会被网关 302 到登录页, 故借用窗口自身链路探测; 身份取
+        body.data.accounts[].uid (优先 lastLogin), 而非 data.userId.
         """
-        if not url.startswith(WB_DOMAIN):
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "www.workbuddy.cn"
+            or not (parsed.path == "/profile" or parsed.path.startswith("/profile/"))
+        ):
             return False
+        if self.done or self._stop.is_set():
+            return False
+        now = time.monotonic()
+        if now < self._wb_next_probe_at:
+            return False
+        self._wb_next_probe_at = now + _WB_PROBE_INTERVAL
+
+        result = self._wb_probe_accounts()
+        reason, accounts = self._wb_classify_probe(result)
+        if reason:
+            self._wb_log_probe_failure(now, reason)
+            return False
+
+        picked = next((a for a in accounts if isinstance(a, dict) and a.get("lastLogin")), accounts[0])
+        value = picked.get("uid") if isinstance(picked, dict) else None
+        user_id = "" if value is None else (value if isinstance(value, str) else str(value))
+        if not user_id:
+            self._wb_log_probe_failure(now, "missing_uid")
+            return False
+
         try:
             cookies = self.win.get_cookies() or []
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 窗口已销毁等
+            self._wb_log_probe_failure(now, "get_cookies_error")
             return False
         jar_entries: list[dict[str, str]] = []
-        session_value = ""
         for cookie in cookies:
             for name in _cookie_names(cookie):
                 value = _cookie_value(cookie, name)
                 if not value:
                     continue
                 jar_entries.append({"name": name, "value": value})
-                if name == WB_SESSION_COOKIE:
-                    session_value = value
-        if not session_value:
-            return False
         jar = json.dumps(jar_entries, ensure_ascii=False)
-        user_id = ""
-        try:
-            accounts = WorkBuddyAPI(jar).fetch_accounts()
-            if isinstance(accounts, dict):
-                value = accounts.get("userId")
-                if value is not None:
-                    user_id = value if isinstance(value, str) else str(value)
-        except Exception:  # noqa: BLE001 best-effort dedupe lookup
-            pass
-        _log(f"[login] WorkBuddy SUCCESS: session captured (len={len(session_value)}), userId={user_id!r}")
-        self.done = True
-        self._stop.set()
-        self.on_success(jar, user_id, WB_ACCOUNT_TYPE)
+
+        with self._start_lock:
+            if self._stop.is_set() or self.done:
+                return False
+            self.done = True
+            self._stop.set()
+            self.on_success(jar, user_id, WB_ACCOUNT_TYPE)
+        nickname = ""
+        if isinstance(picked, dict):
+            nickname = picked.get("enterpriseUserName") or picked.get("nickname") or ""
+        _log(f"[login] WorkBuddy SUCCESS: uid={user_id!r}, nickname={nickname!r}, jar_cookies={len(jar_entries)}")
         return True
+
+    def _wb_probe_accounts(self) -> dict | None:
+        """登录窗口内起搏一次 /console/accounts 探测并轮询结果. 超时/异常/中途停止返回 None."""
+        self._wb_probe_seq += 1
+        slot = f"wb{self._wb_probe_seq}"  # 每次探测独占槽位, 迟到的旧响应不会覆盖新探测
+        try:
+            started = self.win.evaluate_js(_build_wb_probe_js(slot))
+            if started != slot:
+                return None
+            deadline = time.monotonic() + _WB_POLL_TIMEOUT
+            while time.monotonic() < deadline:
+                if self._stop.is_set():
+                    return None
+                res = self.win.evaluate_js(f'window.__gousage["{slot}"]')
+                if isinstance(res, dict):
+                    return res
+                time.sleep(_WB_POLL_INTERVAL)
+            return None
+        except Exception:  # noqa: BLE001 窗口未就绪/已销毁
+            return None
+        finally:
+            try:
+                self.win.evaluate_js(f'delete window.__gousage["{slot}"]')
+            except Exception:  # noqa: BLE001
+                pass
+
+    @staticmethod
+    def _wb_classify_probe(result: dict | None) -> tuple[str, list]:
+        """探测结果分类. 返回 (失败原因码, 账号列表); 原因码为空串表示拿到非空账号列表.
+
+        原因码与 20260915 诊断 §11.5 对齐: probe_inconclusive / network_error /
+        redirect_to_login / http_<n> / non_json_response / empty_accounts.
+        """
+        if result is None:
+            return "probe_inconclusive", []
+        if result.get("status") == 0:
+            return "network_error", []
+        path = str(result.get("path") or "")
+        if path.startswith("/auth/realms/"):
+            return "redirect_to_login", []
+        status = result.get("status")
+        if not isinstance(status, int) or status < 200 or status >= 300:
+            return f"http_{status}", []
+        if "json" not in str(result.get("ct") or ""):
+            return "non_json_response", []
+        try:
+            body = json.loads(result.get("body") or "")
+        except ValueError:
+            return "non_json_response", []
+        data = body.get("data") if isinstance(body, dict) else None
+        accounts = data.get("accounts") if isinstance(data, dict) else None
+        if not isinstance(accounts, list) or not accounts:
+            return "empty_accounts", []
+        return "", accounts
+
+    def _wb_log_probe_failure(self, now: float, reason: str) -> None:
+        """节流输出探测失败原因 (脱敏: cookie 只带名字与值长度, 不带值; 兼作 §11.6 会话形态观察点)."""
+        if now - self._wb_last_failure_log_at < _WB_LOG_INTERVAL:
+            return
+        try:
+            cookies = self.win.get_cookies() or []
+            names = [f"{n}({len(_cookie_value(c, n))})" for c in cookies for n in _cookie_names(c)]
+        except Exception:  # noqa: BLE001
+            names = ["<get_cookies ERROR>"]
+        _log(f"[login] WorkBuddy probe failed: {reason}, cookies={names}")
+        self._wb_last_failure_log_at = now

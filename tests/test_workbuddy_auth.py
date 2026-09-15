@@ -17,15 +17,28 @@ from app import server
 
 
 class MockWin:
-    def __init__(self, url, cookies):
+    """模拟登录窗口: probe_result 为窗口内 fetch 的最终结果 (dict/None), probe_error 模拟 evaluate_js 异常."""
+
+    def __init__(self, url, cookies, probe_result=None, probe_error=None):
         self.url = url
         self.cookies = cookies
+        self.probe_result = probe_result
+        self.probe_error = probe_error
+        self.probe_calls = []
 
     def get_current_url(self):
         return self.url
 
     def get_cookies(self):
         return self.cookies
+
+    def evaluate_js(self, script):
+        self.probe_calls.append(script)
+        if self.probe_error is not None:
+            raise self.probe_error
+        if "return slot" in script:  # 起搏脚本: 返回槽名 (与 auth._build_wb_probe_js 产物对应)
+            return script.split('var slot = "')[1].split('"')[0]
+        return self.probe_result  # 轮询/清理脚本: 返回槽内结果
 
 
 def cookie(**pairs):
@@ -41,37 +54,209 @@ def test_workbuddy_constants_and_login_url():
     assert "WorkBuddy" in auth._login_window_title("workbuddy")
 
 
-def test_workbuddy_without_session_keeps_watching(monkeypatch):
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.workbuddy.cn/login/",
+        "https://www.workbuddy.cn/auth/realms/copilot",
+        "https://www.workbuddy.cn.example.org/profile/plans-usage",
+        "http://www.workbuddy.cn/profile/plans-usage",
+    ],
+)
+def test_workbuddy_gate_rejects_non_profile_urls(url):
+    """非 https / 非本域 / 非 profile 路径一律不探测 (匿名 session 存在也不触发)."""
     seen = []
-    watcher = auth.LoginWatcher(MockWin("https://www.workbuddy.cn/auth/realms/copilot", [cookie(foo="bar")]), lambda *x: seen.append(x), account_type="workbuddy")
-    assert watcher._handle_workbuddy("https://www.workbuddy.cn/auth/realms/copilot") is False
+    win = MockWin(url, [cookie(session="s1")], probe_result={"accounts": [{"uid": "u1"}]})
+    watcher = auth.LoginWatcher(win, lambda *x: seen.append(x), account_type="workbuddy")
+    assert watcher._handle_workbuddy(url) is False
+    assert win.probe_calls == []
     assert seen == []
 
 
-def test_workbuddy_session_succeeds_even_when_accounts_lookup_fails(monkeypatch):
+def test_workbuddy_probe_success_saves_uid_and_jar():
     seen = []
-    monkeypatch.setattr(auth, "WorkBuddyAPI", lambda _jar: (_ for _ in ()).throw(RuntimeError("offline")))
-    watcher = auth.LoginWatcher(
-        MockWin("https://www.workbuddy.cn/profile/plans-usage", [cookie(session="s1", tgw_l7_route="r1"), cookie(empty="")]),
-        lambda *x: seen.append(x), account_type="workbuddy",
+    win = MockWin(
+        "https://www.workbuddy.cn/profile/plans-usage",
+        [cookie(session="s1", foo="bar")],
+        probe_result={
+            "status": 200, "path": "/console/accounts", "ct": "application/json",
+            "body": json.dumps({"code": 0, "data": {"accounts": [{"uid": "wb-user-1", "nickname": "骏"}]}}),
+        },
     )
-    assert watcher._handle_workbuddy("https://www.workbuddy.cn/profile/plans-usage") is True
-    assert seen[0][1:] == ("", "workbuddy")
-    jar = json.loads(seen[0][0])
-    assert {x["name"] for x in jar} == {"session", "tgw_l7_route"}
+    watcher = auth.LoginWatcher(win, lambda *x: seen.append(x), account_type="workbuddy")
+    assert watcher._handle_workbuddy(win.url) is True
+    assert watcher.done is True
+    assert len(seen) == 1
+    credential, user_id, account_type = seen[0]
+    assert account_type == "workbuddy"
+    assert user_id == "wb-user-1"
+    assert {"name": "session", "value": "s1"} in json.loads(credential)
 
 
-def test_workbuddy_accounts_user_id_is_best_effort_dedupe(monkeypatch):
+def test_workbuddy_probe_prefers_last_login_account():
+    """官网规则: data.accounts[] 中优先取带 lastLogin 的账号 (20260915 诊断 §11.2)."""
     seen = []
-    class FakeApi:
-        def __init__(self, jar):
-            self.jar = jar
-        def fetch_accounts(self):
-            return {"userId": "wb-user-1"}
-    monkeypatch.setattr(auth, "WorkBuddyAPI", FakeApi)
-    watcher = auth.LoginWatcher(MockWin("https://www.workbuddy.cn/profile/plans-usage", [cookie(session="s1", foo="bar")]), lambda *x: seen.append(x), account_type="workbuddy")
-    assert watcher._handle_workbuddy(watcher.win.url) is True
-    assert seen[0][1:] == ("wb-user-1", "workbuddy")
+    accounts = [
+        {"uid": "uid-first", "nickname": "a"},
+        {"uid": "uid-lastlogin", "lastLogin": "2026-09-15", "nickname": "b"},
+    ]
+    win = MockWin(
+        "https://www.workbuddy.cn/profile/plans-usage", [],
+        probe_result={"status": 200, "path": "/console/accounts", "ct": "application/json",
+                      "body": json.dumps({"data": {"accounts": accounts}})},
+    )
+    watcher = auth.LoginWatcher(win, lambda *x: seen.append(x), account_type="workbuddy")
+    assert watcher._handle_workbuddy(win.url) is True
+    assert seen[0][1] == "uid-lastlogin"
+
+
+def test_workbuddy_probe_uid_coerced_to_str():
+    seen = []
+    win = MockWin(
+        "https://www.workbuddy.cn/profile/plans-usage", [],
+        probe_result={"status": 200, "path": "/console/accounts", "ct": "application/json",
+                      "body": json.dumps({"data": {"accounts": [{"uid": 12345}]}})},
+    )
+    watcher = auth.LoginWatcher(win, lambda *x: seen.append(x), account_type="workbuddy")
+    assert watcher._handle_workbuddy(win.url) is True
+    assert seen[0][1] == "12345"
+
+
+def test_workbuddy_probe_missing_uid_keeps_watching():
+    """uid 是去重/重登身份键, 取不到不允许落库 (不再容忍空 userId)."""
+    seen = []
+    win = MockWin(
+        "https://www.workbuddy.cn/profile/plans-usage", [cookie(session="s1")],
+        probe_result={"status": 200, "path": "/console/accounts", "ct": "application/json",
+                      "body": json.dumps({"data": {"accounts": [{"nickname": "n"}]}})},
+    )
+    watcher = auth.LoginWatcher(win, lambda *x: seen.append(x), account_type="workbuddy")
+    assert watcher._handle_workbuddy(win.url) is False
+    assert seen == [] and not watcher.done
+
+
+@pytest.mark.parametrize(
+    "result, expected",
+    [
+        (None, "probe_inconclusive"),
+        ({"status": 0, "error": "AbortError"}, "network_error"),
+        ({"status": 200, "path": "/auth/realms/copilot/protocol/openid-connect/auth", "ct": "text/html", "body": "<html>"}, "redirect_to_login"),
+        ({"status": 502, "path": "/console/accounts", "ct": "text/html", "body": "<html>"}, "http_502"),
+        ({"status": 200, "path": "/console/accounts", "ct": "text/html", "body": "<html>login-pf</html>"}, "non_json_response"),
+        ({"status": 200, "path": "/console/accounts", "ct": "application/json", "body": "not-json"}, "non_json_response"),
+        ({"status": 200, "path": "/console/accounts", "ct": "application/json", "body": '{"code":0}'}, "empty_accounts"),
+        ({"status": 200, "path": "/console/accounts", "ct": "application/json", "body": '{"data":{"accounts":[]}}'}, "empty_accounts"),
+    ],
+)
+def test_workbuddy_classify_probe_reason_codes(result, expected):
+    reason, accounts = auth.LoginWatcher._wb_classify_probe(result)
+    assert reason == expected
+    assert accounts == []
+
+
+def test_workbuddy_anonymous_session_not_treated_as_login():
+    """回归 (20260915 诊断 §11.1): 匿名 session Cookie(276字符)存在≠已登录, 探测被拒不得回填."""
+    seen = []
+    win = MockWin(
+        "https://www.workbuddy.cn/profile/plans-usage",
+        [cookie(session="a" * 276)],
+        probe_result={"status": 200, "path": "/auth/realms/copilot/protocol/openid-connect/auth",
+                      "ct": "text/html", "body": "<html>login-pf</html>"},
+    )
+    watcher = auth.LoginWatcher(win, lambda *x: seen.append(x), account_type="workbuddy")
+    assert watcher._handle_workbuddy(win.url) is False
+    assert seen == [] and not watcher.done and not watcher._stop.is_set()
+
+
+def test_workbuddy_probe_throttled_and_recovers(monkeypatch):
+    current_time = 1000.0
+    monkeypatch.setattr("time.monotonic", lambda: current_time)
+    seen = []
+    win = MockWin(
+        "https://www.workbuddy.cn/profile/plans-usage", [cookie(session="s1")],
+        probe_result={"status": 200, "path": "/auth/realms/x", "ct": "text/html", "body": "<html>"},
+    )
+    watcher = auth.LoginWatcher(win, lambda *x: seen.append(x), account_type="workbuddy")
+    assert watcher._handle_workbuddy(win.url) is False
+    current_time += 1.0  # 3s 节流窗口内: 不再起搏新探测
+    assert watcher._handle_workbuddy(win.url) is False
+    started = [s for s in win.probe_calls if "return slot" in s]
+    assert len(started) == 1
+    current_time += 3.0  # 节流过期: 下一次探测成功
+    win.probe_result = {"status": 200, "path": "/console/accounts", "ct": "application/json",
+                        "body": json.dumps({"data": {"accounts": [{"uid": "u1"}]}})}
+    assert watcher._handle_workbuddy(win.url) is True
+    assert seen[0][1:] == ("u1", "workbuddy")
+
+
+def test_workbuddy_evaluate_js_error_keeps_watching():
+    seen = []
+    win = MockWin("https://www.workbuddy.cn/profile/plans-usage", [cookie(session="s1")], probe_error=RuntimeError("no script"))
+    watcher = auth.LoginWatcher(win, lambda *x: seen.append(x), account_type="workbuddy")
+    assert watcher._handle_workbuddy(win.url) is False
+    assert seen == [] and not watcher.done
+
+
+def test_workbuddy_probe_timeout_keeps_watching(monkeypatch):
+    monkeypatch.setattr(auth, "_WB_POLL_TIMEOUT", 0.2)  # 缩短真实等待
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    seen = []
+    win = MockWin("https://www.workbuddy.cn/profile/plans-usage", [cookie(session="s1")], probe_result=None)
+    watcher = auth.LoginWatcher(win, lambda *x: seen.append(x), account_type="workbuddy")
+    assert watcher._handle_workbuddy(win.url) is False
+    assert seen == [] and not watcher.done
+
+
+def test_workbuddy_stop_before_success_no_callback():
+    seen = []
+    win = MockWin(
+        "https://www.workbuddy.cn/profile/plans-usage", [cookie(session="s1")],
+        probe_result={"status": 200, "path": "/console/accounts", "ct": "application/json",
+                      "body": json.dumps({"data": {"accounts": [{"uid": "u1"}]}})},
+    )
+    watcher = auth.LoginWatcher(win, lambda *x: seen.append(x), account_type="workbuddy")
+    watcher.stop()
+    assert watcher._handle_workbuddy(win.url) is False
+    assert seen == [] and watcher.done is False
+
+
+def test_watcher_start_idempotent_after_done():
+    win = MockWin("https://www.workbuddy.cn/profile/plans-usage", [])
+    watcher = auth.LoginWatcher(win, lambda *args: None, account_type="workbuddy")
+    watcher.done = True
+    watcher.start()
+    assert watcher._thread is None
+
+
+def test_watcher_start_idempotent_after_stop():
+    win = MockWin("https://www.workbuddy.cn/profile/plans-usage", [])
+    watcher = auth.LoginWatcher(win, lambda *args: None, account_type="workbuddy")
+    watcher.stop()
+    watcher.start()
+    assert watcher._thread is None
+    assert watcher._stop.is_set()
+
+
+def test_concurrent_start_spawns_single_thread(monkeypatch):
+    import threading
+    created = []
+    real_thread = threading.Thread
+    def mock_thread(*args, **kwargs):
+        t = real_thread(*args, **kwargs)
+        created.append(t)
+        return t
+    monkeypatch.setattr("threading.Thread", mock_thread)
+    win = MockWin("https://www.workbuddy.cn/profile/plans-usage", [])
+    watcher = auth.LoginWatcher(win, lambda *args: None, account_type="workbuddy")
+    t1 = real_thread(target=watcher.start)
+    t2 = real_thread(target=watcher.start)
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+    watcher_threads = [t for t in created if getattr(t, "name", "") == "gousage-login"]
+    assert len(watcher_threads) == 1
+    watcher.stop()
+
+
 
 
 def test_main_login_modes_include_workbuddy():

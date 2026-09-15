@@ -640,6 +640,25 @@ def save_token(token: str, workspace_id: str = "Default", account_id: Optional[i
         conn.commit()
 
 
+def save_workbuddy_token(account_id: int, token: str, user_id: str = "") -> None:
+    """WorkBuddy 定向凭据更新: 原子校验目标存在、来源为 workbuddy 及身份匹配后复用 save_token."""
+    with _DB_LOCK:
+        row = get_db().execute(
+            "SELECT source, workspace_id FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()
+        if row is None or row["source"] != "workbuddy":
+            raise ValueError("WorkBuddy 登录目标不存在或来源不匹配")
+        if not token.strip():
+            raise ValueError("WorkBuddy 凭据为空")
+        previous_id = (row["workspace_id"] or "").strip()
+        incoming_id = (user_id or "").strip()
+        if (previous_id not in ("", "Default") and incoming_id
+                and previous_id != incoming_id):
+            raise ValueError("WorkBuddy 身份与目标账号不一致，请使用添加账号")
+        save_token(token, incoming_id or previous_id or "Default", account_id=account_id)
+
+
+
 def save_resolved_workspace(workspace_id: str, account_id: Optional[int] = None) -> None:
     with _DB_LOCK:
         conn = get_db()
