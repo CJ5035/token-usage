@@ -162,6 +162,8 @@ def build_fetch_js(url: str, slot: str, method: str, body: str, timeout_sec: flo
         "window.__gousage[slot] = null;"
         "var ctrl = new AbortController();"
         f"setTimeout(function(){{ ctrl.abort(); }}, {timeout_ms});"
+        # url 仅来自 workbuddy_api 模块常量端点路径 (非用户输入) 且已剥离为同源 path,
+        # 故直接内插安全; 若未来传入外部可控 URL, 须改用 json.dumps 包裹 (同 body).
         f'fetch("{url}", {{{opts}}}).then(function(r){{'
         'var path = "";'
         "try { path = new URL(r.url).pathname; } catch (e) {}"
