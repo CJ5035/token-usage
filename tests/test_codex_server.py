@@ -401,7 +401,7 @@ def test_report_routes_serve_codex(tmp_codex_db, codex_row, monkeypatch, api_cal
         row = next(r for r in d["rows"] if r["channel"] == "codex")
         assert row["tokens"] == 130 and row["cost"] is None
         assert row["cost_available"] is False and row["cost_partial"] is True
-        assert row["estimated"] is False
+        assert row["estimated"] is True
         assert any(s["channel"] == "codex" and s["accounts"] == 0 for s in d["summary"])
     elif "channel-overview" in url:
         assert d["total_tokens"] == 130 and d["total_cost_usd"] is None
@@ -617,3 +617,20 @@ def test_codex_delta_in_all_channel_and_sessions(tmp_codex_db, codex_row, monkey
     ses = api_call("/api/usage/sessions?source=all&page=1&page_size=50")["data"]
     assert ses["total"] == 2
     assert sum(s["total_tokens"] for s in ses["records"]) == rec_sum == 1200
+
+
+def test_codex_summary_backfilled_cost(tmp_codex_db, codex_row, monkeypatch, api_call):
+    monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
+    _mock_dsh_absent(monkeypatch)
+    row = codex_row("s:1", model="gpt-5.6-sol", input_tokens=1000, output_tokens=500)
+    db.import_codex_usage([row])
+    pricing = [{"modelId": "gpt-5.6-sol", "inputCostPerMillion": 2.5,
+                "outputCostPerMillion": 10.0, "cacheReadCostPerMillion": 1.25,
+                "cacheCreationCostPerMillion": 3.75}]
+    db.backfill_codex_cost(pricing)
+    d = api_call("/api/codex/summary?range=today")["data"]
+    assert d["cost_available"] is True
+    assert d["cost_partial"] is False
+    assert d["cost_unavailable_channels"] == []
+    assert d["totals"]["total_cost_usd"] == pytest.approx(0.007525)
+    assert d["totals"]["cost_available"] is True

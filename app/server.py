@@ -1013,6 +1013,11 @@ def _sync_codex_local(force: bool = False) -> int:
         except Exception as exc:  # noqa: BLE001 单批失败不阻塞其余批次
             problems.append(str(exc))
     problems.extend(codex_api.last_scan_errors)
+    try:
+        pricing = _load_model_pricing()
+        db.backfill_codex_cost(pricing)
+    except Exception:  # noqa: BLE001 费用回填异常不阻塞导入状态收尾
+        pass
     now = _utc_now_iso()
     if problems:
         last_error: Optional[str] = problems[0]
@@ -1382,10 +1387,10 @@ def _codex_summary_payload(range_param: str) -> dict[str, Any]:
     """GET /api/codex/summary 数据组装 (固定数据契约, 需求 §4 CodexSummary).
 
     非法 range 回落 30d 默认, 不把非法 query 拼 SQL; DB 锁内一次读出聚合与
-    导入状态, 保证同批 snapshot 一致; 未登录仍可用。Codex 费用恒 NULL:
-    cost_available 恒 false, 范围内有数据时 cost_unavailable_channels=["codex"]、
-    cost_partial=true; request_count_exact 按范围内贡献记录的事件模式
-    (含 token_count 兼容模式记录即 false, 范围为空 false)。
+    导入状态, 保证同批 snapshot 一致; 未登录仍可用。估算费用:
+    cost_available 按 totals 实际值; 仅当范围内有数据且费用未回填时
+    cost_unavailable_channels 包含 'codex', cost_partial 同步真实语义;
+    request_count_exact 按范围内贡献记录的事件模式 (含 token_count 兼容模式记录即 false, 范围为空 false)。
     """
     if range_param not in _RANGE_WHITELIST:
         range_param = "30d"
@@ -1395,16 +1400,18 @@ def _codex_summary_payload(range_param: str) -> dict[str, Any]:
         data_at = db.codex_last_import_at()
         has_data = data_at is not None   # 严格按镜像表判定, 不用扫描时刻代替
         source_found = codex_api.sessions_dir().is_dir()
+        totals = db.codex_totals(range_param)
+        cost_avail = bool(totals.get("cost_available"))
         payload = {
             "range": range_param,
             "db_found": source_found or has_data,
             "source_found": source_found,
             "has_data": has_data,
             "request_count_exact": win["request_count_exact"],
-            "cost_available": False,
-            "cost_partial": win["cost_partial"],
-            "cost_unavailable_channels": ["codex"] if win["requests"] > 0 else [],
-            "totals": db.codex_totals(range_param),
+            "cost_available": cost_avail,
+            "cost_partial": win["cost_partial"] if not cost_avail else False,
+            "cost_unavailable_channels": ["codex"] if (win["requests"] > 0 and not cost_avail) else [],
+            "totals": totals,
             "today": db.codex_totals("today"),
             "channels": db.codex_channel_stats(range_param),
             "models": db.codex_model_stats(range_param),

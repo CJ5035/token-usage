@@ -2697,6 +2697,8 @@ def _win_codex(where: str, params: list[Any]) -> dict[str, Any]:
     ).fetchone()
     requests = row["requests"] or 0
     cost_rows = int(row["cost_rows"] or 0)
+    cost_avail = cost_rows > 0
+    cost_val = (row["cost"] or 0.0) if cost_avail else (None if requests else 0.0)
     return {"tokens": row["tokens"] or 0,
             "input_tokens": row["input_tokens"] or 0,
             "output_tokens": row["output_tokens"] or 0,
@@ -2704,9 +2706,9 @@ def _win_codex(where: str, params: list[Any]) -> dict[str, Any]:
             "cache_write_tokens": row["cache_write_tokens"] or 0,
             "reasoning_tokens": row["reasoning_tokens"] or 0,
             "requests": requests,
-            "cost": (row["cost"] or 0.0) if requests else 0.0,
-            "cost_available": cost_rows > 0,
-            "cost_partial": False,
+            "cost": cost_val,
+            "cost_available": cost_avail,
+            "cost_partial": not cost_avail if requests else False,
             "request_count_exact": bool(row["exact"])}
 
 
@@ -2923,9 +2925,10 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
             cost_available, cost_partial = False, True
             exact = requests > 0
         elif ch == "codex":
-            cost = a["cost"] or 0.0
             cost_rows = int(a.get("cost_rows") or 0)
-            cost_available, cost_partial = cost_rows > 0, False
+            cost_available = cost_rows > 0
+            cost = (a["cost"] or 0.0) if cost_available else (None if requests else 0.0)
+            cost_partial = not cost_available if requests else False
             exact = bool(a.get("request_count_exact"))
         else:
             cost = a["cost"] or 0.0
@@ -3243,7 +3246,7 @@ def report_totals(range_: str) -> dict[str, Any]:
             "total_cost_usd": round(cost, 6) if cost is not None else None,
             "cost_available": merged["cost_available"],
             "cost_partial": merged["cost_partial"],
-            "cost_unavailable_channels": ["codex"] if codex["requests"] > 0 else [],
+            "cost_unavailable_channels": ["codex"] if (codex["requests"] > 0 and not codex["cost_available"]) else [],
             "request_count_exact": merged["request_count_exact"]}
 
 
