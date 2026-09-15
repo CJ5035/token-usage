@@ -1012,7 +1012,12 @@ def _static_response(handler: BaseHTTPRequestHandler, rel: str) -> None:
     if not os.path.isfile(path):
         handler.send_error(404)
         return
-    ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    # Windows 注册表 .svg 的 Content Type 为 image/svg (缺 +xml), WebView2 <img>
+    # 拒绝渲染该 MIME 的 SVG (标题栏 logo/模型图标全空白), 故 svg 强制标准 MIME
+    if path.lower().endswith(".svg"):
+        ctype = "image/svg+xml"
+    else:
+        ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
     try:
         with open(path, "rb") as fh:
             body = fh.read()
@@ -1596,6 +1601,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                 "datadir": db.data_dir(),
                 "codex": _codex_state_snapshot(),   # T7 登录遮罩分离消费
                 "dsh_found": dsh_found,
+                # 欢迎页"不再提示": 前端显隐判断走 state, 不依赖 settings 缓存时序
+                "skip_welcome": db.get_settings().get("skip_welcome") is True,
             },
         )
         return

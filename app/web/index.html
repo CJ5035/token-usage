@@ -121,13 +121,13 @@
     <!-- ============ 用量统计 ============ -->
     <section class="page" id="page-stats" hidden>
       <div class="ph"><h2 class="ph-title" data-i18n="statsTitle">用量统计</h2><div class="ph-right"><div class="pill-row" id="stats-pills"><button class="pill" data-r="today" data-i18n="today">今天</button><button class="pill active" data-r="7d" data-i18n="d7">近7天</button><button class="pill" data-r="30d" data-i18n="d30">近30天</button><button class="pill" data-r="all" data-i18n="all">全部</button></div></div></div>
-      <div class="scope-hint" id="stats-scope-hint" hidden></div>
-      <div class="kpi-row kpi4" id="stats-total-cards"></div>
-      <div class="card detail6">
+      <div class="scope-hint stats-remote" id="stats-scope-hint" hidden></div>
+      <div class="kpi-row kpi4 stats-remote" id="stats-total-cards"></div>
+      <div class="card detail6 stats-remote">
         <div class="card-h"><h3 data-i18n="tokenBreakdown">Token 构成</h3></div>
         <div class="d6-grid" id="stats-detail6"></div>
       </div>
-      <div class="two-col">
+      <div class="two-col stats-remote">
         <div class="card model-rank">
           <div class="card-h"><h3 data-i18n="modelUsage">模型用量</h3><div class="seg" id="mr-dim"><button class="active" data-dim="input" data-i18n="input">输入</button><button data-dim="output" data-i18n="output">输出</button><button data-dim="cost" data-i18n="cost">成本</button></div></div>
           <div class="mr-body">
@@ -188,6 +188,7 @@
         </div>
         <div class="chart-box"><canvas id="codex-trend-chart"></canvas><div class="zcode-chart-empty" id="codex-trend-empty" hidden></div></div>
       </section>
+      <div class="stats-empty" id="stats-empty" hidden data-i18n="statsEmptyHint">暂无用量数据</div>
     </section>
 
     <!-- ============ 记录页 (会话用量 + 使用记录) ============ -->
@@ -257,6 +258,7 @@
         <div class="card-h"><h3 data-i18n="setAppearance">外观</h3></div>
         <div class="set-row"><div><div class="sl" data-i18n="theme">主题</div><div class="sd" data-i18n="themeDesc">亮色 / 深色，顶栏按钮快捷切换</div></div><div class="pill-row" id="set-theme-pills"><button class="pill" data-v="light" data-i18n="light">浅色</button><button class="pill" data-v="dark" data-i18n="dark">深色</button></div></div>
         <div class="set-row"><div><div class="sl" data-i18n="overviewPanel">账户总览面板</div><div class="sd" data-i18n="overviewPanelDesc">侧边栏显示多账户总览入口，聚合展示各账户配额与用量</div></div><label class="sw"><input type="checkbox" id="set-overview-panel"><span class="slider"></span></label></div>
+        <div class="set-row"><div><div class="sl" data-i18n="welcomePage">启动登录页</div><div class="sd" data-i18n="welcomePageDesc">未登录且无本地数据时，启动显示登录引导页；也可在引导页勾选「下次启动隐藏」</div></div><label class="sw"><input type="checkbox" id="set-welcome" checked><span class="slider"></span></label></div>
         <div class="set-row"><div><div class="sl" data-i18n="currency">默认货币</div><div class="sd" data-i18n="currencyDesc">费用主显示货币（实时汇率）</div></div><div class="pill-row" id="set-currency-pills"><button class="pill active" data-v="CNY">¥ CNY</button><button class="pill" data-v="USD">$ USD</button></div></div>
         <div class="set-row"><div><div class="sl" data-i18n="language">语言 / Language</div><div class="sd" data-i18n="languageDesc">界面显示语言</div></div><div class="pill-row" id="set-lang-pills"><button class="pill active" data-v="zh">中文</button><button class="pill" data-v="en">English</button></div></div>
       </div>
@@ -320,6 +322,7 @@
         <p class="login-note" data-i18n="loginNote">点击后将打开 OpenCode Go 官方授权页完成登录。</p>
         <button class="btn btn-lg" id="btn-manage-data" data-i18n="manageLocalData">管理本地数据</button>
         <button class="btn btn-ghost" id="btn-quit-app" data-i18n="quitApp">退出应用</button>
+        <label class="login-skip"><input type="checkbox" id="login-skip"><span data-i18n="skipWelcome">下次启动隐藏</span></label>
       </div>
     </div>
 

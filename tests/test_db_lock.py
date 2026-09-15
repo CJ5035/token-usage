@@ -336,7 +336,8 @@ def test_concurrent_mixed_ops_stress(tmp_db):
 
     # -- 最终一致性: save_settings 写入值经 get_settings 读回一致 -------------
     expected = {"sync_interval_sec": 90, "window_days": 45,
-                "auto_sync": False, "show_accounts_panel": True, "theme": None}
+                "auto_sync": False, "show_accounts_panel": True,
+                "skip_welcome": False, "theme": None}   # 20260915: 白名单新增键
     db.save_settings(expected)
     assert db.get_settings() == expected
 

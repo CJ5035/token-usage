@@ -1179,6 +1179,7 @@ _DEFAULT_SETTINGS = {
     "window_days": 60,  # 同步范围: 30/60/90/180, None=所有
     "auto_sync": True,  # 自动增量同步开关
     "show_accounts_panel": False,  # 账户总览面板开关 (侧边栏入口显隐)
+    "skip_welcome": False,  # 欢迎页"不再提示" (20260915): True=启动不显示欢迎引导页
     "theme": None,  # 主题偏好 (20260909): "light"/"dark", None=未设置
 }
 
@@ -1412,7 +1413,7 @@ def save_settings(payload: dict[str, Any]) -> dict[str, Any]:
                             current[key] = max(1, min(int(val), 3650))
                         except (TypeError, ValueError):
                             pass
-                elif key in ("auto_sync", "show_accounts_panel"):
+                elif key in ("auto_sync", "show_accounts_panel", "skip_welcome"):
                     current[key] = bool(payload[key])
                 elif key == "theme":
                     if payload[key] in ("light", "dark"):   # 非法枚举保留当前值 (null 已被外层 is not None 拦截)
@@ -2845,11 +2846,12 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
 
 def list_channel_summary() -> list[dict[str, Any]]:
     """渠道 tab 列表 (R6 五渠道; dsh 由 server 按 dsh_api found 追加): 账号渠道
-    accounts=账号行数, 本地渠道恒 1 (单数据源); 其余渠道按最早账号追加。
+    accounts=已登录账号行数 (token 空=退出登录, 不显示渠道页签, D1 口径 20260915),
+    本地渠道恒 1 (单数据源); 其余渠道按最早账号追加。
     Codex 数据存在时按 tab 顺序追加 (accounts=0, 无账号概念); 无数据不显示。"""
     rows = get_db().execute(
         "SELECT source ch, COUNT(*) accounts, MIN(created_at) first_at"
-        " FROM accounts GROUP BY source"
+        " FROM accounts WHERE TRIM(token) != '' GROUP BY source"
     ).fetchall()
     m = {r["ch"]: {"accounts": r["accounts"], "_at": r["first_at"]} for r in rows}
     fixed = [c for c in _CHANNEL_ORDER if c != "dsh" and (c in m or c in ("zcode", "claudecode"))]

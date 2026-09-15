@@ -150,9 +150,10 @@ def test_index_html_seven_empty_placeholders_hidden():
 
 
 def test_index_html_stats_scope_hint_div():
-    """统计页口径 hint 复用既有 .scope-hint 类 + 初始 hidden (防闪现, 备注八)."""
+    """统计页口径 hint 复用既有 .scope-hint 类 + 初始 hidden (防闪现, 备注八).
+    20260915 需求5: 追加 stats-remote 类 (无已登录远程账号时随顶部区块隐藏)."""
     html = _HTML.read_text(encoding="utf-8")
-    assert '<div class="scope-hint" id="stats-scope-hint" hidden>' in html
+    assert '<div class="scope-hint stats-remote" id="stats-scope-hint" hidden>' in html
 
 
 # ---------------------------------------------------------------------------
