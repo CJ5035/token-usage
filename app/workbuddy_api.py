@@ -116,10 +116,19 @@ def parse_request_usage_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_transport: Transport | None = None
+
+
+def set_transport(fn: Transport) -> None:
+    """注册替换传输层 (窗口通道见 workbuddy_channel.activate); 重复注册以最后一次为准."""
+    global _transport
+    _transport = fn
+
+
 class WorkBuddyAPI:
     def __init__(self, cookie_jar: str, transport: Transport | None = None):
         self.cookie = _cookie_header(cookie_jar)
-        self._transport = transport or _default_transport
+        self._transport = transport or _transport or _default_transport
 
     def _request(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         headers = {

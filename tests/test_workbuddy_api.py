@@ -157,3 +157,32 @@ def test_usage_401_does_not_fallback_to_v1():
         api.fetch_request_usage_page("2026-09-01 00:00:00", "2026-09-14 23:59:59", 50)
     assert len(calls) == 1
 
+
+def test_transport_precedence_ctor_over_global_over_default():
+    """传输层优先级: 显式构造参数 > set_transport 注册的模块级 > _default_transport."""
+    def fake_global(url, headers, body, timeout):
+        return 200, "{}", {}
+
+    def fake_explicit(url, headers, body, timeout):
+        return 200, "{}", {}
+
+    assert workbuddy_api._transport is None
+    try:
+        # 未注册全局且无显式参数 -> 回退 _default_transport
+        assert workbuddy_api.WorkBuddyAPI("session=s")._transport is workbuddy_api._default_transport
+
+        # 注册全局后, 无显式参数 -> 使用全局
+        workbuddy_api.set_transport(fake_global)
+        assert workbuddy_api.WorkBuddyAPI("session=s")._transport is fake_global
+
+        # 显式构造参数覆盖全局
+        assert (
+            workbuddy_api.WorkBuddyAPI("session=s", transport=fake_explicit)._transport
+            is fake_explicit
+        )
+    finally:
+        workbuddy_api._transport = None
+
+    # 复位后回退 _default_transport
+    assert workbuddy_api.WorkBuddyAPI("session=s")._transport is workbuddy_api._default_transport
+
