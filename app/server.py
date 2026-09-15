@@ -223,17 +223,27 @@ def _cc_cookie_header(token: str) -> str:
 
 
 def _workbuddy_auth_status(account: dict[str, Any]) -> str | None:
-    """计算 WorkBuddy 账号只读认证状态: missing/unknown/valid/required; 非 WorkBuddy 返回 None."""
+    """计算 WorkBuddy 账号只读认证状态: missing/unknown/valid/required; 非 WorkBuddy 返回 None.
+
+    - missing: 无凭证
+    - valid: 配额请求成功 (含 mapping_unverified: 请求通了但字段映射待确认)
+    - required: 明确认证失败 (auth_error), 或已拿到配额结果但持续失败 (非过渡态)
+    - unknown: 尚无配额结果 (缓存空/首刷未回) 的短暂过渡态
+    诊断原因 3: 旧实现把 "拿到结果但失败" 也判 unknown, 导致长期停在「会话待验证」黑洞.
+    """
     if account.get("source") != "workbuddy":
         return None
     if not account.get("has_token"):
         return "missing"
-    quota = (_quota_cache.get(account["id"]) or {}).get("data") or {}
-    if quota.get("auth_error"):
+    slot = _quota_cache.get(account["id"]) or {}
+    data = slot.get("data")
+    if data is None:
+        return "unknown"  # 尚无结果: 过渡态
+    if data.get("auth_error"):
         return "required"
-    if quota.get("success") or quota.get("mapping_unverified"):
+    if data.get("success") or data.get("mapping_unverified"):
         return "valid"
-    return "unknown"
+    return "required"  # 已拿到结果但失败 (如契约 400): 提示用户处理, 不停留在 unknown
 
 
 def _fetch_quota_with_cache(account_id: int, token: str, workspace_hint: str) -> dict[str, Any]:

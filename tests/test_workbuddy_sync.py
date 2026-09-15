@@ -306,3 +306,31 @@ def test_request_usage_400_does_not_fallback_to_v1():
     # 只应发一次 (v2), 不回退 v1
     assert len(calls) == 1
     assert calls[0]["version"] == 2
+
+
+def test_auth_status_failed_quota_is_required_not_unknown(monkeypatch):
+    """拿到过 quota 但失败 (非 auth) → required, 不再长期 unknown (诊断原因 3)."""
+    from app import server
+    acc = {"id": 9901, "source": "workbuddy", "has_token": True}
+    # 明确失败: success 假, 无 auth_error, 无 mapping_unverified
+    monkeypatch.setitem(server._quota_cache, 9901,
+                        {"at": 1.0, "data": {"success": False, "error": "WorkBuddy request failed (HTTP 400)"}})
+    assert server._workbuddy_auth_status(acc) == "required"
+
+
+def test_auth_status_no_quota_yet_is_unknown(monkeypatch):
+    """尚无 quota 结果 (缓存空) → unknown 过渡态."""
+    from app import server
+    acc = {"id": 9902, "source": "workbuddy", "has_token": True}
+    server._quota_cache.pop(9902, None)
+    assert server._workbuddy_auth_status(acc) == "unknown"
+
+
+def test_auth_status_mapping_unverified_still_valid(monkeypatch):
+    """请求成功但字段映射未确认仍算 valid (不回归)."""
+    from app import server
+    acc = {"id": 9903, "source": "workbuddy", "has_token": True}
+    monkeypatch.setitem(server._quota_cache, 9903,
+                        {"at": 1.0, "data": {"success": False, "mapping_unverified": True}})
+    assert server._workbuddy_auth_status(acc) == "valid"
+
