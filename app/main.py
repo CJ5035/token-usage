@@ -17,6 +17,7 @@ import time
 import webview
 
 from . import bai_channel
+from . import workbuddy_channel
 from . import dsh_api
 from . import db, server
 from .auth import _login_window_title, LoginWatcher, build_login_url
@@ -506,7 +507,8 @@ def _allow_native_popup(self, sender, args) -> None:
     拦截 (Handled=True 且不导航) 后仅用户主动点击 登录/重新登录 才出现登录窗.
     见 doc/20260904-bai-channel-popup-block.md.
     """
-    if bai_channel.is_channel_window(getattr(self, "pywebview_window", None)):
+    win = getattr(self, "pywebview_window", None)
+    if bai_channel.is_channel_window(win) or workbuddy_channel.is_channel_window(win):
         args.set_Handled(True)
         return
     args.set_Handled(False)
@@ -555,6 +557,24 @@ def main() -> None:
     if _has_bai:
         bai_channel.ensure_window()
     bai_channel.activate()
+
+    # WorkBuddy 浏览器通道: 有 WorkBuddy 账号时预建隐藏通道窗口; transport 注册始终执行
+    try:
+        _has_workbuddy = db.get_db().execute(
+            "SELECT 1 FROM accounts WHERE source = 'workbuddy' LIMIT 1"
+        ).fetchone()
+    except Exception:  # noqa: BLE001 查询失败按无 WorkBuddy 账号处理
+        _has_workbuddy = None
+    if _has_workbuddy:
+        workbuddy_channel.ensure_window()
+    workbuddy_channel.activate()
+    # 单活跃账号场景下启动即武装 uid 守卫: 活跃账号为 WorkBuddy 时以其 workspace_id (uid) 预设期望值
+    try:
+        _active = db.get_account()  # 活跃账号摘要 (无账号返回 {})
+        if _active and _active.get("source") == "workbuddy":
+            workbuddy_channel.set_expected_uid(_active.get("workspace_id") or None)
+    except Exception:  # noqa: BLE001 预设失败按无 uid 守卫 (no-op) 处理
+        pass
 
     host, port = server.start_server()
     # ZCode 本地用量启动导入 (后台线程, 读 ~/.zcode 用量库增量预热镜像表)
@@ -675,6 +695,8 @@ def main() -> None:
                         credential, workspace_hint,
                         switch=True, source="workbuddy", dedupe_key=workspace_hint,
                     )
+                workbuddy_channel.ensure_window()  # 确保 WorkBuddy 通道窗口已建 (start 后创建, 线程安全)
+                workbuddy_channel.set_expected_uid(workspace_hint or None)  # workspace_hint 即刚登录的 WorkBuddy uid, 武装守卫
                 server._quota_cache.pop(aid, None)
                 server._invalidate_overview_cache()
             elif mode == "add":
