@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import os
 import sys
@@ -296,6 +297,9 @@ def _fetch_workbuddy_quota(token: str) -> dict[str, Any]:
     except workbuddy_api.WorkBuddyAuthError as exc:
         return {"success": False, "error": str(exc), "auth_error": True}
     except Exception as exc:  # noqa: BLE001 quota failures stay in cache contract
+        logging.getLogger(__name__).warning(
+            "WorkBuddy quota fetch failed: %s: %s", type(exc).__name__, str(exc)[:200]
+        )
         return {"success": False, "error": str(exc)}
 
 

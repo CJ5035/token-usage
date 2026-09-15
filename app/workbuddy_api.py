@@ -209,7 +209,11 @@ class WorkBuddyAPI:
             data = self._data(self._post_json(REQUEST_USAGE, v2))
         except WorkBuddyAuthError:
             raise
-        except WorkBuddyAPIError:
+        except WorkBuddyAPIError as exc:
+            # 官网只有 v2 (诊断附录 A.2); 4xx 为契约/权限错误, 回退 v1 无意义且放大失败.
+            # 仅在疑似 "v2 端点不被支持" (非 4xx) 时才尝试 v1 兼容分支.
+            if "HTTP 4" in str(exc):
+                raise
             v1 = {"startTime": start_time, "endTime": end_time, "pageNum": page_num or 1, "pageSize": page_size}
             data = self._data(self._post_json(REQUEST_USAGE, v1))
             return {"rows": [parse_request_usage_row(x) for x in data.get("data", []) if isinstance(x, dict)], "total": data.get("total"), "next_page_token": "", "version": 1}

@@ -288,3 +288,21 @@ def test_quota_workbuddy_routes_through_registered_transport(tmp_workbuddy_serve
         assert window["used"] == 40
     finally:
         workbuddy_api._transport = None
+
+
+def test_request_usage_400_does_not_fallback_to_v1():
+    """v2 遇 HTTP 4xx (契约/权限) 不应回退 v1 (官网无 v1, 诊断附录 A.2)."""
+    calls = []
+
+    def transport(url, headers, body, timeout):
+        import json as _json
+        calls.append(_json.loads(body) if body else None)
+        return 400, "bad request", {}
+
+    api = workbuddy_api.WorkBuddyAPI("session=s", transport=transport)
+    import pytest as _pytest
+    with _pytest.raises(workbuddy_api.WorkBuddyAPIError):
+        api.fetch_request_usage_page("2026-09-01 00:00:00", "2026-09-14 23:59:59", 50)
+    # 只应发一次 (v2), 不回退 v1
+    assert len(calls) == 1
+    assert calls[0]["version"] == 2
