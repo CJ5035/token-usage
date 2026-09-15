@@ -24,7 +24,7 @@ function codexSummary(range, opts = {}) {
   });
   const agg = {
     request_count: 1, total_input_tokens: 100, total_output_tokens: 30,
-    total_tokens: o.tokens, avg_tps: null, total_cost_usd: null, cost_usd: null,
+    total_tokens: o.tokens, avg_tps: 25.5, total_cost_usd: 0.008125, cost_usd: 0.008125,
   };
   const row = (extra) => Object.assign({}, agg, extra);
   const week = [0, 1, 2, 3, 4, 5, 6].map((i) => day(i, i === 0 ? o.tokens : 0));
@@ -34,9 +34,9 @@ function codexSummary(range, opts = {}) {
     source_found: o.dbFound,
     has_data: o.dbFound,
     request_count_exact: false,
-    cost_available: false,
+    cost_available: true,
     cost_partial: false,
-    cost_unavailable_channels: ["codex"],
+    cost_unavailable_channels: [],
     totals: row({}),
     today: row({}),
     channels: o.dbFound ? [row({ provider_id: "codex" })] : [],

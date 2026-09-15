@@ -111,9 +111,10 @@ const I18N = {
     claudecodeCostHint: "费用为按量价目估算值（订阅套餐实际不按此扣费），未收录定价的模型按 0 计算",
     claudecodeKpiOutput: "输出 TOKEN",
     codexStatsTitle: "Codex 本地用量",
+    codexCostHint: "费用为按量价目估算值（订阅套餐实际不按此扣费），未收录定价的模型按 0 计算",
     codexMissing: "未检测到 Codex 会话",
     codexImportError: "Codex 导入失败",
-    codexSpeedUnavailable: "日志未提供请求耗时",
+    codexSpeedUnavailable: "按事件时间线推导的估算值，含少量非生成时间",
     codexCostUnavailable: "费用未知",
     codexApproxRequests: "请求数为近似值（按去重后用量事件统计）",
     codexUnknownModel: "未知模型",
@@ -234,9 +235,10 @@ const I18N = {
     claudecodeCostHint: "Costs are pay-as-you-go estimates (subscriptions are not actually billed this way); models without pricing are counted as 0",
     claudecodeKpiOutput: "Output Tokens",
     codexStatsTitle: "Codex Local Usage",
+    codexCostHint: "Costs are pay-as-you-go estimates (subscriptions are not actually billed this way); models without pricing are counted as 0",
     codexMissing: "Codex sessions not found",
     codexImportError: "Codex import failed",
-    codexSpeedUnavailable: "Request duration unavailable",
+    codexSpeedUnavailable: "Estimated value derived from event timeline, including minor non-generation time",
     codexCostUnavailable: "Cost unavailable",
     codexApproxRequests: "Approximate request count (deduped usage events)",
     codexUnknownModel: "Unknown model",
@@ -1559,7 +1561,8 @@ function codexSpeedCell(value) {
   const tip = escapeHtml(t("codexSpeedUnavailable"));
   return `<span title="${tip}" aria-label="${tip}">—</span>`;
 }
-function codexCostCell() {
+function codexCostCell(value) {
+  if (value != null) return fmtMoney(value);
   const tip = escapeHtml(t("codexCostUnavailable"));
   return `<span title="${tip}" aria-label="${tip}">—</span>`;
 }
@@ -1574,11 +1577,13 @@ function codexRenderHeads() {
   $("codex-prov-head").innerHTML = `
     <th>${t("zcodeChannel")}</th><th class="num">${t("totalRequests")}</th>
     <th class="num">${t("input")}(${t("inclCache")})</th><th class="num">${t("output")}</th>
-    <th class="num">${t("totalTokens")}</th><th class="num">${t("zcodeAvgTps")}</th>`;
+    <th class="num">${t("totalTokens")}</th><th class="num">${t("zcodeAvgTps")}</th>
+    <th class="num">${t("zcodeEstCost")}</th>`;
   $("codex-model-head").innerHTML = `
     <th>${t("zcodeChannel")}</th><th>${t("zcodeModel")}</th><th class="num">${t("totalRequests")}</th>
     <th class="num">${t("input")}(${t("inclCache")})</th><th class="num">${t("output")}</th>
-    <th class="num">${t("totalTokens")}</th><th class="num">${t("zcodeAvgTps")}</th>`;
+    <th class="num">${t("totalTokens")}</th><th class="num">${t("zcodeAvgTps")}</th>
+    <th class="num">${t("zcodeEstCost")}</th>`;
 }
 function renderCodexSummary(data) {
   const box = $("codex-stats");
@@ -1618,7 +1623,7 @@ function renderCodexSummary(data) {
     kpi("c-green", t("input"), fmtTokens(agg.total_input_tokens || 0)),
     kpi("c-slate", t("output"), fmtTokens(agg.total_output_tokens || 0)),
     kpi("c-cyan", t("zcodeAvgTps"), codexSpeedCell(agg.avg_tps)),
-    kpi("c-amber", t("colCost"), codexCostCell()),  // 中性"费用"键: Codex 费用未知, 不得标为估算
+    kpi("c-amber", `${t("colCost")}<span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>`, codexCostCell(agg.total_cost_usd)),
   ];
   kpis.innerHTML = cards(data.totals || {}).join("");     // 总量行 ← totals (唯一 KPI 行)
   const provs = data.channels || [];
@@ -1628,8 +1633,9 @@ function renderCodexSummary(data) {
     <td class="num">${fmtTokens(p.total_input_tokens)}</td>
     <td class="num">${fmtTokens(p.total_output_tokens)}</td>
     <td class="num">${fmtTokens(p.total_tokens)}</td>
-    <td class="num">${codexSpeedCell(p.avg_tps)}</td></tr>`).join("")
-    : `<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
+    <td class="num">${codexSpeedCell(p.avg_tps)}</td>
+    <td class="num">${codexCostCell(p.total_cost_usd)}</td></tr>`).join("")
+    : `<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
   const models = data.models || [];
   $("codex-model-body").innerHTML = models.length ? models.map((m) => `
     <tr><td>${escapeHtml(m.provider_id || "—")}</td>
@@ -1638,18 +1644,19 @@ function renderCodexSummary(data) {
     <td class="num">${fmtTokens(m.total_input_tokens)}</td>
     <td class="num">${fmtTokens(m.total_output_tokens)}</td>
     <td class="num">${fmtTokens(m.total_tokens)}</td>
-    <td class="num">${codexSpeedCell(m.avg_tps)}</td></tr>`).join("")
-    : `<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
+    <td class="num">${codexSpeedCell(m.avg_tps)}</td>
+    <td class="num">${codexCostCell(m.total_cost_usd)}</td></tr>`).join("")
+    : `<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:20px">${t("zcodeNoData")}</td></tr>`;
   chartCodexTrend(data.daily7 || []);
   updateStatsScopeHint();   // 成功路径末尾刷新口径 hint
 }
-/* 7 日趋势: Token + 请求两条线, 固定近 7 天窗口 (数据源 daily7, 不随 range 变化); 无费用线 (Codex 费用恒 NULL) */
+/* 7 日趋势: Token + 估算费用 + 请求三条线, 固定近 7 天窗口 (数据源 daily7, 不随 range 变化) */
 function chartCodexTrend(daily7, noAnim) {
   const canvas = $("codex-trend-chart");
   const emptyEl = $("codex-trend-empty");
   if (!canvas) return;
   if (cCodexTrend) { cCodexTrend.destroy(); cCodexTrend = null; }
-  if (!daily7 || !daily7.length || !daily7.some((d) => (d.total_tokens || 0) > 0 || (d.request_count || 0) > 0)) {
+  if (!daily7 || !daily7.length || !daily7.some((d) => (d.total_tokens || 0) > 0 || (d.request_count || 0) > 0 || (d.total_cost_usd || 0) > 0)) {
     if (emptyEl) { emptyEl.textContent = t("zcodeNoData"); emptyEl.hidden = false; }
     return;
   }
@@ -1661,7 +1668,8 @@ function chartCodexTrend(daily7, noAnim) {
       labels: daily7.map((d) => d.date.slice(5)),
       datasets: [
         { label: t("totalTokens"), data: daily7.map((d) => d.total_tokens || 0), borderColor: cc.reasoning, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y" },
-        { label: t("totalRequests"), data: daily7.map((d) => d.request_count || 0), borderColor: cc.output, borderWidth: 2, pointRadius: 1.5, tension: 0.3, borderDash: [4, 3], yAxisID: "y1" },
+        { label: t("zcodeEstCost"), data: daily7.map((d) => d.total_cost_usd || 0), borderColor: cc.input, borderWidth: 2, pointRadius: 1.5, tension: 0.3, yAxisID: "y1" },
+        { label: t("totalRequests"), data: daily7.map((d) => d.request_count || 0), borderColor: cc.output, borderWidth: 2, pointRadius: 1.5, tension: 0.3, borderDash: [4, 3], yAxisID: "y2" },
       ],
     },
     options: {
@@ -1670,12 +1678,13 @@ function chartCodexTrend(daily7, noAnim) {
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: { labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 }, color: cssVar("--text2") } },
-        tooltip: { ...chartThemeOptions().tooltip, callbacks: { label: (it) => ` ${it.dataset.label}: ${it.dataset.yAxisID === "y" ? fmtTokens(it.parsed.y) : fmtInt(it.parsed.y)}` } },
+        tooltip: { ...chartThemeOptions().tooltip, callbacks: { label: (it) => ` ${it.dataset.label}: ${it.dataset.yAxisID === "y" ? fmtTokens(it.parsed.y) : it.dataset.yAxisID === "y1" ? fmtMoney(it.parsed.y) : fmtInt(it.parsed.y)}` } },
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, maxTicksLimit: 7 } },
         y: { position: "left", grid: { color: cssVar("--grid") }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtTokens(v) } },
-        y1: { position: "right", grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtInt(v) } },
+        y1: { position: "right", grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtMoney(v) } },
+        y2: { position: "right", display: false, grid: { display: false }, ticks: { color: cssVar("--text3"), font: { size: 10 }, callback: (v) => fmtInt(v) } },
       },
     },
   });
@@ -1697,7 +1706,7 @@ function refreshCodexVisible() {
 
 /* ---------------- 首页: 用量概览 6 格 ---------------- */
 function renderOverview(totals, source) {
-  const isEst = ["bai", "zcode", "claudecode"].includes(source);   // R6: 费用估算徽章扩展至本地渠道
+  const isEst = ["bai", "zcode", "claudecode", "codex"].includes(source);   // R6: 费用估算徽章扩展至本地渠道
   const isDsh = source === "dsh";
   /* T5 codex: 后端提供显式 total_tokens (缓存读/reasoning 是子项不二次相加),
      优先采用; 其余渠道无该键走原 input+output+reasoning 和式 (行为不变) */
@@ -1766,7 +1775,7 @@ function chartToday(trend, noAnim) {
 
 /* ---------------- 统计页: 4 总卡 + 6 明细 ---------------- */
 function renderStatsTotal(totals, source) {
-  const isEst = ["bai", "zcode", "claudecode"].includes(source);   // R6: 费用估算徽章扩展至本地渠道
+  const isEst = ["bai", "zcode", "claudecode", "codex"].includes(source);   // R6: 费用估算徽章扩展至本地渠道
   const totalTokens = totals.total_input_tokens + totals.total_output_tokens + totals.total_reasoning_tokens;
   const cards = [
     { cls: "c-amber", l: t("totalCost") + (isEst ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: fmtMoney(totals.total_cost_usd), s: `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
