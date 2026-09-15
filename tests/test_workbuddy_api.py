@@ -186,3 +186,35 @@ def test_transport_precedence_ctor_over_global_over_default():
     # 复位后回退 _default_transport
     assert workbuddy_api.WorkBuddyAPI("session=s")._transport is workbuddy_api._default_transport
 
+
+def test_paid_packages_sends_numeric_status_enum():
+    """官网契约: Status 是数字枚举 [0,3], 不是字符串 ['valid'] (诊断附录 A.3)."""
+    captured = {}
+
+    def transport(url, headers, body, timeout):
+        import json as _json
+        captured["url"] = url
+        captured["body"] = _json.loads(body) if body else None
+        return 200, '{"code":0,"data":{"Accounts":[]}}', {}
+
+    api = workbuddy_api.WorkBuddyAPI("session=s", transport=transport)
+    api.fetch_paid_packages()
+    assert captured["url"].endswith("/billing/meter/get-user-resource-paid-packages")
+    assert captured["body"]["Status"] == [0, 3]
+    assert captured["body"]["PageSize"] == 200
+
+
+def test_free_packages_sends_numeric_status_enum():
+    captured = {}
+
+    def transport(url, headers, body, timeout):
+        import json as _json
+        captured["body"] = _json.loads(body) if body else None
+        return 200, '{"code":0,"data":{"Accounts":[]}}', {}
+
+    api = workbuddy_api.WorkBuddyAPI("session=s", transport=transport)
+    api.fetch_free_packages()
+    assert captured["body"]["Status"] == [0, 3]
+    assert captured["body"]["PageSize"] == 200
+
+
