@@ -411,6 +411,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
          last_model TEXT, model_revision INTEGER NOT NULL DEFAULT 0,
          has_turn_context INTEGER NOT NULL DEFAULT 0, last_event_seq INTEGER NOT NULL DEFAULT 0,
          last_token_usage_fingerprint TEXT,
+         last_request_start_ts REAL,
          parser_version INTEGER NOT NULL DEFAULT 0,
          updated_at TEXT
         );
@@ -466,6 +467,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         "has_turn_context": "has_turn_context INTEGER NOT NULL DEFAULT 0",
         "last_event_seq": "last_event_seq INTEGER NOT NULL DEFAULT 0",
         "last_token_usage_fingerprint": "last_token_usage_fingerprint TEXT",
+        "last_request_start_ts": "last_request_start_ts REAL",
         "parser_version": "parser_version INTEGER NOT NULL DEFAULT 0",
         "updated_at": "updated_at TEXT",
     })
@@ -2446,7 +2448,7 @@ def claudecode_last_import_at() -> Optional[str]:
 
 _REPORT_RANGE_DAYS = {"7d": 6, "30d": 29}  # 自然日窗口: 含今天共 N 天
 _CHANNEL_ORDER = ["opencode", "bai", "commandcode", "zcode", "claudecode", "workbuddy", "dsh"]
-_LOCAL_EST_CHANNELS = {"bai", "zcode", "claudecode"}  # 费用为估算的渠道 (spec v6 est-badge)
+_LOCAL_EST_CHANNELS = {"bai", "zcode", "claudecode", "codex"}  # 费用为估算的渠道 (spec v6 est-badge)
 
 
 def _local_day_utc_start(d) -> str:
@@ -2678,8 +2680,8 @@ def _win_cc(where: str, params: list[Any]) -> dict[str, Any]:
 def _win_codex(where: str, params: list[Any]) -> dict[str, Any]:
     """codex_usage 窗口行 (需求 §6): 计数用有效用量 count, total 用 SUM(total_tokens)。
 
-    NULL 不是 0: 有数据费用未知 → cost=None (不以 0 代替) 并标 cost_partial;
-    空窗口 cost=0.0。request_count_exact 按事件模式: 含 token_count 兼容模式
+    估算费用: SUM(cost_raw)/1e8 (无数据 0.0); cost_available 按 SUM(cost_available)>0;
+    cost_partial=False (费用已估算)。request_count_exact 按事件模式: 含 token_count 兼容模式
     记录即 false, 范围为空 false。表无别名, 谓词用 _report_range_sql(range_, 'started_at')。
     """
     row = get_db().execute(
@@ -2687,11 +2689,14 @@ def _win_codex(where: str, params: list[Any]) -> dict[str, Any]:
         " SUM(output_tokens) output_tokens, SUM(cache_read_tokens) cache_read_tokens,"
         " SUM(cache_write_tokens) cache_write_tokens, SUM(reasoning_tokens) reasoning_tokens,"
         " COUNT(*) requests,"
+        " COALESCE(SUM(cost_raw), 0) / 1e8 cost,"
+        " COALESCE(SUM(cost_available), 0) cost_rows,"
         " CASE WHEN COUNT(*) > 0 AND MIN(request_count_exact) = 1 THEN 1 ELSE 0 END exact"
         " FROM codex_usage WHERE " + where,
         params,
     ).fetchone()
     requests = row["requests"] or 0
+    cost_rows = int(row["cost_rows"] or 0)
     return {"tokens": row["tokens"] or 0,
             "input_tokens": row["input_tokens"] or 0,
             "output_tokens": row["output_tokens"] or 0,
@@ -2699,9 +2704,9 @@ def _win_codex(where: str, params: list[Any]) -> dict[str, Any]:
             "cache_write_tokens": row["cache_write_tokens"] or 0,
             "reasoning_tokens": row["reasoning_tokens"] or 0,
             "requests": requests,
-            "cost": None if requests else 0.0,
-            "cost_available": False,          # Codex 费用恒 NULL
-            "cost_partial": requests > 0,     # 有用量但费用未知 → 不完整
+            "cost": (row["cost"] or 0.0) if requests else 0.0,
+            "cost_available": cost_rows > 0,
+            "cost_partial": False,
             "request_count_exact": bool(row["exact"])}
 
 
@@ -2882,13 +2887,14 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
         ).fetchone()
         if r and ((r["tokens"] or 0) or (r["requests"] or 0)):
             agg[ch] = dict(r)
-    # Codex 行 (费用未知 → NULL; request_count_exact 按事件模式聚合)
+    # Codex 行 (费用估算; request_count_exact 按事件模式聚合)
     range_sql, range_params = _report_range_sql(range_, "x.started_at")
     r = get_db().execute(
         f"SELECT {exprs_t['codex']} tokens, SUM(x.input_tokens) input,"
         f" SUM(x.output_tokens) output, SUM(x.cache_read_tokens) cache_read,"
         f" SUM(x.cache_write_tokens) cache_write, SUM(x.reasoning_tokens) reasoning,"
-        f" COUNT(*) requests, NULL AS cost,"
+        f" COUNT(*) requests, COALESCE(SUM(x.cost_raw), 0) / 1e8 AS cost,"
+        f" COALESCE(SUM(x.cost_available), 0) AS cost_rows,"
         f" CASE WHEN COUNT(*) > 0 AND MIN(x.request_count_exact) = 1"
         f" THEN 1 ELSE 0 END request_count_exact"
         f" FROM codex_usage x WHERE {range_sql}",
@@ -2917,8 +2923,9 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
             cost_available, cost_partial = False, True
             exact = requests > 0
         elif ch == "codex":
-            cost = None                                  # NULL 不是 0
-            cost_available, cost_partial = False, True
+            cost = a["cost"] or 0.0
+            cost_rows = int(a.get("cost_rows") or 0)
+            cost_available, cost_partial = cost_rows > 0, False
             exact = bool(a.get("request_count_exact"))
         else:
             cost = a["cost"] or 0.0
@@ -3441,8 +3448,8 @@ def _codex_upsert_progress(conn: sqlite3.Connection, path: str,
         """INSERT INTO codex_file_progress
            (path, offset, file_size, mtime_ns, content_fingerprint, event_mode,
             last_model, model_revision, has_turn_context, last_event_seq,
-            last_token_usage_fingerprint, parser_version, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            last_token_usage_fingerprint, last_request_start_ts, parser_version, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(path) DO UPDATE SET
              offset = excluded.offset, file_size = excluded.file_size,
              mtime_ns = excluded.mtime_ns,
@@ -3452,6 +3459,7 @@ def _codex_upsert_progress(conn: sqlite3.Connection, path: str,
              has_turn_context = excluded.has_turn_context,
              last_event_seq = excluded.last_event_seq,
              last_token_usage_fingerprint = excluded.last_token_usage_fingerprint,
+             last_request_start_ts = excluded.last_request_start_ts,
              parser_version = excluded.parser_version,
              updated_at = excluded.updated_at""",
         (path, int(progress.get("offset") or 0), int(progress.get("file_size") or 0),
@@ -3461,6 +3469,7 @@ def _codex_upsert_progress(conn: sqlite3.Connection, path: str,
          1 if progress.get("has_turn_context") else 0,
          int(progress.get("last_event_seq") or 0),
          progress.get("last_token_usage_fingerprint"),
+         float(progress["last_request_start_ts"]) if progress.get("last_request_start_ts") is not None else None,
          int(progress.get("parser_version") or 0), progress.get("updated_at")),
     )
 
@@ -3536,6 +3545,7 @@ def get_codex_file_progress_all() -> dict[str, "FileProgress"]:
             "has_turn_context": bool(r["has_turn_context"]),
             "last_event_seq": int(r["last_event_seq"] or 0),
             "last_token_usage_fingerprint": r["last_token_usage_fingerprint"],
+            "last_request_start_ts": float(r["last_request_start_ts"]) if r["last_request_start_ts"] is not None else None,
             "parser_version": int(r["parser_version"] or 0),
             "updated_at": r["updated_at"],
         }
@@ -3579,7 +3589,7 @@ def update_codex_import_state(**fields: Any) -> None:
 
 
 # 公共聚合列 (简报固定 SELECT 原文, 供 totals/渠道/模型/会话分组复用):
-# 未命中输入 = SUM(MAX(input-cache_read,0)); 费用恒 NULL; 速度 AVG/MAX/COUNT
+# 未命中输入 = SUM(MAX(input-cache_read,0)); 估算费用 = SUM(cost_raw)/1e8; 速度 AVG/MAX/COUNT
 # (无样本时 NULL/NULL/0)。总量口径 SUM(total_tokens), 缓存读/写与 reasoning
 # 是子项不二次相加。
 _CODEX_AGG_COLS = """
@@ -3592,7 +3602,9 @@ _CODEX_AGG_COLS = """
  COALESCE(SUM(cache_read_tokens),0) AS cache_hit_tokens,
  COALESCE(SUM(cache_write_tokens),0) AS cache_write_tokens,
  AVG(speed_tps) AS avg_tps, MAX(speed_tps) AS max_tps,
- COUNT(speed_tps) AS speed_samples, NULL AS total_cost_usd"""
+ COUNT(speed_tps) AS speed_samples,
+ COALESCE(SUM(cost_raw), 0) / 1e8 AS total_cost_usd,
+ COALESCE(SUM(cost_available), 0) AS cost_rows"""
 
 
 def _codex_hit_rate(cache_hit: int, total_input: int, cache_write: int) -> float:
@@ -3603,12 +3615,15 @@ def _codex_hit_rate(cache_hit: int, total_input: int, cache_write: int) -> float
 
 def _codex_totals_dict(row: sqlite3.Row) -> dict[str, Any]:
     """聚合行 → 固定键清单 dict (17 键, totals/channel/model/session 复用同一
-    构造路径; NULL 速度保持 None, 费用恒 None/速度来源聚合恒 None/可用性恒 False)。"""
+    构造路径; NULL 速度保持 None; 估算费用 total_cost_usd / cost_usd 带出, 存在回填行时 cost_available 为 True)。"""
     avg_tps = row["avg_tps"]
     max_tps = row["max_tps"]
     total_input = int(row["total_input_tokens"] or 0)
     cache_hit = int(row["cache_hit_tokens"] or 0)
     cw = int(row["cache_write_tokens"] or 0)
+    cost_rows = int(row["cost_rows"] or 0) if "cost_rows" in row.keys() else 0
+    total_cost = float(row["total_cost_usd"]) if row["total_cost_usd"] is not None else 0.0
+    cost_val = total_cost if cost_rows > 0 else None
     return {
         "request_count": int(row["request_count"] or 0),
         "session_count": int(row["session_count"] or 0),
@@ -3623,9 +3638,9 @@ def _codex_totals_dict(row: sqlite3.Row) -> dict[str, Any]:
         "max_tps": round(float(max_tps), 2) if max_tps is not None else None,
         "speed_samples": int(row["speed_samples"] or 0),
         "speed_source": None,    # 聚合口径不携带单条速度来源, 恒 None
-        "total_cost_usd": None,  # Codex 费用恒 NULL, 不以 0 代替
-        "cost_usd": None,
-        "cost_available": False,  # 库列写死 0 (false)
+        "total_cost_usd": cost_val,
+        "cost_usd": cost_val,
+        "cost_available": cost_rows > 0,
         "hit_rate": _codex_hit_rate(cache_hit, total_input, cw),
     }
 
@@ -3638,6 +3653,52 @@ def codex_totals(period: str = "30d") -> dict[str, Any]:
         f"SELECT {_CODEX_AGG_COLS} FROM codex_usage WHERE {where}", params
     ).fetchone()
     return _codex_totals_dict(row)
+
+
+def backfill_codex_cost(pricing: Any = None) -> int:
+    """按模型定价表回填 codex_usage 中 cost_available = 0 的记录费用。
+
+    未命中定价表的模型 cost_raw = 0 且 cost_available = 1 (表示已按当前定价表处理)。
+    幂等: 已回填行 cost_available = 1, 重复调用跳过。
+    """
+    if not pricing:
+        return 0
+    from .zcode_api import estimate_cost_raw
+
+    pricing_models = pricing
+    if isinstance(pricing, dict):
+        if "models" in pricing and isinstance(pricing["models"], list):
+            pricing_models = pricing["models"]
+        elif all(isinstance(v, dict) for v in pricing.values()):
+            pricing_models = list(pricing.values())
+
+    with _DB_LOCK:
+        conn = get_db()
+        rows = conn.execute(
+            """SELECT id, model, input_tokens, output_tokens,
+                      cache_read_tokens, cache_write_tokens
+               FROM codex_usage
+               WHERE cost_available = 0"""
+        ).fetchall()
+        if not rows:
+            return 0
+        updates = []
+        for r in rows:
+            cost_raw = estimate_cost_raw(
+                r["model"] or "",
+                int(r["input_tokens"] or 0),
+                int(r["output_tokens"] or 0),
+                int(r["cache_read_tokens"] or 0),
+                int(r["cache_write_tokens"] or 0),
+                pricing_models,
+            )
+            updates.append((cost_raw, r["id"]))
+        conn.executemany(
+            "UPDATE codex_usage SET cost_raw = ?, cost_available = 1 WHERE id = ?",
+            updates,
+        )
+        conn.commit()
+        return len(updates)
 
 
 def codex_daily(days: int = 7) -> list[dict[str, Any]]:

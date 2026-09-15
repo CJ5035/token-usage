@@ -256,3 +256,150 @@ def test_codex_batch_internal_duplicate_record_last_wins(tmp_codex_db, codex_row
     assert t["total_tokens"] == 250
     assert t["total_input_tokens"] == 200
     assert t["uncached_input_tokens"] == 160  # MAX(200-40, 0), 不累加首条
+
+
+def test_codex_file_progress_last_request_start_ts(tmp_codex_db, codex_row):
+    b = {
+        "path": "timeline_test.jsonl",
+        "rows": [codex_row()],
+        "progress": {
+            "offset": 100,
+            "file_size": 200,
+            "mtime_ns": 123456,
+            "content_fingerprint": "fp_test",
+            "event_mode": "token_count",
+            "last_model": "gpt-5",
+            "model_revision": 1,
+            "has_turn_context": True,
+            "last_event_seq": 5,
+            "last_token_usage_fingerprint": "tfp",
+            "last_request_start_ts": 1726000000.5,
+            "parser_version": 2,
+            "updated_at": "2026-09-14T00:00:00Z",
+        },
+        "warnings": [],
+    }
+    assert db.commit_codex_batch(b) == 1
+    all_progress = db.get_codex_file_progress_all()
+    assert "timeline_test.jsonl" in all_progress
+    prog = all_progress["timeline_test.jsonl"]
+    assert prog["last_request_start_ts"] == 1726000000.5
+    assert prog["parser_version"] == 2
+
+
+def test_codex_file_progress_migration_adds_column(tmp_path, monkeypatch):
+    import sqlite3
+    monkeypatch.setattr(db, "data_dir", lambda: str(tmp_path))
+    db.close_db()
+
+    db_file = str(tmp_path / "app.db")
+    conn = sqlite3.connect(db_file)
+    # 创建没有 last_request_start_ts 列的旧版表
+    conn.execute(
+        """CREATE TABLE codex_file_progress (
+             path TEXT PRIMARY KEY, offset INTEGER NOT NULL DEFAULT 0,
+             file_size INTEGER NOT NULL DEFAULT 0, mtime_ns INTEGER NOT NULL DEFAULT 0,
+             content_fingerprint TEXT NOT NULL DEFAULT '', event_mode TEXT NOT NULL DEFAULT '',
+             last_model TEXT, model_revision INTEGER NOT NULL DEFAULT 0,
+             has_turn_context INTEGER NOT NULL DEFAULT 0, last_event_seq INTEGER NOT NULL DEFAULT 0,
+             last_token_usage_fingerprint TEXT,
+             parser_version INTEGER NOT NULL DEFAULT 0,
+             updated_at TEXT
+        );"""
+    )
+    conn.commit()
+    conn.close()
+
+    # 初始化 schema 会执行 _ensure_table_columns 自动增列
+    conn = db.get_db()
+    columns = [r[1] for r in conn.execute("PRAGMA table_info(codex_file_progress)").fetchall()]
+    assert "last_request_start_ts" in columns
+    db.close_db()
+
+
+def test_codex_backfill_cost_and_idempotence(tmp_codex_db, codex_row):
+    pricing = [
+        {
+            "modelId": "gpt-5",
+            "inputCostPerMillion": 2.5,
+            "outputCostPerMillion": 10.0,
+            "cacheReadCostPerMillion": 1.25,
+            "cacheCreationCostPerMillion": 3.75,
+        }
+    ]
+    # row 1: 已知模型 gpt-5
+    # row 2: 未收录模型 unknown-model
+    row1 = codex_row("s:1", model="gpt-5", input_tokens=1000, output_tokens=500,
+                     cache_read_tokens=200, cache_write_tokens=100, cost_available=0)
+    row2 = codex_row("s:2", model="unknown-model", input_tokens=500, output_tokens=200,
+                     cache_read_tokens=0, cache_write_tokens=0, cost_available=0)
+
+    assert db.import_codex_usage([row1, row2]) == 2
+
+    # 空定价表调用返回 0
+    assert db.backfill_codex_cost(None) == 0
+    assert db.backfill_codex_cost([]) == 0
+
+    # 回填前：cost_available 为 False，total_cost_usd 为 None
+    t_before = db.codex_totals("all")
+    assert t_before["cost_available"] is False
+    assert t_before["total_cost_usd"] is None
+
+    # 执行回填
+    updated = db.backfill_codex_cost(pricing)
+    assert updated == 2
+
+    # 验证 row1 费用计算准确:
+    # usd = (1000 * 2.5 + 500 * 10 + 200 * 1.25 + 100 * 3.75) / 1e6 = 0.008125
+    # cost_raw = 812500
+    r1 = db.get_db().execute("SELECT cost_raw, cost_available FROM codex_usage WHERE id = 's:1'").fetchone()
+    assert r1["cost_raw"] == 812500
+    assert r1["cost_available"] == 1
+
+    # 验证 row2 未知模型: cost_raw=0, cost_available=1
+    r2 = db.get_db().execute("SELECT cost_raw, cost_available FROM codex_usage WHERE id = 's:2'").fetchone()
+    assert r2["cost_raw"] == 0
+    assert r2["cost_available"] == 1
+
+    # 验证幂等性: 再次执行回填不更新任何行
+    assert db.backfill_codex_cost(pricing) == 0
+
+    # 验证 codex_totals 聚合值
+    t_after = db.codex_totals("all")
+    assert t_after["cost_available"] is True
+    assert t_after["total_cost_usd"] == pytest.approx(0.008125, rel=1e-5)
+    assert t_after["cost_usd"] == pytest.approx(0.008125, rel=1e-5)
+
+
+def test_codex_aggregation_channels_and_windows(tmp_codex_db, codex_row):
+    pricing = [
+        {
+            "modelId": "gpt-5",
+            "inputCostPerMillion": 2.0,
+            "outputCostPerMillion": 5.0,
+            "cacheReadCostPerMillion": 0.0,
+            "cacheCreationCostPerMillion": 0.0,
+        }
+    ]
+    # 创建今天的一条数据
+    row = codex_row("s:1", model="gpt-5", input_tokens=1000, output_tokens=1000, cost_available=0)
+    db.import_codex_usage([row])
+    db.backfill_codex_cost(pricing)
+
+    # 1. _win_codex: 返回聚合估算费用，cost_available=True, cost_partial=False
+    where, params = db._report_range_sql("all", "started_at")
+    w = db._win_codex(where, params)
+    assert w["cost_available"] is True
+    assert w["cost_partial"] is False
+    # usd = (1000*2 + 1000*5) / 1e6 = 0.007
+    assert w["cost"] == pytest.approx(0.007, rel=1e-5)
+
+    # 2. report_channels: codex 渠道行包含 cost, cost_available=True, estimated=True
+    channels = db.report_channels("all")
+    codex_ch = next((c for c in channels if c["channel"] == "codex"), None)
+    assert codex_ch is not None
+    assert codex_ch["cost"] == pytest.approx(0.007, rel=1e-5)
+    assert codex_ch["cost_available"] is True
+    assert codex_ch["cost_partial"] is False
+    assert codex_ch["estimated"] is True
+
