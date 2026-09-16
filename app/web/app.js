@@ -19,6 +19,7 @@ const I18N = {
     todayTotalReq: "今日总请求", todayTotalTokens: "今日总 TOKEN", todayTotalCost: "今日总费用", todayTotalInput: "今日总输入",
     activeAccount: "当前活跃", quotaNotReady: "配额获取中…",
     overviewPanel: "账户总览面板", overviewPanelDesc: "侧边栏显示多账户总览入口，聚合展示各账户配额与用量",
+    welcomePage: "启动登录页", welcomePageDesc: "未登录且无本地数据时，启动显示登录引导页；也可在引导页勾选「下次启动隐藏」",
     setUpdate: "软件更新", currentVersion: "当前版本", checkUpdate: "检查更新", checkUpdateDesc: "检查 GitHub 上是否有新版本", checkUpdateBtn: "检查更新",
     checkingUpdate: "检查中…", updateFound: "发现新版本", updateNone: "已是最新版本", updateFailed: "检查更新失败", goDownload: "前往下载",
     colTime: "时间", colModel: "模型", colInput: "输入", colOutput: "输出",
@@ -55,6 +56,7 @@ const I18N = {
     loginBtn: "立即登录",
     loginNote: "点击后将打开 OpenCode Go 官方授权页完成登录。",
     quitApp: "退出应用", manageLocalData: "管理本地数据",
+    skipWelcome: "下次启动隐藏", skipWelcomeSaved: "已记住：下次启动将隐藏此页面",
     rolling: "滚动用量", weekly: "每周用量", monthly: "每月用量",
     remaining: "剩余", used: "已用", resetsIn: "重置于",
     hitRate: "缓存命中率", hitAmount: "缓存命中量", totalTokens: "总 TOKEN 消耗",
@@ -65,7 +67,7 @@ const I18N = {
     wbRemoteCreditsOnly: "远程积分记录，token/费用未知",
     hit: "命中", miss: "未命中", pctOfInput: "占输入", inclCache: "含缓存命中",
     currentRange: "当前范围", avgPer: "均", perReq: "/次", dedup: "去重 sessionID",
-    noData: "暂无记录", loadFailed: "加载失败", requestTimeout: "请求超时，请检查网络后重试", retry: "重试", totalN: "共", items: "条",
+    noData: "暂无记录", statsEmptyHint: "暂无用量数据", loadFailed: "加载失败", requestTimeout: "请求超时，请检查网络后重试", retry: "重试", totalN: "共", items: "条",
     pageOf: "第", ofPages: "页",
     loggedIn: "已登录", notLoggedIn: "未登录", connected: "已连接", notConnected: "未连接",
     lastSync: "上次同步", records: "条记录", updatedAt: "更新于",
@@ -149,6 +151,7 @@ const I18N = {
     todayTotalReq: "Today Requests", todayTotalTokens: "Today Tokens", todayTotalCost: "Today Cost", todayTotalInput: "Today Input",
     activeAccount: "Active", quotaNotReady: "Fetching quota…",
     overviewPanel: "Accounts Panel", overviewPanelDesc: "Show multi-account overview entry in sidebar",
+    welcomePage: "Startup login page", welcomePageDesc: "Show the login guide page on startup when not logged in and no local data; can also be hidden via \"Hide on next launch\" on the guide page",
     setUpdate: "Software Update", currentVersion: "Current Version", checkUpdate: "Check Updates", checkUpdateDesc: "Check GitHub for new versions", checkUpdateBtn: "Check Updates",
     checkingUpdate: "Checking…", updateFound: "New Version Available", updateNone: "You're up to date", updateFailed: "Check failed", goDownload: "Go to Download",
     colTime: "Time", colModel: "Model", colInput: "Input", colOutput: "Output",
@@ -185,6 +188,7 @@ const I18N = {
     loginBtn: "Login Now",
     loginNote: "Clicking opens the official OpenCode Go authorization page.",
     quitApp: "Quit App", manageLocalData: "Manage local data",
+    skipWelcome: "Hide on next launch", skipWelcomeSaved: "Got it — this page will be hidden on next launch",
     rolling: "Rolling Usage", weekly: "Weekly Usage", monthly: "Monthly Usage",
     remaining: "Remaining", used: "Used", resetsIn: "Resets in",
     hitRate: "Cache Hit Rate", hitAmount: "Cache Hits", totalTokens: "Total Tokens",
@@ -195,7 +199,7 @@ const I18N = {
     wbRemoteCreditsOnly: "Remote credits only; tokens and cost unavailable",
     hit: "hit", miss: "missed", pctOfInput: "of input", inclCache: "incl. cache hits",
     currentRange: "current range", avgPer: "avg", perReq: "/req", dedup: "dedup sessionID",
-    noData: "No records", loadFailed: "Failed to load", requestTimeout: "Request timed out. Check your network and retry.", retry: "Retry", totalN: "Total", items: "records",
+    noData: "No records", statsEmptyHint: "No usage data yet", loadFailed: "Failed to load", requestTimeout: "Request timed out. Check your network and retry.", retry: "Retry", totalN: "Total", items: "records",
     pageOf: "Page", ofPages: "of",
     loggedIn: "Logged in", notLoggedIn: "Not logged in", connected: "Connected", notConnected: "Not connected",
     lastSync: "Last sync", records: "records", updatedAt: "Updated",
@@ -1093,14 +1097,15 @@ function renderZcodeSummary(data) {
   const tables = $("zcode-tables");
   const trendBox = $("zcode-trend-box");
   if (!data || data.db_found === false) {
-    // 未检测到本地库: 仅显示引导文案, 隐藏 KPI/表格/图
-    box.hidden = false;
+    // 未检测到本地库: 整卡隐藏 (20260915 需求5: 检测不到自动隐藏), 内部状态复位防残留
+    box.hidden = true;
     missing.hidden = false;
     kpis.hidden = true;
     kpis.innerHTML = "";
     tables.hidden = true;
     trendBox.hidden = true;
     if (cZcodeTrend) { cZcodeTrend.destroy(); cZcodeTrend = null; }
+    updateStatsEmptyState();
     return;
   }
   box.hidden = false;
@@ -1308,9 +1313,11 @@ function renderDsh(data) {
   if (!box) return;
   const missing = $("dsh-missing"), body = $("dsh-body");
   if (!data || data.found === false) {
-    box.hidden = false; missing.hidden = false; body.hidden = true;
+    // 未检测到本地数据: 整卡隐藏 (20260915 需求5), 状态条/图表随卡片隐藏
+    box.hidden = true; missing.hidden = false; body.hidden = true;
     renderDshStatus(data);
     destroyDshTrend();
+    updateStatsEmptyState();
     return;
   }
   box.hidden = false; missing.hidden = true; body.hidden = false;
@@ -1487,14 +1494,15 @@ function renderClaudecodeSummary(data) {
   const tables = $("claudecode-tables");
   const trendBox = $("claudecode-trend-box");
   if (!data || data.db_found === false) {
-    // 未检测到本地数据目录: 仅显示引导文案, 隐藏 KPI/表格/图
-    box.hidden = false;
+    // 未检测到本地数据目录: 整卡隐藏 (20260915 需求5: 检测不到自动隐藏), 内部状态复位防残留
+    box.hidden = true;
     missing.hidden = false;
     kpis.hidden = true;
     kpis.innerHTML = "";
     tables.hidden = true;
     trendBox.hidden = true;
     if (cClaudecodeTrend) { cClaudecodeTrend.destroy(); cClaudecodeTrend = null; }
+    updateStatsEmptyState();
     return;
   }
   box.hidden = false;
@@ -1675,8 +1683,8 @@ function renderCodexSummary(data) {
   const tables = box.querySelector(".codex-table-scroll");
   const chartBox = box.querySelector(".chart-box");
   if (!data || data.db_found === false) {
-    // 真正 missing (无 source 目录且镜像表无历史): 仅显示空态文案, 隐藏 KPI/表格/图
-    box.hidden = false;
+    // 真正 missing (无 source 目录且镜像表无历史): 整卡隐藏 (20260915 需求5), 内部状态复位防残留
+    box.hidden = true;
     missing.hidden = false;
     kpis.hidden = true;
     kpis.innerHTML = "";
@@ -1685,6 +1693,7 @@ function renderCodexSummary(data) {
     tables.hidden = true;
     chartBox.hidden = true;
     if (cCodexTrend) { cCodexTrend.destroy(); cCodexTrend = null; }
+    updateStatsEmptyState();
     return;
   }
   // 有 source 无 records → 零 KPI; 无 source 有历史 → 照常展示历史
@@ -2149,7 +2158,7 @@ function modelIcon(m) {
 /* EVOLUTION-4: 切主题图标统一入口 — 统计页模型图重渲 (noAnim) + 四张表体图标原地换
    src (不重建 DOM, 记录页滚动/分页/筛选态天然保持); 仅由 rerenderCharts 末尾调用 */
 function refreshIcons() {
-  if (!document.getElementById("page-stats").hidden && state.data) chartModel(state.data.models, true);
+  if (!document.getElementById("page-stats").hidden && state.data && !statsRemoteHidden) chartModel(state.data.models, true);
   const dark = document.documentElement.dataset.theme === "dark";
   for (const id of ["zcode-model-body", "dsh-model-body", "claudecode-model-body", "codex-model-body", "records-body"]) {
     document.getElementById(id)?.querySelectorAll("img[alt]").forEach((img) => {
@@ -2160,6 +2169,20 @@ function refreshIcons() {
 }
 
 /* ---------------- 组装 ---------------- */
+/* stats 顶部远程统计区块是否隐藏 (D3 口径 20260915): 无任何已登录远程账号
+   (opencode/bai/commandcode) 时置 true; rerenderCharts/refreshIcons 据此跳过
+   重建 cModel/cTrend, 防切主题在 hidden canvas 上重建 */
+let statsRemoteHidden = false;
+/* stats 页空态兜底 (20260915 需求5): 顶部远程区块与四个本地区块全部隐藏时
+   显示一条提示, 避免整页空白; 由 renderAll 与四个本地渲染函数在显隐变更后调用 */
+function updateStatsEmptyState() {
+  const empty = $("stats-empty");
+  if (!empty) return;
+  const remoteHidden = $("stats-total-cards") ? $("stats-total-cards").hidden : true;
+  const allLocalHidden = ["zcode-stats", "dsh-stats", "claudecode-stats", "codex-stats"]
+    .every((id) => { const el = $(id); return !el || el.hidden; });
+  empty.hidden = !(remoteHidden && allLocalHidden);
+}
 function renderAll(data) {
   state.data = data;
   if (data.exchange_rate?.usd_cny) state.exchangeRate = data.exchange_rate.usd_cny;
@@ -2171,11 +2194,21 @@ function renderAll(data) {
   // 只重建当前可见页面的图表 (hidden 页面的 canvas 尺寸为 0, 创建会失败)
   if (homeVisible) chartToday(data.today_trend);
   if (statsVisible) {
-    renderStatsTotal(data.totals, data.account?.source);
-    renderDetail6(data.totals);
-    chartModel(data.models);
-    chartTrend(data.trend);
-    $("trend-hint").textContent = t("trendHint");
+    // D3 口径 (20260915 需求5): 无任何已登录远程账号时隐藏顶部远程统计区块
+    // (KPI/Token构成/模型用量/趋势), 图表销毁防切主题在 hidden canvas 上重建
+    statsRemoteHidden = !(Number(data.accounts_logged_in) > 0);
+    document.querySelectorAll("#page-stats .stats-remote").forEach((el) => { el.hidden = statsRemoteHidden; });
+    if (statsRemoteHidden) {
+      if (cModel) { cModel.destroy(); cModel = null; }
+      if (cTrend) { cTrend.destroy(); cTrend = null; }
+    } else {
+      renderStatsTotal(data.totals, data.account?.source);
+      renderDetail6(data.totals);
+      chartModel(data.models);
+      chartTrend(data.trend);
+      $("trend-hint").textContent = t("trendHint");
+    }
+    updateStatsEmptyState();
   }
   syncTopBar(data);   // EVOLUTION-9: 顶栏段提取 (下方), renderAll 对外行为不变
   renderSyncBanner(data.progress, data.codex);
@@ -2463,6 +2496,7 @@ async function renderSettings() {
     syncSettingsPills();
     $("set-auto-sync").checked = settings.auto_sync !== false;
     $("set-overview-panel").checked = settings.show_accounts_panel === true;
+    $("set-welcome").checked = settings.skip_welcome !== true;
     await fetchAccounts();  // 账户列表 (失败不阻塞其他设置渲染)
   } catch (e) { /* ignore */ }
 }
@@ -2645,9 +2679,10 @@ async function onUserRowAction(id, act) {
           await loadDashboard();
           if (state.page === "overview") loadOverview(true).catch(() => {});  // 退出后账号卡片即时移除
           if (!(r.accounts || []).some((x) => x.has_token)) {
-            // 全部退出: 无远程账号且无本地 Codex 数据才回欢迎页 (统一走 canUseLocalCodex)
+            // 全部退出: 无远程账号且无本地 Codex 数据才回欢迎页 (统一走 canUseLocalCodex);
+            // skip_welcome 勾选时不回 (st 为 null 的容错分支保持原行为)
             const st = await api("/api/state").catch(() => null);
-            if (!st || !canUseLocalCodex(st)) showLoginOverlay(true);
+            if (!st || (!canUseLocalCodex(st) && !st.skip_welcome)) showLoginOverlay(true);
           }
         } catch (e) { toast(e.message || t("loadFailed"), "err"); }
       },
@@ -2692,9 +2727,10 @@ async function onUserRowAction(id, act) {
           renderSettings().catch(() => {});
           if (state.page === "overview") loadOverview(true).catch(() => {});
           if ((r.remaining ?? 1) === 0) {
-            // 全部删除: 同样经 canUseLocalCodex 判定, 有本地 Codex 数据则留在面板
+            // 全部删除: 同样经 canUseLocalCodex 判定, 有本地 Codex 数据则留在面板;
+            // skip_welcome 勾选时不回欢迎页 (与 logout 全退分支同口径)
             const st = await api("/api/state").catch(() => null);
-            if (!st || !canUseLocalCodex(st)) showLoginOverlay(true);
+            if (!st || (!canUseLocalCodex(st) && !st.skip_welcome)) showLoginOverlay(true);
           }
         } catch (e) { toast(e.message || t("loadFailed"), "err"); }
       },
@@ -2738,8 +2774,9 @@ function showLoginOverlay(show) {
 async function checkState() {
   try {
     const st = await api("/api/state");
-    // logged_in 只表示远程账号: 未登录但本地 Codex 可用时直达面板, 两者皆无才显示欢迎页
-    if (!st.logged_in && !canUseLocalCodex(st)) { showLoginOverlay(true); return; }
+    // logged_in 只表示远程账号: 未登录但本地 Codex 可用时直达面板, 两者皆无才显示欢迎页;
+    // skip_welcome (引导页"下次启动隐藏") 时不再显示, 直接进面板 (20260915 需求3)
+    if (!st.logged_in && !canUseLocalCodex(st) && !st.skip_welcome) { showLoginOverlay(true); return; }
     showLoginOverlay(false);
     // 账号同步或 Codex 后台导入进行中: 轮询至空闲后统一刷新 (首次 source_found
     // 未导入完成时保持本地访问, 完成自动刷新)
@@ -2879,6 +2916,20 @@ function bindEvents() {
     state.settings.show_accounts_panel = e.target.checked;
     api("/api/settings", { method: "PUT", body: JSON.stringify({ show_accounts_panel: e.target.checked }) }).catch(() => {});
     applyOverviewPanel(e.target.checked);
+  });
+  // 启动登录页开关 (正向语义): 关闭即 skip_welcome=true, 与引导页"下次启动隐藏"勾选框同键联动
+  $("set-welcome").addEventListener("change", (e) => {
+    state.settings.skip_welcome = !e.target.checked;
+    api("/api/settings", { method: "PUT", body: JSON.stringify({ skip_welcome: !e.target.checked }) }).catch(() => {});
+  });
+  // 引导页"下次启动隐藏"勾选 (20260915 需求3): 勾选即保存, 下次启动直达面板;
+  // 设置页开关即时同步受控态
+  $("login-skip").addEventListener("change", (e) => {
+    state.settings.skip_welcome = e.target.checked;
+    $("set-welcome").checked = !e.target.checked;
+    api("/api/settings", { method: "PUT", body: JSON.stringify({ skip_welcome: e.target.checked }) })
+      .then(() => { if (e.target.checked) toast(t("skipWelcomeSaved")); })
+      .catch(() => {});
   });
   // 账户操作已合并进「OpenCode 账户」卡片内的账号行 (relogin/logout 为行级动作)
 
@@ -3366,7 +3417,7 @@ function rerenderCharts() {
   // 总览页 7 日趋势
   if (!document.getElementById("page-overview").hidden && ovAccountsCache) chartOvTrend(ovAccountsCache, true);
   // 统计页 (chartModel 移入 refreshIcons 统一处理, 避免本函数与 refreshIcons 双重销毁重建 cModel)
-  if (!document.getElementById("page-stats").hidden && state.data) {
+  if (!document.getElementById("page-stats").hidden && state.data && !statsRemoteHidden) {
     chartTrend(state.data.trend, true);
     if (zcodeSummaryLast) chartZcodeTrend(zcodeSummaryLast.daily7, true);
     if (claudecodeSummaryLast) chartClaudecodeTrend(claudecodeSummaryLast.daily7, true);
@@ -3438,6 +3489,7 @@ let APP_VERSION = "";  // 后端版本号 (app/__init__.py), 唯一版本源
   syncSettingsPills();
   $("set-auto-sync").checked = state.settings.auto_sync !== false;
   $("set-overview-panel").checked = state.settings.show_accounts_panel === true;
+  $("set-welcome").checked = state.settings.skip_welcome !== true;
   applyOverviewPanel(state.settings.show_accounts_panel === true);
   await checkState();
   restartAutoSync();

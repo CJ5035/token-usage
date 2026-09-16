@@ -408,13 +408,13 @@ def test_report_channels_local_rows(tmp_report_db):
 
 def test_list_channel_summary_order(tmp_report_db):
     """R6: 五渠道 (db 层; dsh 由 server 按 found 追加) —— 本地渠道恒列 accounts=1.
-    新R8 N30: opencode=2 —— add_account 保留空 token 种子行 (source 默认 opencode,
-    见 test_db_multiuser '种子 + 1 新增' 同型行为), 断言按真实计数."""
+    20260915 D1 口径: 只统计 token 非空账号 —— 空 token 种子行 (source 默认
+    opencode) 不再计入, opencode=1 (旧口径为 2)."""
     _seed_channels()
     s = db.list_channel_summary()
     assert [x["channel"] for x in s] == ["opencode", "bai", "commandcode", "zcode", "claudecode"]
     assert {x["channel"]: x["accounts"] for x in s} == {
-        "opencode": 2, "bai": 1, "commandcode": 1, "zcode": 1, "claudecode": 1}
+        "opencode": 1, "bai": 1, "commandcode": 1, "zcode": 1, "claudecode": 1}
 
 
 def test_report_hourly_buckets_and_channel_totals(tmp_report_db):

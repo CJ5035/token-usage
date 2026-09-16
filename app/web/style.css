@@ -469,6 +469,13 @@ html[data-theme="dark"] .src-badge { background: #123144; color: #67e8f9; }
 .login-note { color: var(--text3); font-size: 12px !important; margin: 14px 0 10px !important; }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--text3); }
 .btn-ghost:hover { background: var(--muted); color: var(--text2); }
+/* 引导页偏好勾选: 卡片末行独占一行居中 (块级 flex, 不与按钮同排 inline 流);
+   与"退出应用"同属离开引导页语义簇, 间距略大于按钮间距以示类别不同 */
+.login-skip { display: flex; justify-content: center; align-items: center; gap: 6px; margin: 14px 0 0; color: var(--text3); font-size: 12.5px; cursor: pointer; user-select: none; }
+.login-skip input { accent-color: var(--primary); cursor: pointer; }
+
+/* ---------- 统计页空态兜底 (顶部远程区块 + 四本地渠道全隐藏时) ---------- */
+.stats-empty { text-align: center; color: var(--text3); font-size: 13.5px; padding: 48px 0; }
 
 /* ---------- 弹框 / Toast ---------- */
 .modal-overlay { position: fixed; inset: 0; background: rgba(15, 20, 30, 0.45); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(2px); animation: fade .15s ease; }
