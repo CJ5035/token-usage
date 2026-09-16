@@ -2589,7 +2589,7 @@ def claudecode_last_import_at() -> Optional[str]:
 
 _REPORT_RANGE_DAYS = {"7d": 6, "30d": 29}  # 自然日窗口: 含今天共 N 天
 _CHANNEL_ORDER = ["opencode", "bai", "commandcode", "zcode", "claudecode", "workbuddy", "dsh"]
-_LOCAL_EST_CHANNELS = {"bai", "zcode", "claudecode", "codex"}  # 费用为估算的渠道 (spec v6 est-badge)
+_LOCAL_EST_CHANNELS = {"bai", "zcode", "claudecode", "codex", "workbuddy"}  # 费用为估算的渠道 (spec v6 est-badge)
 
 
 def _local_day_utc_start(d) -> str:
@@ -2632,17 +2632,21 @@ def _report_channels_expr() -> str:
 
 def _report_metric_exprs(metric: str) -> dict[str, str]:
     """各表聚合表达式 (R6): tokens/cost/requests; cost 统一 USD。
-    Codex 费用恒未知 → cost 无表达式 (费用序列省略 codex 并标 unavailable_channels)。"""
+    Codex 费用恒未知 → cost 无表达式 (费用序列省略 codex 并标 unavailable_channels)。
+    workbuddy 取本机本地表 workbuddy_local_usage: tokens 用原生 total_tokens
+    (== input + cache_read + output + reasoning, R8 口径保证恒等)。"""
     if metric == "cost":
         return {"records": "SUM(r.cost_usd)", "zcode": "SUM(z.cost_raw)/1e8",
-                "claudecode": "SUM(c.cost_raw)/1e8"}
+                "claudecode": "SUM(c.cost_raw)/1e8",
+                "workbuddy": "SUM(wl.cost_raw)/1e8"}
     if metric == "requests":
         return {"records": "COUNT(*)", "zcode": "COUNT(*)", "claudecode": "COUNT(*)",
-                "codex": "COUNT(*)"}
+                "codex": "COUNT(*)", "workbuddy": "COUNT(*)"}
     return {"records": "SUM(r.input_tokens + r.output_tokens + r.reasoning_tokens)",
             "zcode": "SUM(z.input_tokens + z.output_tokens + z.reasoning_tokens)",
             "claudecode": "SUM(c.input_tokens + c.output_tokens)",
-            "codex": "SUM(x.total_tokens)"}
+            "codex": "SUM(x.total_tokens)",
+            "workbuddy": "SUM(wl.total_tokens)"}
 
 
 def _daily_unavailable_channels(metric: str, channel: Optional[str]) -> list[str]:
@@ -2664,6 +2668,7 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
     include_records = channel is None or channel in ("opencode", "bai", "commandcode")
     include_zcode = channel is None or channel == "zcode"
     include_cc = channel is None or channel == "claudecode"
+    include_wb = channel is None or channel == "workbuddy"
     include_codex = metric != "cost" and (channel is None or channel == "codex")
     segs: list[str] = []
     params: list[Any] = []
@@ -2694,6 +2699,21 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
             f"SELECT substr(datetime(c.started_at,'localtime'),1,10) AS b, 'claudecode' AS ch,"
             f" {exprs['claudecode']} AS v FROM claudecode_usage c"
             f" WHERE {range_sql} GROUP BY b")
+        params.extend(range_params)
+    if include_wb:
+        range_sql, range_params = _report_range_sql(range_, "wl.started_at")
+        cost_filter = " AND wl.cost_available = 1" if metric == "cost" else ""
+        if metric == "cost":
+            unpriced = get_db().execute(
+                f"SELECT 1 FROM workbuddy_local_usage wl WHERE {range_sql} AND wl.cost_available = 0 LIMIT 1",
+                range_params,
+            ).fetchone()
+            if unpriced and "workbuddy" not in unavailable:
+                unavailable.append("workbuddy")
+        segs.append(
+            f"SELECT substr(datetime(wl.started_at,'localtime'),1,10) AS b,"
+            f" 'workbuddy' AS ch, {exprs['workbuddy']} AS v"
+            f" FROM workbuddy_local_usage wl WHERE {range_sql}{cost_filter} GROUP BY b")
         params.extend(range_params)
     if include_codex:
         range_sql, range_params = _report_range_sql(range_, "x.started_at")
@@ -2818,6 +2838,36 @@ def _win_cc(where: str, params: list[Any]) -> dict[str, Any]:
             "request_count_exact": requests > 0}
 
 
+def _win_wb(where: str, params: list[Any]) -> dict[str, Any]:
+    """WorkBuddy 本机本地窗口行 (与 _win_cc 的差异: 有 reasoning 列, tokens 用原生
+    total_tokens; R8 口径已保证 total == input + cache_read + output + reasoning)."""
+    row = get_db().execute(
+        "SELECT SUM(wl.total_tokens) tokens,"
+        " SUM(wl.input_tokens) input_tokens, SUM(wl.output_tokens) output_tokens,"
+        " SUM(wl.cache_read_tokens) cache_read_tokens,"
+        " SUM(wl.cache_write_tokens) cache_write_tokens,"
+        " SUM(wl.reasoning_tokens) reasoning_tokens,"
+        " SUM(wl.cost_raw)/1e8 cost, COUNT(*) requests,"
+        " SUM(CASE WHEN wl.cost_available=0 THEN 1 ELSE 0 END) unpriced_requests"
+        " FROM workbuddy_local_usage wl WHERE " + where,
+        params,
+    ).fetchone()
+    requests = row["requests"] or 0
+    unpriced = row["unpriced_requests"] or 0
+    known = requests - unpriced
+    return {"tokens": row["tokens"] or 0,
+            "input_tokens": row["input_tokens"] or 0,
+            "output_tokens": row["output_tokens"] or 0,
+            "cache_read_tokens": row["cache_read_tokens"] or 0,
+            "cache_write_tokens": row["cache_write_tokens"] or 0,
+            "reasoning_tokens": row["reasoning_tokens"] or 0,
+            "requests": requests,
+            "cost": (row["cost"] or 0.0) if known or not requests else None,
+            "cost_available": known > 0,
+            "cost_partial": unpriced > 0,
+            "request_count_exact": requests > 0}
+
+
 def _win_codex(where: str, params: list[Any]) -> dict[str, Any]:
     """codex_usage 窗口行 (需求 §6): 计数用有效用量 count, total 用 SUM(total_tokens)。
 
@@ -2911,11 +2961,14 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
         zw, zp = local_where(range_, "z.started_at", same_time)
         cw, cp = local_where(range_, "c.started_at", same_time)
         xw, xp = local_where(range_, "started_at", same_time)
+        wlw, wlp = local_where(range_, "wl.started_at", same_time)
+        wb = _win_wb(wlw, wlp) if (not channel or channel == "workbuddy") else dict(_WIN_ZERO)
         return _win_merge(
             _win_records(rw, rp),
             _win_zcode(zw, zp) if not channel or channel == "zcode" else dict(_WIN_ZERO),
             _win_cc(cw, cp) if not channel or channel == "claudecode" else dict(_WIN_ZERO),
             _win_codex(xw, xp) if not channel or channel == "codex" else dict(_WIN_ZERO),
+            wb,
         )
 
     windows = {
@@ -2939,6 +2992,7 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
         _win_zcode(*same7_where("z.started_at")) if not channel or channel == "zcode" else dict(_WIN_ZERO),
         _win_cc(*same7_where("c.started_at")) if not channel or channel == "claudecode" else dict(_WIN_ZERO),
         _win_codex(*same7_where("started_at")) if not channel or channel == "codex" else dict(_WIN_ZERO),
+        _win_wb(*same7_where("wl.started_at")) if not channel or channel == "workbuddy" else dict(_WIN_ZERO),
     )
     early = _dt.datetime.now().hour < 1
     insufficient = early or same_y["requests"] < 5
@@ -2961,7 +3015,8 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
     }
     for tbl, ch, ts in (("zcode_usage z", "zcode", "z.started_at"),
                         ("claudecode_usage c", "claudecode", "c.started_at"),
-                        ("codex_usage", "codex", "started_at")):   # 新R8 N29: FROM 带别名, 否则 z.started_at 列不存在
+                        ("codex_usage", "codex", "started_at"),
+                        ("workbuddy_local_usage wl", "workbuddy", "wl.started_at")):
         if channel and channel != ch:
             continue
         r = get_db().execute(
@@ -3002,19 +3057,35 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
         range_params,
     ).fetchall()
     agg = {r["ch"]: dict(r) for r in rows}
-    wb_range_sql, wb_params = _report_range_sql(range_, "w.request_time")
-    wb = get_db().execute(
-        f"SELECT COUNT(*) requests, MIN(substr(w.request_time,1,10)) data_since, "
-        f"SUM(CASE WHEN w.credit IS NOT NULL THEN w.credit ELSE 0 END) credits "
-        f"FROM workbuddy_usage w WHERE {wb_range_sql}", wb_params
+    # WorkBuddy: 本机本地 JSONL 优先; 本地无数据时回退远程 billing 行 (仅 credits, 向后兼容)
+    wl_range_sql, wl_params = _report_range_sql(range_, "wl.started_at")
+    wb_local = get_db().execute(
+        f"SELECT {exprs_t['workbuddy']} tokens, SUM(wl.input_tokens) input,"
+        f" SUM(wl.output_tokens) output, SUM(wl.cache_read_tokens) cache_read,"
+        f" SUM(wl.cache_write_tokens) cache_write, SUM(wl.reasoning_tokens) reasoning,"
+        f" COUNT(*) requests, {exprs_c['workbuddy']} cost,"
+        f" CASE WHEN COUNT(wl.credit)=COUNT(*) THEN COALESCE(SUM(wl.credit),0) END credits,"
+        f" (SELECT MIN(date(started_at,'localtime')) FROM workbuddy_local_usage) wb_data_since,"
+        f" SUM(CASE WHEN wl.cost_available = 0 THEN 1 ELSE 0 END) unpriced_requests"
+        f" FROM workbuddy_local_usage wl WHERE {wl_range_sql}",
+        wl_params,
     ).fetchone()
-    if wb and wb["requests"]:
-        agg["workbuddy"] = {
-            "tokens": 0, "input": 0, "output": 0, "cache_read": 0,
-            "cache_write": 0, "reasoning": 0, "requests": wb["requests"],
-            "cost": None, "credits": wb["credits"] or 0.0,
-            "wb_data_since": wb["data_since"],
-        }
+    if wb_local and (wb_local["requests"] or 0):
+        agg["workbuddy"] = dict(wb_local, local_only=True)
+    else:
+        wb_range_sql, wb_params = _report_range_sql(range_, "w.request_time")
+        wb = get_db().execute(
+            f"SELECT COUNT(*) requests, MIN(substr(w.request_time,1,10)) data_since,"
+            f" SUM(CASE WHEN w.credit IS NOT NULL THEN w.credit ELSE 0 END) credits"
+            f" FROM workbuddy_usage w WHERE {wb_range_sql}", wb_params
+        ).fetchone()
+        if wb and wb["requests"]:
+            agg["workbuddy"] = {
+                "tokens": 0, "input": 0, "output": 0, "cache_read": 0,
+                "cache_write": 0, "reasoning": 0, "requests": wb["requests"],
+                "cost": None, "credits": wb["credits"] or 0.0,
+                "wb_data_since": wb["data_since"], "local_only": False,
+            }
     # R6: 本地渠道行 (各一次聚合, 同构 dict 并入)
     for ch, alias, table, ts in (("zcode", "z", "zcode_usage", "z.started_at"),
                                  ("claudecode", "c", "claudecode_usage", "c.started_at")):
@@ -3062,8 +3133,13 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
     def _channel_row(ch: str, a: dict[str, Any]) -> dict[str, Any]:
         requests = int(a["requests"] or 0)
         if ch == "workbuddy":
-            cost = None
-            cost_available, cost_partial = False, True
+            if a.get("cost") is None:
+                cost, cost_available, cost_partial = None, False, True
+            else:
+                unpriced = int(a.get("unpriced_requests") or 0)
+                cost_available = requests > unpriced
+                cost = float(a["cost"]) if cost_available else None
+                cost_partial = unpriced > 0
             exact = requests > 0
         elif ch == "codex":
             cost_rows = int(a.get("cost_rows") or 0)
@@ -3083,7 +3159,10 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
                 "request_count_exact": exact,
                 "data_since": a.get("wb_data_since") if ch == "workbuddy" else since.get(ch),
                 "credits": a.get("credits") if ch == "workbuddy" else None,
-                "estimated": ch in _LOCAL_EST_CHANNELS}
+                "local_only": a.get("local_only", False),
+                "unpriced_requests": int(a.get("unpriced_requests") or 0) if ch == "workbuddy" else 0,
+                "estimated": ch in _LOCAL_EST_CHANNELS
+                             and (ch != "workbuddy" or cost is not None)}
 
     return [_channel_row(ch, agg[ch]) for ch in order]
 
@@ -3097,6 +3176,10 @@ def list_channel_summary() -> list[dict[str, Any]]:
         " FROM accounts GROUP BY source"
     ).fetchall()
     m = {r["ch"]: {"accounts": r["accounts"], "_at": r["first_at"]} for r in rows}
+    if "workbuddy" not in m:
+        has_wb = get_db().execute("SELECT 1 FROM workbuddy_local_usage LIMIT 1").fetchone()
+        if has_wb:
+            m["workbuddy"] = {"accounts": 0, "_at": ""}
     fixed = [c for c in _CHANNEL_ORDER if c != "dsh" and (c in m or c in ("zcode", "claudecode"))]
     extra = sorted((c for c in m if c not in _CHANNEL_ORDER), key=lambda c: m[c]["_at"] or "")
     # 新R8 N31: m 值为 {accounts,_at} dict, 必须取 ["accounts"]; 原写法 m.get(c,1) 返回整个 dict
@@ -3160,6 +3243,12 @@ def report_hourly(date_: str = "today", channel: Optional[str] = None) -> dict[s
             f" SUM(x.total_tokens) v FROM codex_usage x"
             f" WHERE {day_pred.format(ts='x.started_at')} GROUP BY h")
         params.extend([start, end])
+    if channel is None or channel == "workbuddy":
+        segs.append(
+            "SELECT CAST(strftime('%H',datetime(wl.started_at,'localtime')) AS INTEGER) h,"
+            " 'workbuddy' ch, SUM(wl.total_tokens) v FROM workbuddy_local_usage wl"
+            f" WHERE {day_pred.format(ts='wl.started_at')} GROUP BY h")
+        params.extend([start, end])
     if not segs:
         return {"labels": list(range(24)), "series": {}, "date": day.isoformat(),
                 "channel": channel or "all", "buckets": buckets}
@@ -3218,6 +3307,16 @@ def report_hourly(date_: str = "today", channel: Optional[str] = None) -> dict[s
             f" COUNT(*) requests FROM codex_usage x"
             f" WHERE {day_pred.format(ts='x.started_at')} GROUP BY h")
         b_params.extend([start, end])
+    if channel is None or channel == "workbuddy":
+        b_segs.append(
+            "SELECT CAST(strftime('%H',datetime(wl.started_at,'localtime')) AS INTEGER) h,"
+            " SUM(wl.input_tokens) input_tokens, SUM(wl.output_tokens) output_tokens,"
+            " SUM(wl.cache_read_tokens) cache_read_tokens,"
+            " SUM(wl.cache_write_tokens) cache_write_tokens,"
+            " SUM(wl.reasoning_tokens) reasoning_tokens, SUM(wl.total_tokens) total_tokens,"
+            " COUNT(*) requests FROM workbuddy_local_usage wl"
+            f" WHERE {day_pred.format(ts='wl.started_at')} GROUP BY h")
+        b_params.extend([start, end])
     for r in get_db().execute(
             f"SELECT h, {', '.join(_HOURLY_BUCKET_KEYS)} FROM ({' UNION ALL '.join(b_segs)})",
             b_params):
@@ -3254,6 +3353,49 @@ def _totals_from_row(row: sqlite3.Row) -> dict[str, Any]:
         "total_cost_usd": round(float(row["total_cost_usd"] or 0), 6),
         "hit_rate": round(hit_rate, 2),
     }
+
+
+def workbuddy_local_totals(range_: str) -> dict[str, Any]:
+    """WorkBuddy 本机本地用量的单渠道聚合 (键与 db.totals 对齐, 供现成复用).
+
+    口径推导 (见实施计划 §4.3): total_input = SUM(input + cache_read + cache_write);
+    因 WorkBuddy 的 input 列语义是"未命中缓存的输入"、cache_write 恒 0, 故
+    total_input 恰等于 Σ prompt_tokens, 且 hit_rate 分母 (hit+miss+cw) 恰等于 prompt。
+    """
+    range_sql, range_params = _report_range_sql(range_, "wl.started_at")
+    row = get_db().execute(
+        f"SELECT COUNT(*) request_count,"
+        f" COUNT(DISTINCT CASE WHEN wl.session_id IS NOT NULL AND wl.session_id != ''"
+        f"   THEN wl.session_id END) session_count,"
+        f" SUM(wl.input_tokens + wl.cache_read_tokens + wl.cache_write_tokens) total_input_tokens,"
+        f" SUM(wl.input_tokens) uncached_input_tokens,"
+        f" SUM(wl.output_tokens) total_output_tokens,"
+        f" SUM(wl.reasoning_tokens) total_reasoning_tokens,"
+        f" SUM(wl.cache_read_tokens) cache_hit_tokens,"
+        f" SUM(wl.cache_write_tokens) cache_write_tokens,"
+        f" SUM(wl.cost_raw)/1e8 total_cost_usd,"
+        f" SUM(wl.total_tokens) total_tokens,"
+        f" CASE WHEN COUNT(wl.credit)=COUNT(*) THEN COALESCE(SUM(wl.credit),0) END credits,"
+        f" SUM(CASE WHEN wl.cost_available = 0 THEN 1 ELSE 0 END) unpriced_requests"
+        f" FROM workbuddy_local_usage wl WHERE {range_sql}",
+        range_params,
+    ).fetchone()
+    out = _totals_from_row(row)
+    # 显式 total_tokens: renderOverview(app.js:1728-1729) 优先消费该键 (codex 先例),
+    # 缺键才退化为 total_input+total_output+total_reasoning 求和; 两者因 R8 恒等而等值,
+    # 提供该键可与 codex 同构并双重兜住 R8 口径。
+    out["total_tokens"] = int((row["total_tokens"] if row else 0) or 0)
+    out["credits"] = round(float(row["credits"]), 4) if row["credits"] is not None else None
+    out["unpriced_requests"] = int((row["unpriced_requests"] if row else 0) or 0)
+    known = out["request_count"] - out["unpriced_requests"]
+    out["cost_available"] = known > 0
+    out["cost_partial"] = out["unpriced_requests"] > 0
+    if out["request_count"] and not known:
+        out["total_cost_usd"] = None  # 覆盖 _totals_from_row 的 NULL→0 默认行为
+    out["local_only"] = True
+    out["cache_write_available"] = False   # WorkBuddy 无缓存写入口径 (§3.4)
+    out["last_import_at"] = workbuddy_local_last_import_at()
+    return out
 
 
 def channel_totals(range_: str, channel: str) -> dict[str, Any]:
@@ -3296,6 +3438,8 @@ def channel_totals(range_: str, channel: str) -> dict[str, Any]:
             range_params,
         ).fetchone()
         return _totals_from_row(row)
+    if channel == "workbuddy":
+        return workbuddy_local_totals(range_)
     range_sql, range_params = _report_range_sql(range_, "r.created_at")
     row = get_db().execute(
         f"SELECT COUNT(*) request_count,"
@@ -3324,22 +3468,23 @@ def channel_trend(date_: str = "today", channel: str = "opencode") -> list[dict[
     """
     if channel == "dsh":
         return []                                               # R6: dsh 无历史
-    src = channel if channel in ("zcode", "claudecode", "codex") else "records"
-    al = {"zcode": "z", "claudecode": "c", "codex": "x"}.get(src, "r")
+    src = channel if channel in ("zcode", "claudecode", "codex", "workbuddy") else "records"
+    al = {"zcode": "z", "claudecode": "c", "codex": "x", "workbuddy": "wl"}.get(src, "r")
     ts = "r.created_at" if src == "records" else f"{al}.started_at"
     table = {"zcode": "zcode_usage z", "claudecode": "claudecode_usage c",
-             "codex": "codex_usage x"}.get(
+             "codex": "codex_usage x",
+             "workbuddy": "workbuddy_local_usage wl"}.get(
         src, "usage_records r LEFT JOIN accounts a ON a.id = r.account_id")
-    tok_in = f"SUM({al}.input_tokens)"
+    tok_in = f"SUM({al}.input_tokens + {al}.cache_read_tokens)" if src == "workbuddy" else f"SUM({al}.input_tokens)"
     tok_out = f"SUM({al}.output_tokens)"
     tok_rea = "0" if src == "claudecode" else f"SUM({al}.reasoning_tokens)"
-    tok_total = (f"SUM({al}.total_tokens)" if src == "codex"
+    tok_total = (f"SUM({al}.total_tokens)" if src in ("codex", "workbuddy")
                  else f"{tok_in} + {tok_out} + {tok_rea}")
     cache_write = ("SUM(r.cache_write_5m_tokens + r.cache_write_1h_tokens)"
                    if src == "records" else f"SUM({al}.cache_write_tokens)")
-    ch_filter = "" if src in ("zcode", "claudecode", "codex") else \
+    ch_filter = "" if src in ("zcode", "claudecode", "codex", "workbuddy") else \
         f" AND {_report_channels_expr()} = ?"
-    params: list[Any] = [] if src in ("zcode", "claudecode", "codex") else [channel]
+    params: list[Any] = [] if src in ("zcode", "claudecode", "codex", "workbuddy") else [channel]
     day_eq = "date('now','localtime')" if date_ != "yesterday" else "date('now','localtime','-1 day')"
     rows = get_db().execute(
         f"SELECT CAST(strftime('%H', datetime({ts},'localtime')) AS INTEGER) h,"
@@ -3349,9 +3494,15 @@ def channel_trend(date_: str = "today", channel: str = "opencode") -> list[dict[
         params,
     ).fetchall()
     m = {r["h"]: r for r in rows}
+
+    def _wb_compat_output(item: dict[str, Any]) -> int:
+        o = item["o"] or 0
+        rea = item["rea"] or 0
+        return o + rea if src == "workbuddy" else o
+
     return [{"hour": h,
              "input": (m[h]["i"] or 0) if h in m else 0,
-             "output": (m[h]["o"] or 0) if h in m else 0,
+             "output": _wb_compat_output(m[h]) if h in m else 0,
              "total_input_tokens": (m[h]["i"] or 0) if h in m else 0,
              "total_output_tokens": (m[h]["o"] or 0) if h in m else 0,
              "total_reasoning_tokens": (m[h]["rea"] or 0) if h in m else 0,
@@ -3372,13 +3523,20 @@ def report_totals(range_: str) -> dict[str, Any]:
     (与 _report_windows_response 对齐), 本函数不碰 dsh_api。
     """
     codex = _win_codex(*_report_range_sql(range_, "started_at"))
+    wb = _win_wb(*_report_range_sql(range_, "wl.started_at"))
     merged = _win_merge(
         _win_records(*_report_range_sql(range_, "r.created_at")),
         _win_zcode(*_report_range_sql(range_, "z.started_at")),
         _win_cc(*_report_range_sql(range_, "c.started_at")),
         codex,
+        wb,
     )
     cost = merged["cost"]
+    cost_unavail = []
+    if codex["requests"] > 0 and not codex["cost_available"]:
+        cost_unavail.append("codex")
+    if wb["cost_partial"]:
+        cost_unavail.append("workbuddy")
     return {"request_count": merged["requests"],
             "total_tokens": merged["tokens"],
             "total_input_tokens": merged["input_tokens"],
@@ -3387,7 +3545,7 @@ def report_totals(range_: str) -> dict[str, Any]:
             "total_cost_usd": round(cost, 6) if cost is not None else None,
             "cost_available": merged["cost_available"],
             "cost_partial": merged["cost_partial"],
-            "cost_unavailable_channels": ["codex"] if (codex["requests"] > 0 and not codex["cost_available"]) else [],
+            "cost_unavailable_channels": cost_unavail,
             "request_count_exact": merged["request_count_exact"]}
 
 
