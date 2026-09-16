@@ -3462,8 +3462,8 @@ def channel_trend(date_: str = "today", channel: str = "opencode") -> list[dict[
     """单渠道 24h 趋势 (供 chartToday 复用; R6 三表分派 + codex; dsh 返回空)。
 
     每行固定 hour/total_input_tokens/total_output_tokens/total_reasoning_tokens/
-    total_tokens/cache_read_tokens/cache_write_tokens (需求 §6); codex 含缓存的
-    input 不再加缓存 (total 用 SUM(total_tokens)), 其余来源 total=in+out+reason;
+    total_tokens/cache_read_tokens/cache_write_tokens (需求 §6); codex / workbuddy
+    total 用原生 SUM(total_tokens), 其余来源 total=in+out+reason;
     旧 input/output 键保留兼容。
     """
     if channel == "dsh":
