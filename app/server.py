@@ -22,6 +22,7 @@ from . import commandcode_api
 from . import dsh_api
 from . import zcode_api
 from . import workbuddy_api
+from . import workbuddy_local_api
 from .workbuddy_api import WorkBuddyAPI
 from .zcode_api import QUOTA_TIMEOUT
 from .bai_api import _load_model_pricing
@@ -1362,6 +1363,78 @@ def _maybe_trigger_claude_import() -> None:
     claude_import_async()
 
 
+# ---------------------------------------------------------------------------
+# WorkBuddy 本地用量导入编排 (进度快照 → 采集 → 逐批提交; 独立于远程账号登录)
+# ---------------------------------------------------------------------------
+
+_wb_import_lock = threading.Lock()   # 防 workbuddy 本地导入自身重入
+_WB_IMPORT_DEBOUNCE = 60.0           # 读取端点触发导入的防抖窗口 (秒)
+_wb_last_import_trigger = None
+_wb_sync_error = ""                  # 最近一次采集错误文案 (空串=无错)
+_wb_import_running = False
+_wb_trigger_lock = threading.Lock()  # 防抖判定与置位需要原子化
+
+
+def _sync_workbuddy_local(force: bool = False) -> int:
+    """读进度快照 → 采集增量 → 逐批导入+推进偏移; 返回新增行数, 异常不外抛.
+
+    锁: 调用方负责拿 ``_wb_import_lock`` (本函数自身不碰任何锁, 也严禁内部
+    acquire ``_sync_lock`` — threading.Lock 不可重入). 行落库与进度写为两步提交,
+    无跨表事务; 两步之间崩溃则下次重读该文件, 去重键幂等兜底.
+    """
+    global _wb_sync_error
+    try:
+        progress = db.get_workbuddy_file_progress_all()
+        batches = workbuddy_local_api.import_incremental(progress, force=force)
+        if not batches:
+            _wb_sync_error = ""
+            return 0
+        inserted = 0
+        for batch in batches:
+            inserted += db.import_workbuddy_local_usage(batch["rows"])
+            db.save_workbuddy_file_progress(
+                batch["path"], batch["new_offset"], batch["size"])
+        _wb_sync_error = ""
+        return inserted
+    except Exception as exc:  # noqa: BLE001 失败只记文案, 不影响其他渠道同步
+        _wb_sync_error = str(exc)
+        return 0
+
+
+def workbuddy_import_async() -> None:
+    """非阻塞单飞；运行状态在启动前置位、finally 清理。"""
+    global _wb_import_running
+    if not _wb_import_lock.acquire(blocking=False):
+        return
+    _wb_import_running = True
+    def worker() -> None:
+        global _wb_import_running
+        try:
+            _sync_workbuddy_local()
+        finally:
+            _wb_import_running = False
+            _wb_import_lock.release()
+    try:
+        threading.Thread(target=worker, daemon=True,
+                         name="gousage-workbuddy-import").start()
+    except Exception:
+        _wb_import_running = False
+        _wb_import_lock.release()
+        raise
+
+
+def _maybe_trigger_workbuddy_import() -> None:
+    """读取端点按需增量；单调时钟与锁保护防抖检查。"""
+    global _wb_last_import_trigger
+    now = time.monotonic()
+    with _wb_trigger_lock:
+        if (_wb_last_import_trigger is not None
+                and now - _wb_last_import_trigger <= _WB_IMPORT_DEBOUNCE):
+            return
+        _wb_last_import_trigger = now
+    workbuddy_import_async()
+
+
 def _claudecode_summary_payload(range_param: str) -> dict[str, Any]:
     """GET /api/claudecode/summary 数据组装 (纯函数, 便于测试).
 
@@ -1534,7 +1607,10 @@ def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
 
     §3.2: 一次快照 + 一次 now 供给四个窗口 (get_dsh_summaries), server 不再
     自建范围过滤。"""
+    wb_running = _wb_import_running
     payload = db.report_windows(channel)
+    if channel in (None, "workbuddy"):
+        payload["workbuddy_local"] = {"running": wb_running, "error": _wb_sync_error}
     dsh_found = False
     if channel in (None, "dsh"):
         windows = dsh_api.get_dsh_summaries("today", "yesterday", "7d", "30d")
@@ -1564,6 +1640,7 @@ def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
 
 def _report_channels_response(range_: str) -> dict[str, Any]:
     """GET /api/report/channels with DSH range totals and source status."""
+    wb_running = _wb_import_running
     rows = db.report_channels(range_)
     summary = db.list_channel_summary()
     dsh = dsh_api.get_dsh_summary(range_)
@@ -1579,7 +1656,8 @@ def _report_channels_response(range_: str) -> dict[str, Any]:
                          "request_count_exact": False, "data_since": dsh.get("data_since"),
                          "estimated": False})
         summary.append({"channel": "dsh", "accounts": 0})
-    return {"rows": rows, "summary": summary, "dsh_status": _dsh_status(dsh)}
+    return {"rows": rows, "summary": summary, "dsh_status": _dsh_status(dsh),
+            "workbuddy_local": {"running": wb_running, "error": _wb_sync_error}}
 
 
 def _totals_merge_dsh(totals: dict[str, Any], dsh_totals: dict[str, Any]) -> dict[str, Any]:
@@ -1609,6 +1687,7 @@ def _dashboard_all_payload(range_param: str) -> dict[str, Any]:
     totals=report_totals(range)、today=report_totals(today), 全渠道聚合含
     Codex; DSH 各窗口按选定范围经一次快照一次 now 的 get_dsh_summaries 并入。
     不伪装成 active account: 无 account/quota 键, 前端据此走公共报表分支。"""
+    wb_running = _wb_import_running
     if range_param not in _RANGE_WHITELIST:
         range_param = "today"
     totals = db.report_totals(range_param)
@@ -1625,6 +1704,7 @@ def _dashboard_all_payload(range_param: str) -> dict[str, Any]:
         "dsh_status": _dsh_status(windows[range_param]),
         "exchange_rate": {"usd_cny": _fetch_usd_cny(), "currency": "CNY"},
         "codex": _codex_state_snapshot(),
+        "workbuddy_local": {"running": wb_running, "error": _wb_sync_error},
         "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -1796,6 +1876,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         # 按 Codex/all 规则触发后台增量导入 (防抖, 请求不等待扫描)
         if (query.get("scope", [""])[0] or "") == "all":
             _maybe_trigger_codex_import()
+            _maybe_trigger_workbuddy_import()
             _json_response(handler, _dashboard_all_payload(query.get("range", ["today"])[0]))
             return
         # 时间范围: today / 7d / 30d / all
@@ -2078,6 +2159,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         channel = query.get("channel", [""])[0] or None
         if channel in (None, "codex"):   # 全渠道/Codex 请求才触发 Codex 扫描 (防抖)
             _maybe_trigger_codex_import()
+        if channel in (None, "workbuddy"):
+            _maybe_trigger_workbuddy_import()
         _json_response(handler, _report_windows_response(channel))
         return
 
@@ -2089,6 +2172,9 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         channel = query.get("channel", [""])[0] or None
         if channel in (None, "codex"):
             _maybe_trigger_codex_import()
+        if channel in (None, "workbuddy"):
+            _maybe_trigger_workbuddy_import()
+        wb_running = _wb_import_running
         dsh = None
         extra_rows: list[dict[str, Any]] = []
         unavailable_sources: list[str] = []
@@ -2103,6 +2189,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                                   unavailable_sources=unavailable_sources)
         if dsh is not None:
             payload["dsh_status"] = _dsh_status(dsh)
+        if channel in (None, "workbuddy"):
+            payload["workbuddy_local"] = {"running": wb_running, "error": _wb_sync_error}
         _json_response(handler, payload)
         return
 
@@ -2112,11 +2200,16 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         channel = query.get("channel", [""])[0] or None
         if channel in (None, "codex"):
             _maybe_trigger_codex_import()
+        if channel in (None, "workbuddy"):
+            _maybe_trigger_workbuddy_import()
+        wb_running = _wb_import_running
         payload = db.report_hourly(date_, channel)
         if channel in (None, "dsh"):
             dsh = dsh_api.get_dsh_summary(date_)
             payload = _merge_dsh_hourly(payload, dsh)
             payload["dsh_status"] = _dsh_status(dsh)
+        if channel in (None, "workbuddy"):
+            payload["workbuddy_local"] = {"running": wb_running, "error": _wb_sync_error}
         _json_response(handler, payload)
         return
 
@@ -2124,6 +2217,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         range_ = query.get("range", ["7d"])[0]
         range_ = range_ if range_ in ("today", "yesterday", "7d", "30d", "all") else "7d"
         _maybe_trigger_codex_import()   # 全渠道明细必然含 codex
+        _maybe_trigger_workbuddy_import()
         _json_response(handler, _report_channels_response(range_))
         return
 
@@ -2133,10 +2227,16 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         channel = query.get("channel", [""])[0] or "opencode"
         if channel == "codex":
             _maybe_trigger_codex_import()
+        if channel == "workbuddy":
+            _maybe_trigger_workbuddy_import()
+        wb_running = _wb_import_running
         if channel == "dsh":
             _json_response(handler, _dsh_channel_overview(dsh_api.get_dsh_summary(range_)))
             return
-        _json_response(handler, db.channel_totals(range_, channel))
+        payload = db.channel_totals(range_, channel)
+        if channel == "workbuddy":
+            payload["workbuddy_local"] = {"running": wb_running, "error": _wb_sync_error}
+        _json_response(handler, payload)
         return
 
     if route == "/api/report/channel-trend" and method == "GET":
@@ -2145,6 +2245,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         channel = query.get("channel", [""])[0] or "opencode"
         if channel == "codex":
             _maybe_trigger_codex_import()
+        if channel == "workbuddy":
+            _maybe_trigger_workbuddy_import()
         if channel == "dsh":
             dsh = dsh_api.get_dsh_summary(date_)
             _json_response(handler, [
