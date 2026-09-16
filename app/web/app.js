@@ -59,6 +59,10 @@ const I18N = {
     remaining: "剩余", used: "已用", resetsIn: "重置于",
     hitRate: "缓存命中率", hitAmount: "缓存命中量", totalTokens: "总 TOKEN 消耗",
     totalRequests: "总请求", totalCost: "总费用", sessions: "会话数",
+    wbLocalOnly: "本机用量（不含其他设备/入口）",
+    wbCostEstimated: "按本地定价表估算，非账单值",
+    wbUnpricedModels: "部分模型缺少有效定价，费用不完整",
+    wbRemoteCreditsOnly: "远程积分记录，token/费用未知",
     hit: "命中", miss: "未命中", pctOfInput: "占输入", inclCache: "含缓存命中",
     currentRange: "当前范围", avgPer: "均", perReq: "/次", dedup: "去重 sessionID",
     noData: "暂无记录", loadFailed: "加载失败", requestTimeout: "请求超时，请检查网络后重试", retry: "重试", totalN: "共", items: "条",
@@ -185,6 +189,10 @@ const I18N = {
     remaining: "Remaining", used: "Used", resetsIn: "Resets in",
     hitRate: "Cache Hit Rate", hitAmount: "Cache Hits", totalTokens: "Total Tokens",
     totalRequests: "Requests", totalCost: "Total Cost", sessions: "Sessions",
+    wbLocalOnly: "Local usage only (excludes other devices / entry points)",
+    wbCostEstimated: "Estimated from the local pricing table, not billed cost",
+    wbUnpricedModels: "Some models lack valid pricing; cost is incomplete",
+    wbRemoteCreditsOnly: "Remote credits only; tokens and cost unavailable",
     hit: "hit", miss: "missed", pctOfInput: "of input", inclCache: "incl. cache hits",
     currentRange: "current range", avgPer: "avg", perReq: "/req", dedup: "dedup sessionID",
     noData: "No records", loadFailed: "Failed to load", requestTimeout: "Request timed out. Check your network and retry.", retry: "Retry", totalN: "Total", items: "records",
@@ -433,6 +441,12 @@ function applyLang(l) {
   else if (dshTransportError && dshTransportError.range === state.statsRange) renderDshTransportError();
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);
   if (codexSummaryLast) renderCodexSummary(codexSummaryLast);   // Codex 区块随语言即时重渲染 (复用已拉取数据)
+  // Step 8a: 语言切换后, 首页 workbuddy/all 报表的动态积分/来源/费用文案由后端数据驱动,
+  // 仅当报表已在显示时重取 (init 首次 applyLang homeReportShown=false 不发请求)
+  if (state.page === "home" && homeReportShown
+      && (state.channel === "workbuddy" || state.channel === "all")) {
+    loadDashboard(true, true);
+  }
 }
 
 /* EVOLUTION-9: data-i18n-title tooltip 与估算徽标随语言切换 (applyLang 内调用) */
@@ -589,6 +603,12 @@ function applyCurrency(cur) {
   document.querySelectorAll("#set-currency-pills .pill").forEach((b) => b.classList.toggle("active", b.dataset.v === cur));
   try { localStorage.setItem("gousage-currency", cur); } catch (e) { /* ignore */ }
   if (state.page === "settings") return;   // EVOLUTION-9: 设置页内切货币不重渲, 货币生效由 switchPage 回页重载兜底
+  if (state.page === "home" && homeReportShown) {
+    // Step 8a: 首页单渠道 six-cards 由 report 接口驱动 (workbuddy 本地渠道无账号维度),
+    // 不能用 state.data 重渲染覆盖; 直接重取当前报表 (init 首次 homeReportShown=false 不发)
+    loadDashboard(true, true);
+    return;
+  }
   if (!state.data) return;
   rerenderCharts();
   renderOverview(state.data.totals);
@@ -604,6 +624,7 @@ function applyCurrency(cur) {
 /* ---------------- 页面路由 ---------------- */
 function switchPage(page) {
   if (state.page === "stats" && page !== "stats") { destroyDshTrend(); cancelDshRefresh(); }
+  if (page !== "home") wbLocalPollStop();   // Step 8a: 离开首页清理 WorkBuddy 本地导入轮询 (回首页重取即重武装)
   state.page = page;
   document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
   $("page-" + page).hidden = false;
@@ -653,6 +674,9 @@ function renderDashboardError(e) {
 let loadSeq = 0;
 let chSeq = 0;   // 单渠道响应序号: 快速连点渠道 tab 时丢弃旧响应 (方案4④)
 let allSeq = 0;  // all 分支响应序号: 与 chSeq 独立 (各自独立 seq 最小方案; #report-all/#report-single 独立容器, 切换必重发, 级联失效仅在实测乱序覆盖时再加)
+let homeReportShown = false;   // Step 8a: 首页报表已成功渲染 (applyLang/applyCurrency 的重取守卫, init 首次不发请求)
+let wbLocalPollTimer = null;   // Step 8a: WorkBuddy 本地导入轮询 — 首页 workbuddy/all 复用同一共享定时器
+let wbLocalPollSeq = 0;        // 轮询代次: 每次清理/重排 +1, 迟到定时器回调对比后放弃
 async function loadDashboard(quiet = false, noAnim = false) {
   if (state.page === "home") {
     renderChannelTabs();                     // 每次刷新渠道列表(账号增减/删除回退)
@@ -682,9 +706,20 @@ async function loadDashboard(quiet = false, noAnim = false) {
     // 单渠道: 消耗走 report 接口(与活跃账号无关), 配额块/账期卡走 accounts/overview 逐账号 (spec v5/v8)
     const seq = ++chSeq;                                  // 新增: 快速切渠道时丢弃过期响应 (方案4④)
     $("report-single").classList.add("swapping");         // 新增: 加载提示 (方案4③)
+    const ch = state.channel, range = state.range;        // Step 8a: 请求发起时快照组 URL (防在途 state 漂移)
+    const overviewP = api(`/api/report/channel-overview?range=${range}&channel=${ch}`);
+    // R54 (Step 8a): WorkBuddy 必须先得 overview (携带 workbuddy_local.running) 再发 trend —
+    // overview 的 running=true 会安排完成后的整组重取; overview 迟到 (已切走) 时以 null 收敛,
+    // 由 Promise.all 的 seq 守卫整体丢弃, 不再发 trend。其他渠道保持原并发结构。
+    const trendP = ch === "workbuddy"
+      ? overviewP.then((totals) => {
+          if (seq !== chSeq) return null;
+          return api(`/api/report/channel-trend?date=${range === "yesterday" ? "yesterday" : "today"}&channel=${ch}`);
+        })
+      : api(`/api/report/channel-trend?date=${range === "yesterday" ? "yesterday" : "today"}&channel=${ch}`);
     Promise.all([
-      api(`/api/report/channel-overview?range=${state.range}&channel=${state.channel}`),
-      api(`/api/report/channel-trend?date=${state.range === "yesterday" ? "yesterday" : "today"}&channel=${state.channel}`),
+      overviewP,
+      trendP,
       api(`/api/accounts/overview`),
     ]).then(([totals, trend, ov]) => {
       if (seq !== chSeq) return;                          // 新增: 过期响应丢弃
@@ -707,8 +742,13 @@ async function loadDashboard(quiet = false, noAnim = false) {
       const isCc = state.channel === "commandcode";
       $("cc-summary").hidden = !isCc;
       if (isCc) renderCcAccounts(chAccounts);         // 账期卡逐账号 (spec v5); 全部 tab 不显示
+      homeReportShown = true;                         // Step 8a: 首页报表已显示 (语言/货币重取守卫)
+      wbLocalPollOnResponse(!!(totals.workbuddy_local && totals.workbuddy_local.running));   // Step 8a: 后台导入完成后自动重取
     }).catch((e) => {
-      if (seq === chSeq) $("report-single").classList.remove("swapping");   // 新增
+      if (seq === chSeq) {                            // 当前请求失败才停表 (迟到失败不干扰新请求已武装的轮询)
+        wbLocalPollStop();                            // Step 8a: 请求失败停止轮询, 保留既有错误提示
+        $("report-single").classList.remove("swapping");   // 新增
+      }
       if (!quiet) toast(t("loadFailed") + ": " + e);
     });
     return;   // R5 补: 必须 return, 否则落入现有逻辑 renderAll 双重渲染 (与 Step 2 要求一致)
@@ -734,6 +774,31 @@ async function loadDashboard(quiet = false, noAnim = false) {
   }
 }
 let channelTabsCache = { at: 0, data: null };   // 方案4⑤: 切渠道高频触发, 60s 内复用; 已知取舍: 60s 内账号增删后 tab 角标可能过时, 60s 后自愈
+
+/* Step 8a: WorkBuddy 本地导入完成后自动重取 (R54)。
+   running=true 的响应安排 500ms 后 loadDashboard(true,true) 整组重取;
+   每次响应先清理旧 timeout, 同轮并发响应只保留一个定时器; 迟到回调/切页/切渠道/
+   document.hidden/请求失败均停止, 不无限创建定时器。 */
+function wbLocalPollStop() {
+  wbLocalPollSeq++;
+  if (wbLocalPollTimer) { clearTimeout(wbLocalPollTimer); wbLocalPollTimer = null; }
+}
+function wbLocalPollStart() {
+  wbLocalPollStop();                        // 先清理旧 timeout (同轮并发响应只留一个定时器)
+  const token = wbLocalPollSeq;
+  const ch = state.channel, range = state.range;   // 调度时快照, 回调内校验仍匹配才重取
+  wbLocalPollTimer = setTimeout(() => {
+    wbLocalPollTimer = null;
+    if (token !== wbLocalPollSeq) return;          // 已被清理/重排 (迟到回调放弃)
+    if (document.hidden || state.page !== "home"
+        || state.channel !== ch || state.range !== range) { wbLocalPollStop(); return; }
+    loadDashboard(true, true);                     // 静默重取; 失败由响应 catch 停表
+  }, 500);
+}
+function wbLocalPollOnResponse(running) {
+  if (running) wbLocalPollStart();
+  else wbLocalPollStop();
+}
 function renderChannelTabs() {
   if (channelTabsCache.data && Date.now() - channelTabsCache.at < 60000) {
     renderChannelTabsFrom(channelTabsCache.data);
@@ -1721,7 +1786,8 @@ function refreshCodexVisible() {
 
 /* ---------------- 首页: 用量概览 6 格 ---------------- */
 function renderOverview(totals, source) {
-  const isEst = ["bai", "zcode", "claudecode", "codex"].includes(source);   // R6: 费用估算徽章扩展至本地渠道
+  const isEst = ["bai", "zcode", "claudecode", "codex", "workbuddy"].includes(source)
+    && (source !== "workbuddy" || totals.cost_available === true);   // 未知费用不挂估算徽章
   const isDsh = source === "dsh";
   /* T5 codex: 后端提供显式 total_tokens (缓存读/reasoning 是子项不二次相加),
      优先采用; 其余渠道无该键走原 input+output+reasoning 和式 (行为不变) */
@@ -1739,15 +1805,25 @@ function renderOverview(totals, source) {
   ] : [
     { cls: "c-green", l: t("hitRate"), v: totals.hit_rate.toFixed(1) + "%", s: `${t("hit")} ${fmtTokens(totals.cache_hit_tokens)} · ${t("miss")} ${fmtTokens(totals.uncached_input_tokens)}` },
     { cls: "c-cyan", l: t("hitAmount"), v: fmtTokens(totals.cache_hit_tokens), s: `${t("pctOfInput")} ${totals.hit_rate.toFixed(1)}%` },
-    { cls: "c-blue", l: t("totalTokens"), v: fmtTokens(totalTokens), s: totals.total_tokens != null
-      ? `${t("input")} ${fmtTokens(totals.total_input_tokens)} · ${t("output")} ${fmtTokens(totals.total_output_tokens)}`   // 拆分展示: 输入含缓存读、输出含 reasoning, 不再次相加
-      : t("inclCache") },
+    { cls: "c-blue", l: t("totalTokens"), v: fmtTokens(totalTokens), s: source === "workbuddy"
+      ? `${t("input")} ${fmtTokens(totals.total_input_tokens)} · ${t("output")} ${fmtTokens((totals.total_output_tokens || 0) + (totals.total_reasoning_tokens || 0))}`
+      : (totals.total_tokens != null
+        ? `${t("input")} ${fmtTokens(totals.total_input_tokens)} · ${t("output")} ${fmtTokens(totals.total_output_tokens)}`   // 拆分展示: 输入含缓存读、输出含 reasoning, 不再次相加
+        : t("inclCache")) },
     { cls: "c-slate", l: t("totalRequests"), v: fmtInt(totals.request_count), s: t("currentRange") },
-    { cls: "c-amber", l: t("totalCost") + (isEst ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""), v: fmtOptionalMoney(totals.total_cost_usd), s: totals.total_cost_usd == null ? t("codexCostUnavailable") : `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}` },
+    { cls: "c-amber", l: t("totalCost") + (isEst ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""),
+      v: fmtOptionalMoney(totals.total_cost_usd),
+      s: (source === "workbuddy")
+        ? `${totals.credits == null ? "—" : Number(totals.credits).toLocaleString(undefined, {maximumFractionDigits: 4})} ${t("workbuddyCredits")}`
+          + (Number(totals.unpriced_requests || 0) > 0 ? ` · ${t("wbUnpricedModels")}` : ` · ${t("wbCostEstimated")}`)
+        : (totals.total_cost_usd == null ? t("codexCostUnavailable")
+           : `${t("avgPer")} ${fmtMoney(totals.request_count ? totals.total_cost_usd / totals.request_count : 0)}${t("perReq")}`) },
     { cls: "c-violet", l: t("sessions"), v: fmtInt(totals.session_count), s: t("dedup") },
   ];
   $("overview-grid").innerHTML = cards.map((c) => `
     <div class="card kpi ${c.cls}"><div class="kpi-l">${c.l}</div><div class="kpi-v">${c.v}</div><div class="kpi-s">${c.s}</div></div>`).join("");
+  const wbNote = $("wb-local-note");
+  if (wbNote) wbNote.hidden = !(source === "workbuddy" && totals.local_only === true);
 }
 
 /* ---------------- 首页: 今日趋势 24h ---------------- */
@@ -2691,10 +2767,13 @@ function bindEvents() {
   // DSH 轮询只在可见的统计页 / 首页 all·dsh 页签运行；页面回到前台后立即按当前视图取一次快照。
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
+      wbLocalPollStop();                                  // Step 8a: 后台时停止 WorkBuddy 本地导入轮询
       if (state.page === "stats") { destroyDshTrend(); cancelDshRefresh(); }
       else if (state.page === "home" && (state.channel === "all" || state.channel === "dsh")) cancelDshRefresh();
       return;
     }
+    // Step 8a: 回到前台, home/workbuddy 或 home/all 视图重取一次 (导入若仍在跑, 响应会重新武装轮询)
+    if (state.page === "home" && (state.channel === "workbuddy" || state.channel === "all")) loadDashboard(true, true);
     if (state.page === "stats") loadDshUsage().catch(() => {});
     else if (state.page === "home" && (state.channel === "all" || state.channel === "dsh")) dshSchedulerTick("home");
   });
@@ -2896,6 +2975,7 @@ function bindEvents() {
 
 function switchChannel(ch) {
   state.channel = ch;
+  if (ch !== "workbuddy" && ch !== "all") wbLocalPollStop();   // Step 8a: 切离 workbuddy/all 清理轮询 (切回由响应重武装)
   document.querySelectorAll("#channel-tabs .pill").forEach((x) => x.classList.toggle("active", x.dataset.ch === ch));
   loadDashboard();
 }
@@ -2973,8 +3053,12 @@ async function loadReportAll(quiet = false, noAnim = false) {
       reportHourlyCache = null;   // 7d/30d/all 档无 hourly 数据, 切主题时 rerenderCharts 跳过重渲
     }
     box.classList.remove("swapping");
+    homeReportShown = true;                                     // Step 8a: 首页 all 报表已显示
+    wbLocalPollOnResponse([w, rows, daily, hourly, all]         // Step 8a: 任一响应 running=true 即安排重取
+      .some((x) => !!(x && x.workbuddy_local && x.workbuddy_local.running)));
   } catch (e) {                                                   // R1: 现有 key 为 loadFailed
     if (seq === allSeq) {                                         // 错误路径回收加载态; toast 纳入 seq 守卫
+      wbLocalPollStop();                                          // Step 8a: 当前请求失败才停表 (迟到失败不干扰新请求)
       box.classList.remove("swapping");                           //   (防被取代的旧请求迟到失败时对已显示
       if (!quiet) toast(t("loadFailed") + ": " + e);              //    新数据的界面报错)
     }
@@ -3236,7 +3320,14 @@ function renderChannelTable(rows, summary) {
   $("report-table").innerHTML = rows.map((r) => `<tr>
     <td style="color:${CH_COLOR[r.channel] || "#2563eb"}">${escapeHtml(CH_LABEL[r.channel] || r.channel)}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
     <td class="num">${fmtTokens(r.tokens)}</td><td class="num">${fmtTokens(r.input)}</td><td class="num">${fmtTokens(r.output)}</td>
-    <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshRequestsUnavailable") : fmtInt(r.requests)}</td><td class="num">${r.channel === "workbuddy" ? (r.credits == null ? "—" : `${fmtInt(r.credits)} ${t("workbuddyCredits")}`) : r.channel === "dsh" ? dshUnavailableCell("dshCostUnavailable") : fmtOptionalMoney(r.cost)}</td>
+    <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshRequestsUnavailable") : fmtInt(r.requests)}</td><td class="num">${r.channel === "workbuddy"
+      ? (r.cost == null
+         ? `— <span class="ts">${t("codexCostUnavailable")}</span>`
+         : `${fmtOptionalMoney(r.cost)}`)
+        + (r.credits == null ? "" : ` <span class="ts">(${Number(r.credits).toLocaleString(undefined, {maximumFractionDigits: 4})} ${t("workbuddyCredits")})</span>`)
+        + ` <span class="ts">${t(r.local_only ? "wbLocalOnly" : "wbRemoteCreditsOnly")}</span>`
+        + (r.local_only && r.cost_partial ? ` <span class="ts">${t("wbUnpricedModels")}</span>` : "")
+      : r.channel === "dsh" ? dshUnavailableCell("dshCostUnavailable") : fmtOptionalMoney(r.cost)}</td>
     <td>${escapeHtml(r.data_since || "—")}</td></tr>`).join("") + foot;
 }
 
