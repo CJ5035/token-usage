@@ -67,16 +67,21 @@ def test_workbuddy_quota_maps_package_credits(tmp_workbuddy_server, monkeypatch)
     aid = _account()
     class API:
         def __init__(self, token): pass
-        def fetch_resource_summary(self): return {}
-        def fetch_paid_packages(self): return {"Accounts": []}
-        def fetch_free_packages(self): return {"Accounts": [{"CycleCapacitySizePrecise": 100, "CycleCapacityRemainPrecise": 60}]}
+        def fetch_resource_summary(self):
+            # 20260916 抓包实测形态: Packages[].CycleTotal/CycleRemain 为字符串型数字
+            return {"Packages": [
+                {"PackageCode": "TCACA_code_007_nzdH5h4Nl0", "CycleTotalCapacity": "2869",
+                 "CycleRemainCapacity": "2869", "CapacityUnit": "credits"},
+                {"PackageCode": "TCACA_code_008_cfWoLwvjU4", "CycleTotalCapacity": "500",
+                 "CycleRemainCapacity": "240.57000027", "CapacityUnit": "credits"},
+            ]}
     monkeypatch.setattr(server, "WorkBuddyAPI", API)
     quota = server._fetch_quota_with_cache(aid, "session", "u")
     assert quota["success"] is True
     assert quota["windows"][0]["unit"] == "credits"
-    assert quota["windows"][0]["total"] == 100
-    assert quota["windows"][0]["remaining"] == 60
-    assert quota["windows"][0]["used"] == 40
+    assert quota["windows"][0]["total"] == 3369  # 2869 + 500
+    assert quota["windows"][0]["remaining"] == pytest.approx(3109.57, abs=0.01)
+    assert quota["windows"][0]["used"] == pytest.approx(259.43, abs=0.01)
 
 
 def test_workbuddy_summary_route(tmp_workbuddy_server, monkeypatch, local_iso):
@@ -154,10 +159,7 @@ def test_in_flight_old_token_does_not_overwrite_new_quota(tmp_workbuddy_server, 
                 req_started.set()
                 continue_old_req.wait(timeout=5.0)
                 raise workbuddy_api.WorkBuddyAuthError("401 unauthorized")
-            return {}  # new token
-        def fetch_paid_packages(self):
-            return {"Accounts": [{"CycleCapacitySizePrecise": 100, "CycleCapacityRemainPrecise": 80}]}
-        def fetch_free_packages(self): return {"Accounts": []}
+            return {"Packages": [{"CycleTotalCapacity": "100", "CycleRemainCapacity": "80"}]}
 
     monkeypatch.setattr(server, "WorkBuddyAPI", StallingAPI)
 
@@ -266,15 +268,9 @@ def test_quota_workbuddy_routes_through_registered_transport(tmp_workbuddy_serve
 
     def fake_transport(url, headers, body, timeout):
         if url.endswith(workbuddy_api.RESOURCE_SUMMARY):
-            return (200, _envelope({}), {})
-        if url.endswith(workbuddy_api.PAID_PACKAGES):
-            return (200, _envelope({"Accounts": []}), {})
-        if url.endswith(workbuddy_api.FREE_PACKAGES):
-            return (200, _envelope({
-                "Accounts": [
-                    {"CycleCapacitySizePrecise": 100, "CycleCapacityRemainPrecise": 60}
-                ]
-            }), {})
+            return (200, _envelope({"Packages": [
+                {"CycleTotalCapacity": "100", "CycleRemainCapacity": "60", "CapacityUnit": "credits"}
+            ]}), {})
         raise AssertionError(f"unexpected url {url}")
 
     try:

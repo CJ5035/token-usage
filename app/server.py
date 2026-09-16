@@ -274,27 +274,27 @@ def _fetch_quota_with_cache(account_id: int, token: str, workspace_hint: str) ->
 
 
 def _fetch_workbuddy_quota(token: str) -> dict[str, Any]:
-    """Map confirmed package capacity fields to a credits quota window."""
+    """Aggregate resource-summary Packages into a credits quota window.
+
+    契约依据 20260916 CDP 认证态抓包: resource-summary 请求体 {} 正确且响应
+    data.Packages[].CycleTotalCapacity/CycleRemainCapacity (字符串型数字) 已实测
+    拿到数值; paid/free-packages 端点缺 PackageCodes 必传字段恒 400, 不再调用.
+    """
     try:
         api = WorkBuddyAPI(token)
-        api.fetch_resource_summary()  # keep the endpoint in the quota snapshot contract
-        paid = api.fetch_paid_packages()
-        free = api.fetch_free_packages()
-        accounts = []
-        for payload in (paid, free):
-            values = payload.get("Accounts") if isinstance(payload, dict) else None
-            if isinstance(values, list):
-                accounts.extend(x for x in values if isinstance(x, dict))
+        summary = api.fetch_resource_summary()
+        packages = summary.get("Packages") if isinstance(summary, dict) else None
+        items = [x for x in packages if isinstance(x, dict)] if isinstance(packages, list) else []
         total = 0.0
         remaining = 0.0
-        for item in accounts:
-            cap = item.get("CycleCapacitySizePrecise")
-            rem = item.get("CycleCapacityRemainPrecise")
+        for item in items:
+            cap = workbuddy_api._credit(item.get("CycleTotalCapacity"))
+            rem = workbuddy_api._credit(item.get("CycleRemainCapacity"))
             if cap is None or rem is None:
                 continue
-            total += float(cap)
-            remaining += float(rem)
-        if not accounts or total <= 0:
+            total += cap
+            remaining += rem
+        if not items or total <= 0:
             return {"success": False, "mapping_unverified": True,
                     "error": "WorkBuddy credits fields are not confirmed"}
         return {
