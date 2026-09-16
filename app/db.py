@@ -193,6 +193,44 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_workbuddy_usage_model ON workbuddy_usage(model);
         CREATE INDEX IF NOT EXISTS idx_workbuddy_usage_account ON workbuddy_usage(account_id);
 
+        -- WorkBuddy 本机会话 JSONL → 导入本表; 列名/口径对齐 zcode_usage/claudecode_usage。
+        -- 与上方 workbuddy_usage (远程 billing 账单流水) 并存: 去重键/时间口径/语义均不同,
+        -- 不可混表 (见 doc/设计实施文档/20260916-WorkBuddy本地用量接入实施计划.md §4.2)
+        CREATE TABLE IF NOT EXISTS workbuddy_local_usage (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          dedupe_key TEXT NOT NULL UNIQUE,     -- providerData.messageId (仅在样本的 rawUsage 子集验证唯一)
+          session_id TEXT,                     -- 父会话 uuid (路径判定, 子代理归父会话)
+          model TEXT,                          -- providerData.model (小写 id, 定价表匹配用)
+          model_name TEXT,                     -- providerData.requestModelName (展示名)
+          trace_id TEXT,                       -- providerData.traceId (台账对账用)
+          started_at TEXT NOT NULL,            -- UTC ISO (Z 后缀; 聚合用 'localtime')
+          input_tokens INTEGER NOT NULL DEFAULT 0,       -- ← prompt_cache_miss_tokens
+          output_tokens INTEGER NOT NULL DEFAULT 0,      -- ← completion_tokens − completion_thinking_tokens
+          reasoning_tokens INTEGER NOT NULL DEFAULT 0,   -- ← completion_thinking_tokens
+          cache_read_tokens INTEGER NOT NULL DEFAULT 0,  -- ← prompt_cache_hit_tokens
+          cache_write_tokens INTEGER NOT NULL DEFAULT 0, -- 恒 0 (WorkBuddy 无此口径)
+          total_tokens INTEGER NOT NULL DEFAULT 0,       -- ← total_tokens
+          credit REAL,                                   -- 官方积分口径 (可 NULL)
+          cost_raw INTEGER NOT NULL DEFAULT 0,           -- token 推算 (1e-8 USD)
+          cost_available INTEGER NOT NULL DEFAULT 0,     -- 定价可用标记 (0=未收录或所需单价无效)
+          file_path TEXT,
+          synced_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_wbl_time ON workbuddy_local_usage(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_wbl_utc ON workbuddy_local_usage(datetime(started_at));
+        CREATE INDEX IF NOT EXISTS idx_wbl_model ON workbuddy_local_usage(model);
+        CREATE INDEX IF NOT EXISTS idx_wbl_session ON workbuddy_local_usage(session_id);
+
+        -- WorkBuddy JSONL 文件续读进度 (字节偏移推进到最后一条完整行末尾;
+        -- 文件被重写变短时由采集编排重置 offset, 靠去重键幂等兜底)
+        CREATE TABLE IF NOT EXISTS workbuddy_file_progress (
+          path TEXT PRIMARY KEY,
+          offset INTEGER NOT NULL DEFAULT 0,
+          size INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS settings (
           id INTEGER PRIMARY KEY CHECK (id = 1),
           payload TEXT NOT NULL,
@@ -2268,6 +2306,90 @@ def save_claude_file_progress(path: str, offset: int, size: int) -> None:
             (path, int(offset), int(size), _now_iso()),
         )
         conn.commit()
+
+
+def get_workbuddy_file_progress_all() -> dict[str, tuple[int, int]]:
+    """全部 WorkBuddy JSONL 文件的续读进度: path → (offset, size)."""
+    rows = get_db().execute(
+        "SELECT path, offset, size FROM workbuddy_file_progress"
+    ).fetchall()
+    return {r["path"]: (int(r["offset"]), int(r["size"])) for r in rows}
+
+
+def save_workbuddy_file_progress(path: str, offset: int, size: int) -> None:
+    """写入/覆盖单个 WorkBuddy JSONL 文件的续读进度."""
+    with _DB_LOCK:
+        conn = get_db()
+        try:
+            conn.execute(
+                "INSERT INTO workbuddy_file_progress (path, offset, size, updated_at)"
+                " VALUES (?,?,?,?)"
+                " ON CONFLICT(path) DO UPDATE SET offset=excluded.offset,"
+                " size=excluded.size, updated_at=excluded.updated_at",
+                (path, int(offset), int(size), _now_iso()),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def import_workbuddy_local_usage(rows: list[dict[str, Any]]) -> int:
+    """把 workbuddy_local_api 的增量行导入 workbuddy_local_usage, 返回新增条数.
+
+    行 dict 键契约 (采集层组装, 键名逐字): 见 workbuddy_local_api.parse_session_file
+    与实施计划 §4.1 的 16 键 (cost_raw/cost_available 已由采集层按定价表算好)。
+    幂等: dedupe_key UNIQUE + INSERT OR IGNORE —— WorkBuddy 的 messageId 在带 rawUsage
+    的记录内实测唯一 (§3.2/R28; 无 claudecode 那种"流式多行累计、需取终值"的情形),
+    故不需"总量大者胜"。
+    事务照 import_claudecode_usage (R34): 写路径持 _DB_LOCK (共享单连接串行化,
+    EVOLUTION-1), COUNT 对账返回新增数; 不用显式 BEGIN (仓库惯例: 隐式事务 + commit)。
+    """
+    if not rows:
+        return 0
+    conn = get_db()
+    synced_at = _now_iso()
+    payload = [
+        (r.get("dedupe_key"), r.get("session_id"), r.get("model") or "",
+         r.get("model_name") or "", r.get("trace_id") or "", r.get("started_at"),
+         int(r.get("input_tokens") or 0), int(r.get("output_tokens") or 0),
+         int(r.get("reasoning_tokens") or 0), int(r.get("cache_read_tokens") or 0),
+         int(r.get("cache_write_tokens") or 0), int(r.get("total_tokens") or 0),
+         r.get("credit"), int(r.get("cost_raw") or 0),
+         int(r.get("cost_available") or 0), r.get("file_path"), synced_at)
+        for r in rows
+    ]
+    with _DB_LOCK:
+        before = int(conn.execute(
+            "SELECT COUNT(*) AS c FROM workbuddy_local_usage").fetchone()["c"])
+        try:
+            conn.executemany(
+                "INSERT INTO workbuddy_local_usage"
+                " (dedupe_key,session_id,model,model_name,trace_id,started_at,"
+                " input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,"
+                " cache_write_tokens,total_tokens,credit,cost_raw,cost_available,"
+                " file_path,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(dedupe_key) DO NOTHING",
+                payload,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        after = int(conn.execute(
+            "SELECT COUNT(*) AS c FROM workbuddy_local_usage").fetchone()["c"])
+    return after - before
+
+
+def workbuddy_local_last_import_at() -> Optional[str]:
+    """最近一次本地导入时刻 (ISO 串); 表不存在/无数据 → None."""
+    try:
+        row = get_db().execute(
+            "SELECT MAX(synced_at) AS m FROM workbuddy_local_usage"
+        ).fetchone()
+    except Exception:  # noqa: BLE001 表不存在等异常按无数据处理
+        return None
+    return row["m"] if row else None
 
 
 _CC_PERIOD_CLAUSES = {
