@@ -202,9 +202,9 @@ class WorkBuddyAPI:
     def fetch_request_usage_page(
         self, start_time: str, end_time: str, page_size: int, page_token: str = "", page_num: int | None = None
     ) -> dict[str, Any]:
-        v2 = {"startTime": start_time, "endTime": end_time, "timezone": "Asia/Shanghai", "pageSize": page_size, "version": 2}
-        if page_token:
-            v2["pageToken"] = page_token
+        # pageToken 恒带键: 20260916 CDP 抓包实证缺该键 → 400 invalid params.
+        v2 = {"startTime": start_time, "endTime": end_time, "timezone": "Asia/Shanghai",
+              "pageSize": page_size, "version": 2, "pageToken": page_token}
         try:
             data = self._data(self._post_json(REQUEST_USAGE, v2))
         except WorkBuddyAuthError:

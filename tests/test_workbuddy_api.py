@@ -83,6 +83,24 @@ def test_fetch_request_usage_page_uses_v2_and_next_token(monkeypatch):
     assert result["next_page_token"] == "next"
     assert result["rows"][0]["request_id"] == "r"
     assert calls[0][1]["version"] == 2
+    assert calls[0][1]["pageToken"] == ""  # 新增: 首屏也带键
+
+
+def test_fetch_request_usage_page_v2_always_carries_page_token_key(monkeypatch):
+    """v2 body 恒带 pageToken 键 (首屏空串). 20260916 抓包: 缺该键 → 400 invalid params."""
+    api = workbuddy_api.WorkBuddyAPI("session=s")
+    calls = []
+
+    def post(path, body):
+        calls.append(body)
+        return {"data": {"data": [], "nextPageToken": ""}}
+
+    monkeypatch.setattr(api, "_post_json", post)
+    api.fetch_request_usage_page("a", "b", 50)  # 首屏, page_token 默认空串
+    assert calls[0].get("pageToken") == ""  # 键必须存在且为空串
+
+    api.fetch_request_usage_page("a", "b", 50, page_token="tok-2")
+    assert calls[1]["pageToken"] == "tok-2"  # 翻页值原样透传
 
 
 def test_fetch_request_usage_page_falls_back_to_v1(monkeypatch):
