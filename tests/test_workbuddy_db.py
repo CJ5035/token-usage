@@ -95,6 +95,7 @@ def test_delete_account_removes_workbuddy_usage(tmp_workbuddy_db):
 
 
 def test_workbuddy_channel_order_and_summary(tmp_workbuddy_db):
+    db.add_account("opencode-token", "oc")   # 已登录 opencode (D1 口径 20260915: 空 token 种子行不显示渠道)
     _workbuddy_account()
     channels = db.list_channel_summary()
     assert channels[0]["channel"] == "opencode"
