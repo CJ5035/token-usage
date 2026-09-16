@@ -224,18 +224,3 @@ class WorkBuddyAPI:
 
     def fetch_resource_summary(self) -> dict[str, Any]:
         return self._data(self._post_json(RESOURCE_SUMMARY, {}))
-
-    # WorkBuddy 资源包状态枚举 (官网 bundle 实证, 诊断附录 A.3):
-    # valid=0, refund=1, expired=2, usedUp=3. 有效额度取 valid+usedUp.
-    _STATUS_VALID = 0
-    _STATUS_USED_UP = 3
-
-    def fetch_paid_packages(self, page_number: int = 1, page_size: int = 200, **extra: Any) -> dict[str, Any]:
-        body = {"PageNumber": page_number, "PageSize": page_size,
-                "Status": [self._STATUS_VALID, self._STATUS_USED_UP], **extra}
-        return self._data(self._post_json(PAID_PACKAGES, body))
-
-    def fetch_free_packages(self, page_number: int = 1, page_size: int = 200, **extra: Any) -> dict[str, Any]:
-        body = {"PageNumber": page_number, "PageSize": page_size,
-                "Status": [self._STATUS_VALID, self._STATUS_USED_UP], **extra}
-        return self._data(self._post_json(FREE_PACKAGES, body))

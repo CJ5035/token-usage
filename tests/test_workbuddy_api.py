@@ -205,37 +205,6 @@ def test_transport_precedence_ctor_over_global_over_default():
     assert workbuddy_api.WorkBuddyAPI("session=s")._transport is workbuddy_api._default_transport
 
 
-def test_paid_packages_sends_numeric_status_enum():
-    """官网契约: Status 是数字枚举 [0,3], 不是字符串 ['valid'] (诊断附录 A.3)."""
-    captured = {}
-
-    def transport(url, headers, body, timeout):
-        import json as _json
-        captured["url"] = url
-        captured["body"] = _json.loads(body) if body else None
-        return 200, '{"code":0,"data":{"Accounts":[]}}', {}
-
-    api = workbuddy_api.WorkBuddyAPI("session=s", transport=transport)
-    api.fetch_paid_packages()
-    assert captured["url"].endswith("/billing/meter/get-user-resource-paid-packages")
-    assert captured["body"]["Status"] == [0, 3]
-    assert captured["body"]["PageSize"] == 200
-
-
-def test_free_packages_sends_numeric_status_enum():
-    captured = {}
-
-    def transport(url, headers, body, timeout):
-        import json as _json
-        captured["body"] = _json.loads(body) if body else None
-        return 200, '{"code":0,"data":{"Accounts":[]}}', {}
-
-    api = workbuddy_api.WorkBuddyAPI("session=s", transport=transport)
-    api.fetch_free_packages()
-    assert captured["body"]["Status"] == [0, 3]
-    assert captured["body"]["PageSize"] == 200
-
-
 def test_http_400_raises_apierror_with_status_not_auth_error():
     """400 应以带 HTTP status 的 WorkBuddyAPIError 抛出, 不得升级为 AuthError (诊断原因 1/3)."""
     api = workbuddy_api.WorkBuddyAPI(
