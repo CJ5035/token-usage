@@ -49,6 +49,30 @@ def tmp_db(tmp_path, monkeypatch):
     db.close_db()
 
 
+@pytest.fixture(autouse=True)
+def isolate_workbuddy_scan_root(tmp_path, monkeypatch):
+    """默认把 WorkBuddy 本地采集根重定向到空临时目录, 并重置触发/节流全局.
+
+    读取端点 (/api/dashboard?scope=all, /api/report/* 等) 会触发后台导入线程,
+    其扫描根默认是真实机器的 ~/.workbuddy/projects —— 线程会把真实用量行写进
+    当前用例的临时库, 断言随即读到上万级 token (仅按子集执行时暴露, 全量运行被
+    掩盖; 见 doc/20260917-WorkBuddy本地导入测试隔离缺陷修复实施计划.md)。
+
+    自守卫: 仅当当前值指向本用例 tmp 之外时才重定向, 故已自行把该常量指向
+    tmp 的用例 (test_workbuddy_local_api / test_workbuddy_local_server) 不受影响,
+    无论两者实例化顺序如何。
+    """
+    from app import server, workbuddy_local_api
+
+    current = str(getattr(workbuddy_local_api, "WORKBUDDY_PROJECTS", ""))
+    if not current.startswith(str(tmp_path)):
+        empty = tmp_path / "_empty_wb_projects"
+        empty.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(workbuddy_local_api, "WORKBUDDY_PROJECTS", empty)
+    monkeypatch.setattr(server, "_wb_last_import_trigger", None)
+    monkeypatch.setattr(workbuddy_local_api, "_last_import_at", None)
+
+
 @pytest.fixture
 def wb_row(local_iso):
     """WorkBuddy 本地用量行工厂; total_tokens 由四项相加推出, 保证行内恒等式成立 (R8).
