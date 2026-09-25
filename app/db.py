@@ -4184,7 +4184,8 @@ _UNIFIED_COLS = (
     "source, account_id, source_record_id, started_at, model, provider_id,"
     " session_id, key_id, input_tokens, output_tokens, reasoning_tokens,"
     " cache_read_tokens, cache_write_tokens, total_tokens, duration_ms,"
-    " speed_tps, speed_source, cost_usd, cost_available, request_count_exact"
+    " speed_tps, speed_source, cost_usd, cost_available, request_count_exact,"
+    " ttft_ms"
 )
 
 
@@ -4267,14 +4268,18 @@ def _unified_arm_records(inner: str) -> str:
            (r.cache_write_5m_tokens + r.cache_write_1h_tokens) AS cache_write_tokens,
            (r.input_tokens + r.output_tokens) AS total_tokens,
            NULL AS duration_ms, NULL AS speed_tps, NULL AS speed_source,
-           r.cost_usd AS cost_usd, 1 AS cost_available, 1 AS request_count_exact
+           r.cost_usd AS cost_usd, 1 AS cost_available, 1 AS request_count_exact,
+           NULL AS ttft_ms
     FROM {inner} r LEFT JOIN accounts a ON a.id = r.account_id"""
 
 
 def _unified_arm_zcode(inner: str) -> str:
     """zcode_usage 段: input 原样 (已含缓存读); 速度无列, 按 _ZCODE_TPS_SQL 由
     output/duration 现算, speed_source=duration (有值时); provider_name 快照
-    优先于 provider_id。"""
+    优先于 provider_id。
+
+    ttft_ms 由 _ZCODE_TTFT_SQL 现算 (需落在 [0, duration] 内, 否则 NULL) —— 四张
+    源表里只有 zcode_usage 有这一列, 另三段恒 NULL, 不估算不补 0。"""
     return f"""
     SELECT 'zcode' AS source, NULL AS account_id,
            'zcode:' || z.id AS source_record_id,
@@ -4288,8 +4293,10 @@ def _unified_arm_zcode(inner: str) -> str:
            z.total_tokens AS total_tokens, z.duration_ms AS duration_ms,
            z.row_tps AS speed_tps,
            CASE WHEN z.row_tps IS NOT NULL THEN 'duration' END AS speed_source,
-           z.cost_raw / 1e8 AS cost_usd, 1 AS cost_available, 1 AS request_count_exact
-    FROM (SELECT z0.*, ({_ZCODE_TPS_SQL}) AS row_tps FROM {inner} z0) z"""
+           z.cost_raw / 1e8 AS cost_usd, 1 AS cost_available, 1 AS request_count_exact,
+           z.row_ttft AS ttft_ms
+    FROM (SELECT z0.*, ({_ZCODE_TPS_SQL}) AS row_tps,
+                 ({_ZCODE_TTFT_SQL}) AS row_ttft FROM {inner} z0) z"""
 
 
 def _unified_arm_claudecode(inner: str) -> str:
@@ -4306,7 +4313,8 @@ def _unified_arm_claudecode(inner: str) -> str:
            c.total_tokens AS total_tokens, c.duration_ms AS duration_ms,
            c.speed_tps AS speed_tps,
            CASE WHEN c.speed_tps IS NOT NULL THEN 'duration' END AS speed_source,
-           c.cost_raw / 1e8 AS cost_usd, 1 AS cost_available, 1 AS request_count_exact
+           c.cost_raw / 1e8 AS cost_usd, 1 AS cost_available, 1 AS request_count_exact,
+           NULL AS ttft_ms
     FROM {inner} c"""
 
 
@@ -4324,7 +4332,8 @@ def _unified_arm_codex(inner: str) -> str:
            x.total_tokens AS total_tokens, x.duration_ms AS duration_ms,
            x.speed_tps AS speed_tps, x.speed_source AS speed_source,
            NULL AS cost_usd, 0 AS cost_available,
-           x.request_count_exact AS request_count_exact
+           x.request_count_exact AS request_count_exact,
+           NULL AS ttft_ms
     FROM {inner} x"""
 
 
@@ -4493,6 +4502,7 @@ def unified_records_page(source: str, page: int = 1, page_size: int = 20,
             "cost_usd": r["cost_usd"],
             "cost_available": bool(r["cost_available"]),
             "request_count_exact": bool(r["request_count_exact"]),
+            "ttft_ms": r["ttft_ms"],   # 仅 zcode 有值, 其余来源恒 None
         }
         for r in rows
     ]

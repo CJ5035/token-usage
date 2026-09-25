@@ -31,7 +31,8 @@
         "source_record_id": "bai:3:bai-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       },
       {
         "account_id": 4,
@@ -53,7 +54,8 @@
         "source_record_id": "commandcode:4:commandcode-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       },
       {
         "account_id": 2,
@@ -75,7 +77,8 @@
         "source_record_id": "opencode:2:opencode-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       },
       {
         "account_id": 99999,
@@ -97,7 +100,8 @@
         "source_record_id": "opencode:99999:orphan-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 10
+        "total_tokens": 10,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -119,7 +123,8 @@
         "source_record_id": "zcode:z1",
         "speed_source": "duration",
         "speed_tps": 34.285714285714285,
-        "total_tokens": 430
+        "total_tokens": 430,
+        "ttft_ms": 500
       },
       {
         "account_id": null,
@@ -141,7 +146,8 @@
         "source_record_id": "claudecode:1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 330
+        "total_tokens": 330,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -163,7 +169,8 @@
         "source_record_id": "cs:1",
         "speed_source": "duration",
         "speed_tps": 30.0,
-        "total_tokens": 570
+        "total_tokens": 570,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -373,7 +380,8 @@
         "source_record_id": "bai:3:bai-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       },
       {
         "account_id": 4,
@@ -395,7 +403,8 @@
         "source_record_id": "commandcode:4:commandcode-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       },
       {
         "account_id": 2,
@@ -417,7 +426,8 @@
         "source_record_id": "opencode:2:opencode-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       },
       {
         "account_id": 99999,
@@ -439,7 +449,8 @@
         "source_record_id": "opencode:99999:orphan-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 10
+        "total_tokens": 10,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -461,7 +472,8 @@
         "source_record_id": "zcode:z1",
         "speed_source": "duration",
         "speed_tps": 34.285714285714285,
-        "total_tokens": 430
+        "total_tokens": 430,
+        "ttft_ms": 500
       },
       {
         "account_id": null,
@@ -483,7 +495,8 @@
         "source_record_id": "claudecode:1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 330
+        "total_tokens": 330,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -505,7 +518,8 @@
         "source_record_id": "cs:1",
         "speed_source": "duration",
         "speed_tps": 30.0,
-        "total_tokens": 570
+        "total_tokens": 570,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -715,7 +729,8 @@
         "source_record_id": "bai:3:bai-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       },
       {
         "account_id": 4,
@@ -737,7 +752,8 @@
         "source_record_id": "commandcode:4:commandcode-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       },
       {
         "account_id": 2,
@@ -759,7 +775,8 @@
         "source_record_id": "opencode:2:opencode-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -781,7 +798,8 @@
         "source_record_id": "zcode:z2",
         "speed_source": "duration",
         "speed_tps": 30.76923076923077,
-        "total_tokens": 280
+        "total_tokens": 280,
+        "ttft_ms": 400
       },
       {
         "account_id": null,
@@ -803,7 +821,8 @@
         "source_record_id": "zcode:z3",
         "speed_source": "duration",
         "speed_tps": 23.529411764705884,
-        "total_tokens": 140
+        "total_tokens": 140,
+        "ttft_ms": 300
       },
       {
         "account_id": null,
@@ -825,7 +844,8 @@
         "source_record_id": "cs:2",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 140
+        "total_tokens": 140,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -847,7 +867,8 @@
         "source_record_id": "cs:3",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -942,7 +963,8 @@
         "source_record_id": "claudecode:2",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 150
+        "total_tokens": 150,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -964,7 +986,8 @@
         "source_record_id": "zcode:z4",
         "speed_source": "duration",
         "speed_tps": 24.0,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": 250
       }
     ],
     "records_order": [
@@ -1024,7 +1047,8 @@
         "source_record_id": "bai:3:bai-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       },
       {
         "account_id": 4,
@@ -1046,7 +1070,8 @@
         "source_record_id": "commandcode:4:commandcode-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       },
       {
         "account_id": 2,
@@ -1068,7 +1093,8 @@
         "source_record_id": "opencode:2:opencode-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -1090,7 +1116,8 @@
         "source_record_id": "zcode:z2",
         "speed_source": "duration",
         "speed_tps": 30.76923076923077,
-        "total_tokens": 280
+        "total_tokens": 280,
+        "ttft_ms": 400
       },
       {
         "account_id": null,
@@ -1112,7 +1139,8 @@
         "source_record_id": "cs:2",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 140
+        "total_tokens": 140,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -1274,7 +1302,8 @@
         "source_record_id": "bai:3:bai-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       },
       {
         "account_id": 4,
@@ -1296,7 +1325,8 @@
         "source_record_id": "commandcode:4:commandcode-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       },
       {
         "account_id": 2,
@@ -1318,7 +1348,8 @@
         "source_record_id": "opencode:2:opencode-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -1340,7 +1371,8 @@
         "source_record_id": "zcode:z2",
         "speed_source": "duration",
         "speed_tps": 30.76923076923077,
-        "total_tokens": 280
+        "total_tokens": 280,
+        "ttft_ms": 400
       },
       {
         "account_id": null,
@@ -1362,7 +1394,8 @@
         "source_record_id": "cs:2",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 140
+        "total_tokens": 140,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -1384,7 +1417,8 @@
         "source_record_id": "claudecode:2",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 150
+        "total_tokens": 150,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -1564,7 +1598,8 @@
         "source_record_id": "bai:3:bai-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       },
       {
         "account_id": 3,
@@ -1586,7 +1621,8 @@
         "source_record_id": "bai:3:bai-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -1646,7 +1682,8 @@
         "source_record_id": "claudecode:1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 330
+        "total_tokens": 330,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -1706,7 +1743,8 @@
         "source_record_id": "claudecode:1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 330
+        "total_tokens": 330,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -1728,7 +1766,8 @@
         "source_record_id": "claudecode:2",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 150
+        "total_tokens": 150,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -1812,7 +1851,8 @@
         "source_record_id": "cs:1",
         "speed_source": "duration",
         "speed_tps": 30.0,
-        "total_tokens": 570
+        "total_tokens": 570,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -1834,7 +1874,8 @@
         "source_record_id": "cs:2",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 140
+        "total_tokens": 140,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -1856,7 +1897,8 @@
         "source_record_id": "cs:3",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -1918,7 +1960,8 @@
         "source_record_id": "cs:1",
         "speed_source": "duration",
         "speed_tps": 30.0,
-        "total_tokens": 570
+        "total_tokens": 570,
+        "ttft_ms": null
       },
       {
         "account_id": null,
@@ -1940,7 +1983,8 @@
         "source_record_id": "cs:3",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -2001,7 +2045,8 @@
         "source_record_id": "commandcode:4:commandcode-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       },
       {
         "account_id": 4,
@@ -2023,7 +2068,8 @@
         "source_record_id": "commandcode:4:commandcode-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -2085,7 +2131,8 @@
         "source_record_id": "opencode:2:opencode-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       },
       {
         "account_id": 99999,
@@ -2107,7 +2154,8 @@
         "source_record_id": "opencode:99999:orphan-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 10
+        "total_tokens": 10,
+        "ttft_ms": null
       },
       {
         "account_id": 2,
@@ -2129,7 +2177,8 @@
         "source_record_id": "opencode:2:opencode-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -2215,7 +2264,8 @@
         "source_record_id": "opencode:2:opencode-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": null
       },
       {
         "account_id": 99999,
@@ -2237,7 +2287,8 @@
         "source_record_id": "opencode:99999:orphan-0",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 10
+        "total_tokens": 10,
+        "ttft_ms": null
       },
       {
         "account_id": 2,
@@ -2259,7 +2310,8 @@
         "source_record_id": "opencode:2:opencode-1",
         "speed_source": null,
         "speed_tps": null,
-        "total_tokens": 122
+        "total_tokens": 122,
+        "ttft_ms": null
       }
     ],
     "records_order": [
@@ -2343,7 +2395,8 @@
         "source_record_id": "zcode:z1",
         "speed_source": "duration",
         "speed_tps": 34.285714285714285,
-        "total_tokens": 430
+        "total_tokens": 430,
+        "ttft_ms": 500
       }
     ],
     "records_order": [
@@ -2403,7 +2456,8 @@
         "source_record_id": "zcode:z1",
         "speed_source": "duration",
         "speed_tps": 34.285714285714285,
-        "total_tokens": 430
+        "total_tokens": 430,
+        "ttft_ms": 500
       },
       {
         "account_id": null,
@@ -2425,7 +2479,8 @@
         "source_record_id": "zcode:z2",
         "speed_source": "duration",
         "speed_tps": 30.76923076923077,
-        "total_tokens": 280
+        "total_tokens": 280,
+        "ttft_ms": 400
       },
       {
         "account_id": null,
@@ -2447,7 +2502,8 @@
         "source_record_id": "zcode:z3",
         "speed_source": "duration",
         "speed_tps": 23.529411764705884,
-        "total_tokens": 140
+        "total_tokens": 140,
+        "ttft_ms": 300
       }
     ],
     "records_order": [
@@ -2532,7 +2588,8 @@
         "source_record_id": "zcode:z1",
         "speed_source": "duration",
         "speed_tps": 34.285714285714285,
-        "total_tokens": 430
+        "total_tokens": 430,
+        "ttft_ms": 500
       },
       {
         "account_id": null,
@@ -2554,7 +2611,8 @@
         "source_record_id": "zcode:z2",
         "speed_source": "duration",
         "speed_tps": 30.76923076923077,
-        "total_tokens": 280
+        "total_tokens": 280,
+        "ttft_ms": 400
       },
       {
         "account_id": null,
@@ -2576,7 +2634,8 @@
         "source_record_id": "zcode:z3",
         "speed_source": "duration",
         "speed_tps": 23.529411764705884,
-        "total_tokens": 140
+        "total_tokens": 140,
+        "ttft_ms": 300
       },
       {
         "account_id": null,
@@ -2598,7 +2657,8 @@
         "source_record_id": "zcode:z4",
         "speed_source": "duration",
         "speed_tps": 24.0,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": 250
       }
     ],
     "records_order": [
@@ -2684,7 +2744,8 @@
         "source_record_id": "zcode:z1",
         "speed_source": "duration",
         "speed_tps": 34.285714285714285,
-        "total_tokens": 430
+        "total_tokens": 430,
+        "ttft_ms": 500
       },
       {
         "account_id": null,
@@ -2706,7 +2767,8 @@
         "source_record_id": "zcode:z3",
         "speed_source": "duration",
         "speed_tps": 23.529411764705884,
-        "total_tokens": 140
+        "total_tokens": 140,
+        "ttft_ms": 300
       },
       {
         "account_id": null,
@@ -2728,7 +2790,8 @@
         "source_record_id": "zcode:z4",
         "speed_source": "duration",
         "speed_tps": 24.0,
-        "total_tokens": 120
+        "total_tokens": 120,
+        "ttft_ms": 250
       }
     ],
     "records_order": [
