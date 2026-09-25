@@ -430,6 +430,7 @@ function applyLang(l) {
   if (state.data) {
     syncTopBar(state.data);   // EVOLUTION-9: 仅刷顶栏, 隐藏容器不再写穿 (回页重载兜底)
     renderSettings();
+    recFilterKey = null;   // 语言变了「全部模型」占位文案要重建, 强制下一次带 models
     loadRecords().catch(() => {});
   }
   // EVOLUTION-7: 语言切换后重设已显示的空态占位文案 (today-empty 固定今日语义; report-hourly-empty 按范围语义近似, 档位瞬态可接受)
@@ -2089,19 +2090,37 @@ function fmtDateTimeShort(iso) {
 
 /* ---------------- 使用记录 ---------------- */
 let recSeq = 0;
+/* 翻页不重取模型下拉: 后端 DISTINCT model 要扫全部命中行 (实测 21-24ms), 而模型
+   列表几乎不变。只有筛选键 (来源|模型) 变化时才请求 models 并重建下拉; 纯翻页带
+   with_models=0 并原地保留现有 <option>。语言切换会改「全部模型」占位文案, 故
+   applyLang 里置 null 强制下一次重建。*/
+let recFilterKey = null;
+/* 键只含 source|model, 因为记录页当前不发 days (loadRecords 的 URLSearchParams 只有
+   page/page_size/source + 可选 model)。若将来给记录页加了时间范围控件, 必须把 days
+   一起并进这个键 —— 否则切 days 时后端 unified_models(source, days) 的结果变了,
+   前端却因键未变而不重取, 下拉会停留在旧窗口的模型集合。*/
+function recordsFilterKey() {
+  return `${state.records.source}|${state.records.model}`;
+}
 async function loadRecords() {
   const seq = ++recSeq;
   const body = $("records-body");
+  const key = recordsFilterKey();
+  const wantModels = key !== recFilterKey;
   try {
     const q = new URLSearchParams({ page: state.records.page, page_size: 7, source: state.records.source });
     if (state.records.model) q.set("model", state.records.model);
+    if (!wantModels) q.set("with_models", "0");
     const data = await api(`/api/usage/records?${q}`);
     if (seq !== recSeq) return; // 丢弃过期响应 (快速切页/翻页时旧请求)
+    recFilterKey = key;
     state.records.total = data.total;
-    const sel = $("rec-model-filter");
-    const cur = sel.value;
-    sel.innerHTML = '<option value="">' + t("allModels") + '</option>' + data.models.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
-    sel.value = state.records.model || cur || "";
+    if (data.models) {   // with_models=0 时不下发, 保留现有下拉 DOM
+      const sel = $("rec-model-filter");
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">' + t("allModels") + '</option>' + data.models.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
+      sel.value = state.records.model || cur || "";
+    }
     syncSourceFilter();
     $("rec-count").textContent = `${t("totalN")} ${fmtInt(data.total)} ${t("items")}`;
     if (!data.records.length) {
