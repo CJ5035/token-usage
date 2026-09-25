@@ -307,3 +307,73 @@ def test_group_id_filter_survives_row_limit_pushdown(card_db, page_size):
     assert {r["session_id"] for r in recs} == {"sess-z"}
 
 
+from types import SimpleNamespace
+from urllib.parse import urlsplit, parse_qs, quote
+
+from app import server
+
+
+@pytest.fixture()
+def api_call(monkeypatch):
+    """直接驱动 server._handle_api, 不起真实 HTTP (对齐 tests/test_codex_server.py:18-33)."""
+    captured: dict = {}
+    monkeypatch.setattr(server, "_json_response",
+                        lambda h, data, status=200: captured.update(data=data, status=status))
+    monkeypatch.setattr(server, "_ensure_quota_async", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_fetch_usd_cny", lambda: 7.2)
+    monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
+
+    def call(url: str, method: str = "GET") -> dict:
+        captured.clear()
+        parsed = urlsplit(url)
+        server._handle_api(SimpleNamespace(command=method), parsed.path,
+                           parse_qs(parsed.query, keep_blank_values=True))
+        return dict(captured)
+    return call
+
+
+def test_route_group_id_filters_and_echoes(card_db, api_call):
+    """带 source 的 group_id 过滤生效, 且 filter 回显该值 (便于前端与调试核对)."""
+    sessions, _ = db.unified_sessions_page("zcode", 1, 50)
+    gid = _session_by(sessions, "zcode", "sess-z")["group_id"]
+    res = api_call(f"/api/usage/records?source=zcode&page=1&page_size=50"
+                   f"&group_id={quote(gid, safe='')}")
+    assert res["status"] == 200
+    assert res["data"]["total"] == 4
+    assert res["data"]["filter"]["group_id"] == gid
+    assert {r["source"] for r in res["data"]["records"]} == {"zcode"}
+
+
+def test_route_group_id_without_source_is_400(card_db, api_call):
+    """缺 source 会落到 legacy 单表路径, 它不认识会话分组键 —— 必须 400 而非静默忽略."""
+    res = api_call("/api/usage/records?page=1&group_id=zcode::sess-z")
+    assert res["status"] == 400
+    assert "group_id" in str(res["data"].get("error", ""))
+
+
+def test_route_without_group_id_unchanged(card_db, api_call):
+    """不带 group_id 时行为与今天一致, filter.group_id 为 None."""
+    res = api_call("/api/usage/records?source=all&page=1&page_size=50")
+    assert res["status"] == 200
+    assert res["data"]["filter"]["group_id"] is None
+    assert res["data"]["total"] == 6 + 2 + 2 + 2   # zcode6 + cc2 + codex2 + opencode2
+
+
+def test_route_records_expose_ttft_field(card_db, api_call):
+    """路由层必须把 ttft_ms 透出给前端 (明细表/卡片都要用)."""
+    res = api_call("/api/usage/records?source=zcode&page=1&page_size=50")
+    vals = sorted(r["ttft_ms"] for r in res["data"]["records"]
+                  if r["ttft_ms"] is not None)
+    assert vals == [200, 400]
+
+
+def test_route_sessions_expose_card_fields(card_db, api_call):
+    """会话路由必须透出卡片需要的三个新字段."""
+    res = api_call("/api/usage/sessions?source=zcode&page=1&page_size=50")
+    s = _session_by(res["data"]["records"], "zcode", "sess-z")
+    assert s["avg_ttft_ms"] == 300.0
+    assert s["ttft_samples"] == 2
+    assert isinstance(s["hit_rate"], float)
+
+
+

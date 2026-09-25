@@ -2133,6 +2133,13 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                 "all", "opencode", "bai", "commandcode", "zcode", "claudecode", "codex"}:
             _json_response(handler, {"error": "invalid source"}, 400)
             return
+        # 单会话下钻: group_id 只有统一查询路径认识 (legacy 的 usage_records_page 只查
+        # 单表、无会话分组键)。缺 source 时若静默忽略, 前端会以为过滤生效而实际拿到
+        # 全量 —— 显式 400。
+        group_id = query.get("group_id", [""])[0] or None
+        if group_id and source is None:
+            _json_response(handler, {"error": "group_id requires source"}, 400)
+            return
         if source in ("codex", "all"):   # 统一路由属 Codex 触发点 (防抖, 不等待)
             _maybe_trigger_codex_import()
         # 翻页不重取模型下拉: DISTINCT model 要扫全部命中行 (实测 21-24ms), 而模型
@@ -2145,14 +2152,18 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             for rec in records:
                 rec["key_name"] = key_names.get(rec.get("key_id") or "", "")
             models = db.list_models() if with_models else None
-            filter_info: dict[str, Any] = {"model": model, "days": days}
+            # group_id 恒 None: legacy 单表路径不认识会话分组键 (上面已 400 拦截),
+            # 但键必须存在, 让前端无条件读 filter.group_id 不会拿到 undefined
+            filter_info: dict[str, Any] = {"model": model, "days": days, "group_id": None}
         else:
-            records, total = db.unified_records_page(source, page, page_size, model, days)
+            records, total = db.unified_records_page(source, page, page_size, model, days,
+                                                     group_id=group_id)
             for rec in records:
                 if rec.get("key_id"):   # 仅本地有 key 行回填; Codex key_name 保留 NULL
                     rec["key_name"] = key_names.get(rec["key_id"], "")
             models = db.unified_models(source, days) if with_models else None
-            filter_info = {"source": source, "model": model, "days": days}
+            filter_info = {"source": source, "model": model, "days": days,
+                           "group_id": group_id}
         payload: dict[str, Any] = {
             "records": records,
             "total": total,
