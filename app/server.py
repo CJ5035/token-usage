@@ -2135,31 +2135,34 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             return
         if source in ("codex", "all"):   # 统一路由属 Codex 触发点 (防抖, 不等待)
             _maybe_trigger_codex_import()
+        # 翻页不重取模型下拉: DISTINCT model 要扫全部命中行 (实测 21-24ms), 而模型
+        # 列表几乎不变。前端只在筛选键变化时请求, 纯翻页带 with_models=0。
+        # 只认显式 "0" 关闭, 其它取值 (含垃圾值) 一律保持旧行为, 不引入新的 400。
+        with_models = query.get("with_models", ["1"])[0] != "0"
         key_names = db.get_key_names()
         if source is None:
             records, total = db.usage_records_page(page, page_size, model, days)
             for rec in records:
                 rec["key_name"] = key_names.get(rec.get("key_id") or "", "")
-            models = db.list_models()
+            models = db.list_models() if with_models else None
             filter_info: dict[str, Any] = {"model": model, "days": days}
         else:
             records, total = db.unified_records_page(source, page, page_size, model, days)
             for rec in records:
                 if rec.get("key_id"):   # 仅本地有 key 行回填; Codex key_name 保留 NULL
                     rec["key_name"] = key_names.get(rec["key_id"], "")
-            models = db.unified_models(source, days)
+            models = db.unified_models(source, days) if with_models else None
             filter_info = {"source": source, "model": model, "days": days}
-        _json_response(
-            handler,
-            {
-                "records": records,
-                "total": total,
-                "page": page,
-                "page_size": page_size,
-                "models": models,
-                "filter": filter_info,
-            },
-        )
+        payload: dict[str, Any] = {
+            "records": records,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "filter": filter_info,
+        }
+        if models is not None:
+            payload["models"] = models
+        _json_response(handler, payload)
         return
 
     if route == "/api/report/windows" and method == "GET":

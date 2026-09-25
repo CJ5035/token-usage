@@ -344,3 +344,50 @@ def test_days_filter_uses_time_index_for_order(unified_db):
     assert "idx_zcode_utc" not in joined, joined
     assert "USE TEMP B-TREE FOR ORDER BY" not in plan, joined
 
+
+from types import SimpleNamespace
+from urllib.parse import urlsplit, parse_qs
+
+from app import server
+
+
+@pytest.fixture()
+def api_call(monkeypatch):
+    """直接驱动 server._handle_api, 不起真实 HTTP (对齐 tests/test_codex_server.py)."""
+    captured: dict = {}
+    monkeypatch.setattr(server, "_json_response",
+                        lambda h, data, status=200: captured.update(data=data, status=status))
+    monkeypatch.setattr(server, "_ensure_quota_async", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_fetch_usd_cny", lambda: 7.2)
+    monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
+
+    def call(url: str, method: str = "GET") -> dict:
+        captured.clear()
+        parsed = urlsplit(url)
+        server._handle_api(SimpleNamespace(command=method), parsed.path,
+                           parse_qs(parsed.query, keep_blank_values=True))
+        return dict(captured)
+    return call
+
+
+def test_with_models_default_includes_models(unified_db, api_call):
+    res = api_call("/api/usage/records?source=all&page=1&page_size=7")
+    assert res["status"] == 200
+    assert "models" in res["data"] and res["data"]["models"]
+
+
+def test_with_models_zero_omits_models_only(unified_db, api_call):
+    """with_models=0 只去掉 models 键, 其余响应必须与默认调用逐字段一致."""
+    full = api_call("/api/usage/records?source=all&page=1&page_size=7")["data"]
+    lean = api_call("/api/usage/records?source=all&page=1&page_size=7&with_models=0")["data"]
+    assert "models" not in lean
+    assert {k: v for k, v in full.items() if k != "models"} == lean
+
+
+@pytest.mark.parametrize("raw", ["1", "", "yes", "abc"])
+def test_with_models_only_zero_disables(unified_db, api_call, raw):
+    """只有显式 '0' 关闭; 任何其它取值 (含空串/垃圾值) 都保持旧行为, 不 400."""
+    res = api_call(f"/api/usage/records?source=all&page=1&with_models={raw}")
+    assert res["status"] == 200 and "models" in res["data"]
+
+
