@@ -147,3 +147,70 @@ def test_unified_cols_include_ttft(card_db):
     rows = db.get_db().execute(
         f"SELECT ttft_ms FROM ({sql}) WHERE ttft_ms IS NOT NULL").fetchall()
     assert sorted(r["ttft_ms"] for r in rows) == [200, 400]
+
+
+def test_session_ttft_aggregates_only_valid_samples(card_db):
+    """zcode 会话的 avg_ttft_ms 只能由有效样本构成。
+
+    夹具 sess-z 四行: ttft=200/400 有效, NULL 与 9999(>duration) 无效。
+    故 avg = (200+400)/2 = 300.0, samples = 2 (不是 4, 也不是把 NULL 当 0 的 150)。
+    """
+    sessions, _ = db.unified_sessions_page("zcode", 1, 50)
+    s = _session_by(sessions, "zcode", "sess-z")
+    assert s["request_count"] == 4
+    assert s["ttft_samples"] == 2
+    assert s["avg_ttft_ms"] == 300.0
+
+
+@pytest.mark.parametrize("source", ["claudecode", "codex", "opencode"])
+def test_session_ttft_absent_for_non_zcode(card_db, source):
+    """无 ttft 源列的来源: avg_ttft_ms 必须是 None 且 samples=0 (不可补 0)."""
+    sessions, _ = db.unified_sessions_page(source, 1, 50)
+    s = _session_by(sessions, source)
+    assert s["avg_ttft_ms"] is None
+    assert s["ttft_samples"] == 0
+
+
+@pytest.mark.parametrize("source", ["zcode", "claudecode", "codex", "opencode"])
+def test_session_hit_rate_uses_project_formula(card_db, source):
+    """hit_rate 必须等于 hit/(hit+miss+cw)*100, 与 db.py 现有 15 处聚合同口径。
+
+    这里不硬编码期望数字, 而是用同一行返回的三个分量现算再比对 —— 既锁死公式,
+    又不会因为夹具调整而需要同步改期望值。若实现误用被否决的旧口径
+    hit/(hit+miss), 分母少了 cw, 本断言立刻失败。
+    """
+    sessions, _ = db.unified_sessions_page(source, 1, 50)
+    s = _session_by(sessions, source, MAIN_SESSION[source])
+    hit = s["cache_hit_tokens"]
+    miss = s["uncached_input_tokens"]
+    cw = s["cache_write_tokens"]
+    expected = round(hit / (hit + miss + cw) * 100, 2) if (hit + miss + cw) > 0 else 0.0
+    assert s["hit_rate"] == expected
+    assert 0.0 <= s["hit_rate"] <= 100.0
+
+
+def test_session_hit_rate_denominator_includes_cache_write(card_db):
+    """显式锁死"分母含 cache_write": 夹具 zcode 会话 cw=100 且不为 0,
+    故正确口径必须严格小于漏掉 cw 的旧口径。"""
+    sessions, _ = db.unified_sessions_page("zcode", 1, 50)
+    s = _session_by(sessions, "zcode", "sess-z")
+    hit, miss, cw = s["cache_hit_tokens"], s["uncached_input_tokens"], s["cache_write_tokens"]
+    assert cw > 0, "夹具必须有 cache_write, 否则本断言空转"
+    wrong_old = round(hit / (hit + miss) * 100, 2)
+    assert s["hit_rate"] < wrong_old
+
+
+def test_group_id_constant_is_single_source_of_truth(card_db):
+    """会话聚合返回的 group_id 必须能由 _UNIFIED_GROUP_ID_SQL 在明细上重算出来。
+
+    这是 Task 3 下钻的前提: 两处表达式若不一致, 过滤会静默漏行。
+    """
+    assert "_UNIFIED_GROUP_ID_SQL" in dir(db)
+    sessions, _ = db.unified_sessions_page("all", 1, 50)
+    got = {s["group_id"] for s in sessions}
+    sql = db._unified_source_sql()
+    sql = sql[0] if isinstance(sql, tuple) else sql
+    rows = db.get_db().execute(
+        f"SELECT DISTINCT {db._UNIFIED_GROUP_ID_SQL} AS g FROM ({sql})").fetchall()
+    assert got == {r["g"] for r in rows}
+

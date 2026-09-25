@@ -4517,6 +4517,32 @@ def unified_models(source: str, days: Optional[int] = None) -> list[str]:
     return [r["model"] for r in rows]
 
 
+def _hit_rate_pct(hit: int, miss: int, cache_write: int) -> float:
+    """缓存命中率 (%) = 命中 / 总输入 = hit / (hit + miss + cache_write)。
+
+    口径由 doc/20260907-hit-rate-formula-fix.md 统一: 缓存写入也是输入流量, 且是
+    "未命中才写入"的部分, 必须计入分母 —— 漏掉它会让命中率系统性虚高
+    (实测 99.05% vs 正确 94.65%)。db.py 另有 14 处内联同式实现 (历史遗留,
+    本次不动), 新代码一律走本函数。
+    """
+    total = hit + miss + cache_write
+    return round(hit / total * 100, 2) if total > 0 else 0.0
+
+
+# 会话分组键: 会话聚合 (unified_sessions_page) 与明细下钻过滤
+# (unified_records_page 的 group_id 参数) 必须用逐字相同的表达式, 否则下钻会
+# 漏行或串到别的会话, 且不会报错只是数字对不上 —— 故收敛成单一来源。
+# 键规则沿用各来源旧约定: session_id 优先; 空会话按 key_id (opencode 侧规则),
+# 无 key 时用记录 ID 兜底, 防止所有本地无会话记录混为一组。
+_UNIFIED_SESSION_KEY_SQL = (
+    "CASE WHEN session_id IS NOT NULL AND session_id != '' THEN session_id "
+    "WHEN key_id IS NOT NULL AND key_id != '' THEN key_id ELSE source_record_id END"
+)
+_UNIFIED_GROUP_ID_SQL = (
+    "source || ':' || COALESCE(account_id, '') || ':' || " + _UNIFIED_SESSION_KEY_SQL
+)
+
+
 def unified_sessions_page(source: str, page: int = 1, page_size: int = 10,
                           model: Optional[str] = None, days: Optional[int] = None
                           ) -> tuple[list[dict[str, Any]], int]:
@@ -4528,15 +4554,12 @@ def unified_sessions_page(source: str, page: int = 1, page_size: int = 10,
     显示 session_id 保留原值, 另回 group_id。聚合口径与 Codex 聚合及现有
     hit_rate 一致: uncached_input=MAX(input-cache_read,0)、cache_hit=cache_read。
     费用 SUM 忽略 NULL, 无已知值返回 NULL, 混合会话标 cost_partial; 平均速度
-    只用有效行 (AVG 不补 0)。
+    只用有效行 (AVG 不补 0)。平均首字延迟同理只用有效行, 且仅 zcode 有源数据 (ttft_samples=0 表示该会话
+    无有效样本, 与"平均 0 ms"不同); hit_rate 走 _hit_rate_pct (命中/总输入)。
     """
     page = max(1, page)
     page_size = max(1, min(page_size, 50))
-    session_key = (
-        "CASE WHEN session_id IS NOT NULL AND session_id != '' THEN session_id "
-        "WHEN key_id IS NOT NULL AND key_id != '' THEN key_id ELSE source_record_id END"
-    )
-    group_id = f"source || ':' || COALESCE(account_id, '') || ':' || {session_key}"
+    group_id = _UNIFIED_GROUP_ID_SQL   # 与明细下钻过滤共用同一表达式 (见常量注释)
     unified, params = _unified_source_sql(source, model, days)
     conn = get_db()
     total = int(conn.execute(
@@ -4560,6 +4583,8 @@ def unified_sessions_page(source: str, page: int = 1, page_size: int = 10,
                SUM(cache_write_tokens) AS cache_write_tokens,
                AVG(speed_tps) AS avg_tps,
                COUNT(speed_tps) AS speed_samples,
+               AVG(ttft_ms) AS avg_ttft_ms,
+               COUNT(ttft_ms) AS ttft_samples,
                SUM(cost_usd) AS total_cost_usd,
                COUNT(cost_usd) AS cost_known
         FROM ({unified})
@@ -4594,6 +4619,14 @@ def unified_sessions_page(source: str, page: int = 1, page_size: int = 10,
             "cache_write_tokens": int(r["cache_write_tokens"] or 0),
             "avg_tps": round(float(r["avg_tps"]), 2) if r["avg_tps"] is not None else None,
             "speed_samples": int(r["speed_samples"] or 0),
+            # 首字延迟只有 zcode 有源列, 其余来源恒 None (不补 0, 见 _unified_source_sql);
+            # ttft_samples 让前端能区分"无数据"与"真的 0 ms"
+            "avg_ttft_ms": (round(float(r["avg_ttft_ms"]), 1)
+                            if r["avg_ttft_ms"] is not None else None),
+            "ttft_samples": int(r["ttft_samples"] or 0),
+            "hit_rate": _hit_rate_pct(int(r["cache_hit_tokens"] or 0),
+                                      int(r["uncached_input_tokens"] or 0),
+                                      int(r["cache_write_tokens"] or 0)),
             "total_cost_usd": round(float(cost), 6) if cost is not None else None,
             "cost_available": known > 0,
             "cost_partial": 0 < known < count,
