@@ -285,4 +285,23 @@ def test_paged_slices_equal_full_scan(unified_db, source, page_size):
     assert [r["source_record_id"] for r in walked] == [r["source_record_id"] for r in full]
 
 
+@pytest.mark.parametrize("source,model,days", [
+    ("all", None, None), ("all", "shared-model", None), ("all", None, 30),
+    ("zcode", None, None), ("zcode", "glm-4.6", None), ("zcode", None, 30),
+    ("opencode", None, None), ("bai", None, None), ("commandcode", None, None),
+    ("claudecode", None, 30), ("codex", "gpt-5", None), ("workbuddy", None, None),
+])
+def test_unified_count_matches_union_count(unified_db, source, model, days):
+    """分段相加的总数必须等于归一投影上 COUNT(*) 的结果 (口径不得偏移)."""
+    unified, params = db._unified_source_sql(source, model, days)
+    ref = int(db.get_db().execute(
+        f"SELECT COUNT(*) AS c FROM ({unified})", params).fetchone()["c"])
+    assert db._unified_count(source, model, days) == ref
 
+
+def test_unified_count_avoids_union_scan(unified_db):
+    """单来源 COUNT 应落在该表的覆盖索引上, 不再物化 UNION 结果。"""
+    arm = next(a for a in db._UNIFIED_ARMS if "zcode" in a.sources)
+    inner, params = db._unified_arm_inner(arm, "zcode", None, None)
+    plan = " | ".join(plan_of(f"SELECT COUNT(*) AS c FROM {inner}", params))
+    assert "COVERING INDEX" in plan, plan

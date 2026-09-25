@@ -4409,6 +4409,25 @@ def _unified_source_sql(source: str = "all", model: Optional[str] = None,
     return "\n UNION ALL ".join(parts), params
 
 
+def _unified_count(source: str, model: Optional[str] = None,
+                   days: Optional[int] = None) -> int:
+    """归一命中行总数 = 各段基表子查询 COUNT(*) 之和。
+
+    比 COUNT(*) FROM (四段 UNION) 快两个量级: 后者要物化整个 UNION 协程,
+    前者每段都能落在该表的覆盖索引上。source 未登记时和为 0, 与
+    _UNIFIED_EMPTY_SQL 的零行语义一致。
+    """
+    conn = get_db()
+    total = 0
+    for arm in _UNIFIED_ARMS:
+        if source != "all" and source not in arm.sources:
+            continue
+        inner, params = _unified_arm_inner(arm, source, model, days)
+        total += int(conn.execute(
+            f"SELECT COUNT(*) AS c FROM {inner}", params).fetchone()["c"])
+    return total
+
+
 def unified_records_page(source: str, page: int = 1, page_size: int = 20,
                          model: Optional[str] = None, days: Optional[int] = None
                          ) -> tuple[list[dict[str, Any]], int]:
@@ -4421,10 +4440,8 @@ def unified_records_page(source: str, page: int = 1, page_size: int = 20,
     """
     page = max(1, page)
     page_size = max(1, min(page_size, 100))
-    unified, params = _unified_source_sql(source, model, days)
     conn = get_db()
-    total = int(conn.execute(
-        f"SELECT COUNT(*) AS c FROM ({unified})", params).fetchone()["c"])
+    total = _unified_count(source, model, days)
     # 取页专用: 各段只下捞 offset+page_size 行 (COUNT 不能带 row_limit)
     paged, paged_params = _unified_source_sql(source, model, days,
                                               row_limit=page * page_size)
