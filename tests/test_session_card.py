@@ -376,4 +376,51 @@ def test_route_sessions_expose_card_fields(card_db, api_call):
     assert isinstance(s["hit_rate"], float)
 
 
+@pytest.mark.parametrize("source", ["zcode", "claudecode", "codex", "opencode"])
+def test_card_reconciles_with_records_and_session(card_db, api_call, source):
+    """跨层勾稽: 卡片指标 == 会话表那一行 == 按 group_id 过滤的明细自聚合。
+
+    卡片的 6 个指标全部直接取会话行字段, 所以这里逐一验证"会话行字段"与"明细
+    重算值"一致 —— 等价于验证用户在卡片上看到的每个数都能在明细表里数出来。
+    """
+    ses = api_call(f"/api/usage/sessions?source={source}&page=1&page_size=50")["data"]
+    s = _session_by(ses["records"], source, MAIN_SESSION[source])
+    det = api_call(f"/api/usage/records?source={source}&page=1&page_size=100"
+                   f"&group_id={quote(s['group_id'], safe='')}")["data"]
+    rows = det["records"]
+
+    # ① 会话轮数
+    assert det["total"] == s["request_count"] == len(rows)
+    # ② 累计输入 / ③ 累计输出
+    assert sum(r["input_tokens"] for r in rows) == s["total_input_tokens"]
+    assert sum(r["output_tokens"] for r in rows) == s["total_output_tokens"]
+    # ④ 缓存命中率: 用明细重算三个分量, 再套项目公式
+    hit = sum(r["cache_read_tokens"] for r in rows)
+    cw = sum(r["cache_write_tokens"] for r in rows)
+    miss = sum(max(r["input_tokens"] - r["cache_read_tokens"], 0) for r in rows)
+    assert hit == s["cache_hit_tokens"] and cw == s["cache_write_tokens"]
+    assert miss == s["uncached_input_tokens"]
+    expected_rate = round(hit / (hit + miss + cw) * 100, 2) if (hit + miss + cw) > 0 else 0.0
+    assert s["hit_rate"] == expected_rate
+    # ⑤ 输出速度: 有效样本数与明细非空 speed_tps 行数一致
+    assert sum(1 for r in rows if r["speed_tps"] is not None) == s["speed_samples"]
+    # ⑥ 首字延迟: 有效样本数与明细非空 ttft_ms 行数一致; 有样本时均值一致
+    ttfts = [r["ttft_ms"] for r in rows if r["ttft_ms"] is not None]
+    assert len(ttfts) == s["ttft_samples"]
+    if ttfts:
+        assert s["avg_ttft_ms"] == round(sum(ttfts) / len(ttfts), 1)
+    else:
+        assert s["avg_ttft_ms"] is None
+
+
+def test_all_sources_sessions_carry_card_fields(card_db, api_call):
+    """source=all 时每个会话行都必须带齐卡片字段 —— 前端无条件读, 缺键会渲染成 undefined。"""
+    ses = api_call("/api/usage/sessions?source=all&page=1&page_size=50")["data"]
+    assert len(ses["records"]) == 5
+    for s in ses["records"]:
+        for key in ("group_id", "request_count", "request_count_exact", "avg_tps",
+                    "speed_samples", "avg_ttft_ms", "ttft_samples", "hit_rate",
+                    "total_input_tokens", "total_output_tokens",
+                    "total_reasoning_tokens", "total_tokens", "cache_hit_tokens"):
+            assert key in s, f"{s['source']} 缺字段 {key}"
 
