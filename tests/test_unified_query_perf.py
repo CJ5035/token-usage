@@ -9,9 +9,16 @@
 """
 from __future__ import annotations
 
+import datetime as _dt
+import json
+import pathlib
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 
 from app import db
+from app import server
 
 # 固定时间轴: 全部落在"今天"往前数几小时/几天内, 且一律 UTC 'Z' 字面量 ——
 # 这正是 Task 5 要依赖的存储不变量。不用固定日期造数, 避免用例随真实日期过期;
@@ -19,13 +26,17 @@ from app import db
 #
 # 窗口内的行都在 2.5 天内, 越窗的行放到 300 天外 —— 刻意留出巨大间隔, 使
 # CASES 里 days ∈ {1, 30} 的命中集在任何执行日都完全相同, 快照不会跨日漂移。
-import datetime as _dt
 
 
-def _iso(days_ago: float) -> str:
-    """相对当前 UTC 时刻往前 days_ago 天的 ISO 'Z' 字面量 (毫秒精度)."""
-    t = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days_ago)
+def _format_iso(base: _dt.datetime, days_ago: float) -> str:
+    """相对指定 UTC 时刻往前 days_ago 天的 ISO 'Z' 字面量 (毫秒精度)."""
+    t = base - _dt.timedelta(days=days_ago)
     return t.strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
+
+
+def _iso(days_ago: float, base: _dt.datetime | None = None) -> str:
+    """相对当前 UTC 时刻 (或给定 base) 往前 days_ago 天的 ISO 'Z' 字面量 (毫秒精度)."""
+    return _format_iso(base or _dt.datetime.now(_dt.timezone.utc), days_ago)
 
 
 @pytest.fixture()
@@ -40,6 +51,11 @@ def unified_db(tmp_db):
         在页边界上的取舍与外层 source_record_id 次序一致;
       - 同一 model 名跨来源出现 (shared-model), 用于验证模型筛选不串来源。
     """
+    base_now = _dt.datetime.now(_dt.timezone.utc)
+
+    def _iso(days_ago: float) -> str:
+        return _format_iso(base_now, days_ago)
+
     ids = {
         "opencode": db.add_account("tok-oc", "ws-oc"),
         "bai": db.add_account("cookie-bai", "bai-user-1", switch=False,
@@ -140,9 +156,6 @@ def plan_of(sql: str, params: list) -> list[str]:
     return [r[3] for r in db.get_db().execute("EXPLAIN QUERY PLAN " + sql, params)]
 
 
-import json
-import pathlib
-
 SNAPSHOT = pathlib.Path(__file__).with_name("unified_query_snapshot.json")
 
 
@@ -179,7 +192,7 @@ def test_unified_output_matches_snapshot(unified_db):
     current = _capture()
     if not SNAPSHOT.exists():
         SNAPSHOT.write_text(json.dumps(current, ensure_ascii=False, indent=2,
-                                       sort_keys=True), encoding="utf-8")
+                                       sort_keys=True) + "\n", encoding="utf-8")
         pytest.skip("快照已生成, 请复跑本用例以进入比对模式")
     expected = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     assert current == expected
@@ -345,12 +358,6 @@ def test_days_filter_uses_time_index_for_order(unified_db):
     assert "USE TEMP B-TREE FOR ORDER BY" not in plan, joined
 
 
-from types import SimpleNamespace
-from urllib.parse import urlsplit, parse_qs
-
-from app import server
-
-
 @pytest.fixture()
 def api_call(monkeypatch):
     """直接驱动 server._handle_api, 不起真实 HTTP (对齐 tests/test_codex_server.py)."""
@@ -389,5 +396,3 @@ def test_with_models_only_zero_disables(unified_db, api_call, raw):
     """只有显式 '0' 关闭; 任何其它取值 (含空串/垃圾值) 都保持旧行为, 不 400."""
     res = api_call(f"/api/usage/records?source=all&page=1&with_models={raw}")
     assert res["status"] == 200 and "models" in res["data"]
-
-
