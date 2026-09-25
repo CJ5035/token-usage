@@ -4202,6 +4202,25 @@ _UNIFIED_COLS = (
 # ---------------------------------------------------------------------------
 
 
+def _unified_days_bound(days: int) -> str:
+    """滚动 N 天下界字面量, 与各表时间列的存储形态同形。
+
+    四张表的时间列一律存 UTC ISO 'YYYY-MM-DDTHH:MM:SS[.ffffff]Z'
+    (由 tests/test_unified_query_perf.py::test_time_columns_are_utc_z_literals
+    守卫), 故可直接字典序比较, 让 idx_*_time 一个索引同时服务过滤与
+    ORDER BY started_at DESC —— 而 datetime(col) 写法只能命中按 datetime(col)
+    组织的 idx_*_utc, 排序仍得 TEMP B-TREE。
+
+    绝不能改用 datetime('now', ?) 的返回值当下界: 它是 'YYYY-MM-DD HH:MM:SS'
+    (空格分隔), 空格 0x20 < 'T' 0x54, 字典序会多纳入约一天的行
+    (实测 days=30 得 21158, 正确值 19453)。
+
+    上下限 max(1, min(days, 365)) 沿用明细页旧口径。
+    """
+    bound = datetime.now(timezone.utc) - timedelta(days=max(1, min(int(days), 365)))
+    return bound.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 @dataclass(frozen=True)
 class _UnifiedArm:
     """归一 UNION 的一段 = 一张基表的投影。
@@ -4367,8 +4386,8 @@ def _unified_arm_inner(arm: _UnifiedArm, source: str, model: Optional[str],
     (同段内先于某行的行若已有 row_limit 个, 该行的全局排名就超出了); 段内并列
     的取舍靠 order_tie 与外层 source_record_id 对齐, 否则页边界会漏行。
 
-    days 沿用明细页滚动 N 天旧义与 365 上限 (Codex period 专属汇总走自然日,
-    不在此处)。
+    days 沿用明细页滚动 N 天旧义与 365 上限, 下界由 _unified_days_bound 生成
+    (字面量比较, 让 idx_*_time 同时供过滤与排序)。
     """
     where: list[str] = []
     params: list[Any] = []
@@ -4379,8 +4398,8 @@ def _unified_arm_inner(arm: _UnifiedArm, source: str, model: Optional[str],
         where.append(f"{arm.model_col} = ?")
         params.append(model)
     if days:
-        where.append(f"datetime({arm.time_col}) >= datetime('now', ?)")
-        params.append(f"-{max(1, min(int(days), 365))} days")
+        where.append(f"{arm.time_col} >= ?")
+        params.append(_unified_days_bound(days))
     sql = arm.base.format(where=("WHERE " + " AND ".join(where)) if where else "")
     if row_limit is not None and arm.order_tie:
         sql += f" ORDER BY {arm.time_col} DESC, {arm.order_tie} LIMIT ?"

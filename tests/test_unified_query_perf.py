@@ -305,3 +305,42 @@ def test_unified_count_avoids_union_scan(unified_db):
     inner, params = db._unified_arm_inner(arm, "zcode", None, None)
     plan = " | ".join(plan_of(f"SELECT COUNT(*) AS c FROM {inner}", params))
     assert "COVERING INDEX" in plan, plan
+
+
+def test_days_bound_uses_t_separator(unified_db):
+    """下界字面量必须 'T' 分隔且秒精度。
+
+    若有人图省事改成 datetime('now',?) 的返回值 ('YYYY-MM-DD HH:MM:SS'),
+    空格 0x20 < 'T' 0x54, 字典序比较会多纳入约一天的行 (实测 21158 vs 19453)。
+    这个断言就是拦住那次"省事"。
+    """
+    bound = db._unified_days_bound(30)
+    assert len(bound) == 19 and bound[10] == "T", bound
+    assert " " not in bound
+
+
+@pytest.mark.parametrize("days", [1, 7, 30, 60, 90, 180, 365])
+@pytest.mark.parametrize("table,col", TIME_COLUMNS)
+def test_days_bound_equals_datetime_semantics(unified_db, days, col, table):
+    """字面量比较必须与旧的 datetime() 口径给出完全相同的行集。"""
+    conn = db.get_db()
+    ref = [r[0] for r in conn.execute(
+        f"SELECT {col} FROM {table} WHERE datetime({col}) >= datetime('now', ?) "
+        f"ORDER BY {col} DESC", (f"-{days} days",))]
+    got = [r[0] for r in conn.execute(
+        f"SELECT {col} FROM {table} WHERE {col} >= ? ORDER BY {col} DESC",
+        (db._unified_days_bound(days),))]
+    assert got == ref
+
+
+def test_days_filter_uses_time_index_for_order(unified_db):
+    """带 days 时, 排序仍须由 idx_*_time 供序 —— 不能退回表达式索引 + 全量排序。"""
+    sql, params = db._unified_source_sql("zcode", None, 30, row_limit=7)
+    plan = plan_of(
+        f"SELECT {db._UNIFIED_COLS} FROM ({sql}) "
+        "ORDER BY started_at DESC, source ASC, source_record_id ASC LIMIT 7", params)
+    joined = " | ".join(plan)
+    assert "idx_zcode_time" in joined, joined
+    assert "idx_zcode_utc" not in joined, joined
+    assert "USE TEMP B-TREE FOR ORDER BY" not in plan, joined
+
