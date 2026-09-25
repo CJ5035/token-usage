@@ -214,3 +214,96 @@ def test_group_id_constant_is_single_source_of_truth(card_db):
         f"SELECT DISTINCT {db._UNIFIED_GROUP_ID_SQL} AS g FROM ({sql})").fetchall()
     assert got == {r["g"] for r in rows}
 
+
+@pytest.mark.parametrize("source", ["zcode", "claudecode", "codex", "opencode"])
+def test_group_id_filter_matches_session_row(card_db, source):
+    """按 group_id 过滤明细, 再自行聚合, 必须与会话表那一行逐项相等。
+
+    这是下钻的核心正确性: 用户点开卡片看到"轮数 4", 下方明细就必须正好 4 行,
+    且 token 合计一致。任一项不等都说明两处分组键表达式不同步。
+    """
+    sessions, _ = db.unified_sessions_page(source, 1, 50)
+    s = _session_by(sessions, source, MAIN_SESSION[source])
+    recs, total = db.unified_records_page(source, 1, 100, group_id=s["group_id"])
+    assert total == s["request_count"]
+    assert len(recs) == total
+    assert sum(r["total_tokens"] for r in recs) == s["total_tokens"]
+    assert sum(r["input_tokens"] for r in recs) == s["total_input_tokens"]
+    assert sum(r["output_tokens"] for r in recs) == s["total_output_tokens"]
+    assert sum(r["cache_read_tokens"] for r in recs) == s["cache_hit_tokens"]
+    assert sum(r["cache_write_tokens"] for r in recs) == s["cache_write_tokens"]
+    assert sum(1 for r in recs if r["ttft_ms"] is not None) == s["ttft_samples"]
+
+
+def test_group_id_filter_isolates_sessions(card_db):
+    """过滤必须只回该会话的行 —— 不能串到别的会话, 也不能回全量。"""
+    sessions, _ = db.unified_sessions_page("all", 1, 50)
+    assert len(sessions) == 5, "夹具应有 5 个会话 (zcode 两个 + 其余三来源各一个)"
+    _, grand_total = db.unified_records_page("all", 1, 1)
+    for s in sessions:
+        recs, total = db.unified_records_page("all", 1, 100, group_id=s["group_id"])
+        assert total == s["request_count"]
+        assert total < grand_total, "过滤后不应等于全量"
+        assert {r["source"] for r in recs} == {s["source"]}
+
+
+def test_group_id_unknown_returns_empty(card_db):
+    """不存在的 group_id 回空结果而非报错或全量。"""
+    recs, total = db.unified_records_page("all", 1, 100, group_id="nope:0:nope")
+    assert recs == [] and total == 0
+
+
+def test_group_id_combines_with_model_filter(card_db):
+    """group_id 与 model 过滤应当叠加 (AND), 不是互相覆盖。"""
+    sessions, _ = db.unified_sessions_page("zcode", 1, 50)
+    gid = _session_by(sessions, "zcode", "sess-z")["group_id"]
+    hit, n_hit = db.unified_records_page("zcode", 1, 100, model="glm-4.6", group_id=gid)
+    assert n_hit == 4 and all(r["model"] == "glm-4.6" for r in hit)
+    _, n_miss = db.unified_records_page("zcode", 1, 100, model="no-such", group_id=gid)
+    assert n_miss == 0
+
+
+def test_group_id_paging_is_stable(card_db):
+    """带 group_id 时分页仍稳定: 逐页拼接 == 一次取全。"""
+    sessions, _ = db.unified_sessions_page("zcode", 1, 50)
+    gid = _session_by(sessions, "zcode", "sess-z")["group_id"]
+    full, total = db.unified_records_page("zcode", 1, 100, group_id=gid)
+    walked = []
+    page = 1
+    while len(walked) < total:
+        chunk, t = db.unified_records_page("zcode", page, 2, group_id=gid)
+        assert t == total and chunk
+        walked.extend(chunk)
+        page += 1
+    assert ([r["source_record_id"] for r in walked]
+            == [r["source_record_id"] for r in full])
+
+
+@pytest.mark.parametrize("page_size", [1, 2, 3])
+def test_group_id_filter_survives_row_limit_pushdown(card_db, page_size):
+    """🚨 核心回归: group_id 过滤不能被 top-N 下推掏空。
+
+    性能计划 Task 3 让各段基表先 `ORDER BY 时间 DESC LIMIT (offset+page_size)` 再
+    UNION。本计划的 group_id 过滤加在归一投影**外层**。若 unified_records_page 没把
+    row_limit 关掉, 查 sess-z 第 1 页时各段只捞到"全表最新 page_size 行" —— 夹具里
+    那正是干扰会话 sess-z2 的 z6/z5 —— 外层按 sess-z 一筛就空了。
+
+    所以本用例在"忘记传 row_limit=None"的实现上必挂 (第 1 页拿到 0 行), 在正确实现
+    上必过。page_size 取 1/2/3 都小于 sess-z 的 4 行, 确保下推窗口落不到目标会话。
+    """
+    sessions, _ = db.unified_sessions_page("zcode", 1, 50)
+    target = _session_by(sessions, "zcode", "sess-z")
+    noise = _session_by(sessions, "zcode", "sess-z2")
+    # 前提自检: 干扰会话必须比目标会话更新, 否则本用例失去意义
+    assert noise["started_at"] > target["started_at"], "夹具的 sess-z2 应比 sess-z 新"
+
+    recs, total = db.unified_records_page("zcode", 1, page_size,
+                                          group_id=target["group_id"])
+    assert total == 4, f"total 应为 sess-z 的 4 行, 实得 {total}"
+    assert len(recs) == page_size, (
+        f"第 1 页应有 {page_size} 行, 实得 {len(recs)} —— 若为 0, 说明 group_id 非空时"
+        f"没有传 row_limit=None, 各段被下推成只取全表最新 {page_size} 行 (干扰会话的)"
+    )
+    assert {r["session_id"] for r in recs} == {"sess-z"}
+
+

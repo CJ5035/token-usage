@@ -4457,7 +4457,8 @@ def _unified_count(source: str, model: Optional[str] = None,
 
 
 def unified_records_page(source: str, page: int = 1, page_size: int = 20,
-                         model: Optional[str] = None, days: Optional[int] = None
+                         model: Optional[str] = None, days: Optional[int] = None,
+                         group_id: Optional[str] = None
                          ) -> tuple[list[dict[str, Any]], int]:
     """统一来源明细分页, 返回 (records, total)。
 
@@ -4465,19 +4466,40 @@ def unified_records_page(source: str, page: int = 1, page_size: int = 20,
     来源全部账号。稳定排序 started_at DESC, source ASC, source_record_id ASC,
     LIMIT/OFFSET 在 SQL 最后。本地来源 key_name 由 server 层按 key_names 回填,
     Codex/本地来源无 key 行 key_name 保留 NULL。
+
+    group_id 非空时按会话分组键过滤 (单会话下钻), 表达式与 unified_sessions_page
+    共用 _UNIFIED_GROUP_ID_SQL; 与 model/days 过滤是 AND 叠加关系。
     """
     page = max(1, page)
     page_size = max(1, min(page_size, 100))
     conn = get_db()
-    total = _unified_count(source, model, days)
-    # 取页专用: 各段只下捞 offset+page_size 行 (COUNT 不能带 row_limit)
-    paged, paged_params = _unified_source_sql(source, model, days,
-                                              row_limit=page * page_size)
+    # 单会话下钻: 分组键表达式与 unified_sessions_page 共用 _UNIFIED_GROUP_ID_SQL,
+    # 故过滤出的行集与会话表那一行的聚合严格对应 (逐项等价见
+    # tests/test_session_card.py::test_group_id_filter_matches_session_row)。
+    where = f"WHERE {_UNIFIED_GROUP_ID_SQL} = ?" if group_id else ""
+    gp: list[Any] = [group_id] if group_id else []
+    if group_id:
+        # 分组键用到 source/account_id/source_record_id 这些"投影列", 无法下推进基表,
+        # 所以带 group_id 时不能走 _unified_count 的分段 COUNT 相加, 只能在归一投影
+        # 外层数。单会话行数有限, 这点代价可接受。
+        unified, params = _unified_source_sql(source, model, days)
+        total = int(conn.execute(
+            f"SELECT COUNT(*) AS c FROM ({unified}) {where}",
+            params + gp).fetchone()["c"])
+    else:
+        total = _unified_count(source, model, days)
+    # 取页专用: 各段只下捞 offset+page_size 行 (COUNT 不能带 row_limit)。
+    #
+    # 🚨 group_id 非空时必须关闭下推 (row_limit=None)。过滤加在归一投影"外层", 而下推
+    #    让各段只取"全表最新 N 行" —— 若目标会话的行不在这个窗口里, 过滤完一行不剩,
+    #    会话有 1000 条也返回空页。守卫: test_group_id_filter_survives_row_limit_pushdown。
+    paged, paged_params = _unified_source_sql(
+        source, model, days, row_limit=None if group_id else page * page_size)
     rows = conn.execute(
-        f"""SELECT {_UNIFIED_COLS} FROM ({paged})
+        f"""SELECT {_UNIFIED_COLS} FROM ({paged}) {where}
             ORDER BY started_at DESC, source ASC, source_record_id ASC
             LIMIT ? OFFSET ?""",
-        paged_params + [page_size, (page - 1) * page_size],
+        paged_params + gp + [page_size, (page - 1) * page_size],
     ).fetchall()
     records = [
         {
