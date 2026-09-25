@@ -204,3 +204,46 @@ def test_time_columns_are_utc_z_literals(unified_db, table, col):
     assert bad == 0
 
 
+# 每段的基表名, 用于断言"只拼了该来源的段"
+ARM_TABLES = {"opencode": "usage_records", "bai": "usage_records",
+              "commandcode": "usage_records", "zcode": "zcode_usage",
+              "claudecode": "claudecode_usage", "codex": "codex_usage"}
+
+
+@pytest.mark.parametrize("source", ["zcode", "claudecode", "codex", "opencode"])
+def test_single_source_prunes_other_arms(unified_db, source):
+    """source != 'all' 时只应拼出该来源的段。
+
+    旧实现把 WHERE source=? 加在四段 UNION 外层, SQLite 无法据此裁掉分支
+    (第一段的 source 是 COALESCE(a.source,'opencode') 表达式), 四张表全被 SCAN。
+
+    注意判定方式: **不能**在 EXPLAIN 输出里找表名 —— usage_records 段的基表子查询
+    用了别名 r0, SQLite 的计划显示 'SCAN r0' 而不是 'SCAN usage_records'
+    (实测如此)。所以"拼了哪些基表"在生成的 SQL 文本上判 (无歧义), 计划输出只用来
+    确认确实退化成了单段查询 (没有 UNION ALL / COMPOUND QUERY)。
+    """
+    sql, params = db._unified_source_sql(source)
+    keep = ARM_TABLES[source]
+    assert keep in sql
+    for other in {"usage_records", "zcode_usage", "claudecode_usage", "codex_usage"} - {keep}:
+        assert other not in sql, f"source={source} 仍拼进了 {other}"
+    plan = plan_of(f"SELECT {db._UNIFIED_COLS} FROM ({sql})", params)
+    assert not [p for p in plan if "UNION ALL" in p or "COMPOUND QUERY" in p], plan
+
+
+def test_all_source_keeps_four_arms(unified_db):
+    """source='all' 必须仍覆盖四张表, 且确实是四段复合 (裁剪不能误伤全渠道口径)."""
+    sql, params = db._unified_source_sql("all")
+    for tbl in ("usage_records", "zcode_usage", "claudecode_usage", "codex_usage"):
+        assert tbl in sql
+    plan = plan_of(f"SELECT {db._UNIFIED_COLS} FROM ({sql})", params)
+    assert len([p for p in plan if "UNION ALL" in p]) == 3, plan
+
+
+def test_unknown_source_yields_empty_shape(unified_db):
+    """未登记的 source (如 workbuddy/dsh) 不能拼出语法错误的空 UNION,
+    应回形状正确的零行结果 —— 路由层虽已 400 拦截, db 层仍须自洽不崩。"""
+    recs, total = db.unified_records_page("workbuddy")
+    assert recs == [] and total == 0
+
+

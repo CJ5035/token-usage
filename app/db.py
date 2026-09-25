@@ -14,8 +14,9 @@ import os
 import sqlite3
 import sys
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, date
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     # 仅类型注解引用采集层数据契约; codex_api 不 import db, 无运行时依赖
@@ -4187,22 +4188,56 @@ _UNIFIED_COLS = (
 )
 
 
-def _unified_source_sql() -> str:
-    """四段 UNION ALL 归一投影 (仅常量/原列映射, 无 WHERE)。
+# ---------------------------------------------------------------------------
+# 归一分段注册表
+#
+# 旧实现是"四段全量 UNION ALL + 外层 WHERE/ORDER BY": 即使只查一个来源, 四张表
+# 也全表 SCAN, 且外层 ORDER BY 只能走 TEMP B-TREE (各表 idx_*_time 全失效)。
+# 把每段的差异 (基表、时间列、模型列、段内 source 判定、次序键、投影) 登记成数据后,
+# 下推逻辑只需写一份:
+#   1) source != 'all' 时只拼该 source 能产出的段 (分支裁剪);
+#   2) source/model/days 谓词写进各段的基表子查询, 而非 union 外层;
+#   3) 明细分页再把 ORDER BY/LIMIT 也下推 (见 unified_records_page)。
+# 实测见 doc/设计实施文档/20260925-记录页查询性能优化需求与设计.md。
+# ---------------------------------------------------------------------------
 
-    - usage_records JOIN accounts: source=账号渠道, source_record_id 带账号维度
-      前缀; 无 total 列 → input+output (与 Codex 缺总量回退口径一致, 缓存/
-      reasoning 是子项不再另加); duration/speed 无列 → NULL; 费用已知。
-    - zcode_usage: input 原样 (已含缓存读); 速度无列, 按查询侧公式
-      _ZCODE_TPS_SQL 由 output/duration 现算, speed_source=duration (有值时);
-      provider_name 快照优先于 provider_id。
-    - claudecode_usage: 无 reasoning 列 → 0; speed_tps/duration_ms 原列,
-      speed_source=duration (有值时)。
-    - codex_usage: total/duration/speed/speed_source/request_count_exact 按
-      记录保留; 费用恒 NULL、cost_available=0 (库列写死 0)。
+
+@dataclass(frozen=True)
+class _UnifiedArm:
+    """归一 UNION 的一段 = 一张基表的投影。
+
+    sources     该段能产出的 source 值; source != 'all' 时据此裁剪。
+    base        基表子查询模板, 含 {where} 槽, 不含 ORDER BY/LIMIT。
+    time_col    基表时间列 (days 过滤与 ORDER BY 下推用; 需带 base 内的别名)。
+    model_col   基表模型列 (model 过滤下推用; 需带 base 内的别名)。
+    source_pred 段内 source 判定; 仅 usage_records 段需要 —— 该段三个远程渠道
+                共表, 渠道落在 accounts.source 上。其余段 source 恒为常量, 裁剪
+                本身已经完成判定, 无需谓词。
+    order_tie   与外层次序键 source_record_id 同序的段内表达式。None 表示该段
+                拿不到等价表达式, 因而不下推 LIMIT (只下推过滤) —— 这是安全退路,
+                不是性能缺陷: usage_records 仅数百行。
+    project     基表 FROM 片段 -> 该段完整 SELECT。
+    """
+    sources: tuple[str, ...]
+    base: str
+    time_col: str
+    model_col: str
+    source_pred: Optional[str]
+    order_tie: Optional[str]
+    project: Callable[[str], str]
+
+
+def _unified_arm_records(inner: str) -> str:
+    """usage_records 段: source=账号渠道, source_record_id 带账号维度前缀;
+    无 total 列 → input+output (与 Codex 缺总量回退口径一致, 缓存/reasoning 是
+    子项不再另加); duration/speed 无列 → NULL; 费用已知。
+
+    外层仍需 LEFT JOIN accounts 取 a.source 参与投影; inner 内部也 JOIN 了一次
+    accounts 用于 source 过滤, 这份重复 JOIN 换来与旧口径逐行一致 (含 account_id
+    在 accounts 中无对应行时回落 'opencode' 的语义), 且该表体量小, 代价可忽略。
     """
     src = _report_channels_expr()
-    seg_records = f"""
+    return f"""
     SELECT {src} AS source, r.account_id AS account_id,
            {src} || ':' || r.account_id || ':' || r.usg_id AS source_record_id,
            r.created_at AS started_at, r.model AS model, r.provider AS provider_id,
@@ -4214,8 +4249,14 @@ def _unified_source_sql() -> str:
            (r.input_tokens + r.output_tokens) AS total_tokens,
            NULL AS duration_ms, NULL AS speed_tps, NULL AS speed_source,
            r.cost_usd AS cost_usd, 1 AS cost_available, 1 AS request_count_exact
-    FROM usage_records r LEFT JOIN accounts a ON a.id = r.account_id"""
-    seg_zcode = f"""
+    FROM {inner} r LEFT JOIN accounts a ON a.id = r.account_id"""
+
+
+def _unified_arm_zcode(inner: str) -> str:
+    """zcode_usage 段: input 原样 (已含缓存读); 速度无列, 按 _ZCODE_TPS_SQL 由
+    output/duration 现算, speed_source=duration (有值时); provider_name 快照
+    优先于 provider_id。"""
+    return f"""
     SELECT 'zcode' AS source, NULL AS account_id,
            'zcode:' || z.id AS source_record_id,
            z.started_at AS started_at, z.model_id AS model,
@@ -4229,8 +4270,13 @@ def _unified_source_sql() -> str:
            z.row_tps AS speed_tps,
            CASE WHEN z.row_tps IS NOT NULL THEN 'duration' END AS speed_source,
            z.cost_raw / 1e8 AS cost_usd, 1 AS cost_available, 1 AS request_count_exact
-    FROM (SELECT z0.*, ({_ZCODE_TPS_SQL}) AS row_tps FROM zcode_usage z0) z"""
-    seg_cc = """
+    FROM (SELECT z0.*, ({_ZCODE_TPS_SQL}) AS row_tps FROM {inner} z0) z"""
+
+
+def _unified_arm_claudecode(inner: str) -> str:
+    """claudecode_usage 段: 无 reasoning 列 → 0; speed_tps/duration_ms 原列,
+    speed_source=duration (有值时)。"""
+    return f"""
     SELECT 'claudecode' AS source, NULL AS account_id,
            'claudecode:' || c.id AS source_record_id,
            c.started_at AS started_at, c.model AS model, c.channel AS provider_id,
@@ -4242,8 +4288,13 @@ def _unified_source_sql() -> str:
            c.speed_tps AS speed_tps,
            CASE WHEN c.speed_tps IS NOT NULL THEN 'duration' END AS speed_source,
            c.cost_raw / 1e8 AS cost_usd, 1 AS cost_available, 1 AS request_count_exact
-    FROM claudecode_usage c"""
-    seg_codex = """
+    FROM {inner} c"""
+
+
+def _unified_arm_codex(inner: str) -> str:
+    """codex_usage 段: total/duration/speed/speed_source/request_count_exact 按
+    记录保留; 费用恒 NULL、cost_available=0 (库列写死 0)。"""
+    return f"""
     SELECT 'codex' AS source, NULL AS account_id, x.id AS source_record_id,
            x.started_at AS started_at, x.model AS model,
            x.provider_id AS provider_id, x.session_id AS session_id, NULL AS key_id,
@@ -4255,27 +4306,96 @@ def _unified_source_sql() -> str:
            x.speed_tps AS speed_tps, x.speed_source AS speed_source,
            NULL AS cost_usd, 0 AS cost_available,
            x.request_count_exact AS request_count_exact
-    FROM codex_usage x"""
-    return (seg_records + "\n UNION ALL " + seg_zcode
-            + "\n UNION ALL " + seg_cc + "\n UNION ALL " + seg_codex)
+    FROM {inner} x"""
 
 
-def _unified_filter(source: str, model: Optional[str],
-                    days: Optional[int]) -> tuple[str, list[Any]]:
-    """归一 CTE 上的绑定参数筛选: source=all 不过滤; days 沿用明细页滚动
-    N 天旧义与 365 上限 (Codex period 专属汇总仍走自然日, 不在此处)。"""
+_UNIFIED_ARMS: tuple[_UnifiedArm, ...] = (
+    _UnifiedArm(
+        sources=("opencode", "bai", "commandcode"),
+        base=("SELECT r0.* FROM usage_records r0"
+              " LEFT JOIN accounts a0 ON a0.id = r0.account_id {where}"),
+        time_col="r0.created_at",
+        model_col="r0.model",
+        source_pred=f"{_report_channels_expr().replace('a.', 'a0.')} = ?",
+        order_tie=None,     # 段内无法复刻 source||':'||account_id||':'||usg_id
+        project=_unified_arm_records,
+    ),
+    _UnifiedArm(
+        sources=("zcode",),
+        base="SELECT * FROM zcode_usage {where}",
+        time_col="started_at",
+        model_col="model_id",
+        source_pred=None,
+        order_tie="('zcode:' || id) ASC",
+        project=_unified_arm_zcode,
+    ),
+    _UnifiedArm(
+        sources=("claudecode",),
+        base="SELECT * FROM claudecode_usage {where}",
+        time_col="started_at",
+        model_col="model",
+        source_pred=None,
+        order_tie="('claudecode:' || id) ASC",
+        project=_unified_arm_claudecode,
+    ),
+    _UnifiedArm(
+        sources=("codex",),
+        base="SELECT * FROM codex_usage {where}",
+        time_col="started_at",
+        model_col="model",
+        source_pred=None,
+        order_tie="id ASC",
+        project=_unified_arm_codex,
+    ),
+)
+
+# 形状正确的零行结果: source 未登记时 (workbuddy/dsh 等) 不能拼出空 UNION 语法错误
+_UNIFIED_EMPTY_SQL = (
+    "SELECT " + ", ".join(f"NULL AS {c.strip()}" for c in _UNIFIED_COLS.split(","))
+    + " WHERE 0"
+)
+
+
+def _unified_arm_inner(arm: _UnifiedArm, source: str, model: Optional[str],
+                       days: Optional[int]) -> tuple[str, list[Any]]:
+    """该段的基表子查询 (含下推的 source/model/days 过滤), 返回 (sql, params)。
+
+    days 沿用明细页滚动 N 天旧义与 365 上限 (Codex period 专属汇总走自然日,
+    不在此处)。
+    """
     where: list[str] = []
     params: list[Any] = []
-    if source != "all":
-        where.append("source = ?")
+    if source != "all" and arm.source_pred:
+        where.append(arm.source_pred)
         params.append(source)
     if model:
-        where.append("model = ?")
+        where.append(f"{arm.model_col} = ?")
         params.append(model)
     if days:
-        where.append("datetime(started_at) >= datetime('now', ?)")
+        where.append(f"datetime({arm.time_col}) >= datetime('now', ?)")
         params.append(f"-{max(1, min(int(days), 365))} days")
-    return ("WHERE " + " AND ".join(where)) if where else "", params
+    sql = arm.base.format(where=("WHERE " + " AND ".join(where)) if where else "")
+    return f"({sql})", params
+
+
+def _unified_source_sql(source: str = "all", model: Optional[str] = None,
+                        days: Optional[int] = None) -> tuple[str, list[Any]]:
+    """归一投影 SQL + 绑定参数: 只拼 source 能产出的段, 过滤已下推到各段基表。
+
+    返回的 SQL 是一个可直接放进 FROM (...) 的 SELECT (或 UNION ALL 复合),
+    列序固定为 _UNIFIED_COLS; 调用方不再需要外层 WHERE。
+    """
+    parts: list[str] = []
+    params: list[Any] = []
+    for arm in _UNIFIED_ARMS:
+        if source != "all" and source not in arm.sources:
+            continue
+        inner, arm_params = _unified_arm_inner(arm, source, model, days)
+        parts.append(arm.project(inner))
+        params.extend(arm_params)
+    if not parts:
+        return _UNIFIED_EMPTY_SQL, []
+    return "\n UNION ALL ".join(parts), params
 
 
 def unified_records_page(source: str, page: int = 1, page_size: int = 20,
@@ -4290,13 +4410,12 @@ def unified_records_page(source: str, page: int = 1, page_size: int = 20,
     """
     page = max(1, page)
     page_size = max(1, min(page_size, 100))
-    where, params = _unified_filter(source, model, days)
-    unified = _unified_source_sql()
+    unified, params = _unified_source_sql(source, model, days)
     conn = get_db()
     total = int(conn.execute(
-        f"SELECT COUNT(*) AS c FROM ({unified}) {where}", params).fetchone()["c"])
+        f"SELECT COUNT(*) AS c FROM ({unified})", params).fetchone()["c"])
     rows = conn.execute(
-        f"""SELECT {_UNIFIED_COLS} FROM ({unified}) {where}
+        f"""SELECT {_UNIFIED_COLS} FROM ({unified})
             ORDER BY started_at DESC, source ASC, source_record_id ASC
             LIMIT ? OFFSET ?""",
         params + [page_size, (page - 1) * page_size],
@@ -4331,12 +4450,10 @@ def unified_records_page(source: str, page: int = 1, page_size: int = 20,
 
 
 def unified_models(source: str, days: Optional[int] = None) -> list[str]:
-    """统一来源模型下拉: 归一 CTE 上分页前 distinct (不只取本页模型)。"""
-    where, params = _unified_filter(source, None, days)
+    """统一来源模型下拉: 归一投影上分页前 distinct (不只取本页模型)。"""
+    unified, params = _unified_source_sql(source, None, days)
     rows = get_db().execute(
-        f"SELECT DISTINCT model FROM ({_unified_source_sql()}) {where} ORDER BY model",
-        params,
-    ).fetchall()
+        f"SELECT DISTINCT model FROM ({unified}) ORDER BY model", params).fetchall()
     return [r["model"] for r in rows]
 
 
@@ -4355,17 +4472,16 @@ def unified_sessions_page(source: str, page: int = 1, page_size: int = 10,
     """
     page = max(1, page)
     page_size = max(1, min(page_size, 50))
-    where, params = _unified_filter(source, model, days)
     session_key = (
         "CASE WHEN session_id IS NOT NULL AND session_id != '' THEN session_id "
         "WHEN key_id IS NOT NULL AND key_id != '' THEN key_id ELSE source_record_id END"
     )
     group_id = f"source || ':' || COALESCE(account_id, '') || ':' || {session_key}"
-    unified = _unified_source_sql()
+    unified, params = _unified_source_sql(source, model, days)
     conn = get_db()
     total = int(conn.execute(
         f"""SELECT COUNT(*) AS c FROM (
-                SELECT {group_id} AS g FROM ({unified}) {where} GROUP BY g)""",
+                SELECT {group_id} AS g FROM ({unified}) GROUP BY g)""",
         params,
     ).fetchone()["c"])
     rows = conn.execute(
@@ -4386,7 +4502,7 @@ def unified_sessions_page(source: str, page: int = 1, page_size: int = 10,
                COUNT(speed_tps) AS speed_samples,
                SUM(cost_usd) AS total_cost_usd,
                COUNT(cost_usd) AS cost_known
-        FROM ({unified}) {where}
+        FROM ({unified})
         GROUP BY group_id
         ORDER BY started_at DESC, source ASC, group_id ASC
         LIMIT ? OFFSET ?""",
