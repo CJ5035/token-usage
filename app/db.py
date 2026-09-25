@@ -4357,8 +4357,15 @@ _UNIFIED_EMPTY_SQL = (
 
 
 def _unified_arm_inner(arm: _UnifiedArm, source: str, model: Optional[str],
-                       days: Optional[int]) -> tuple[str, list[Any]]:
+                       days: Optional[int],
+                       row_limit: Optional[int] = None) -> tuple[str, list[Any]]:
     """该段的基表子查询 (含下推的 source/model/days 过滤), 返回 (sql, params)。
+
+    row_limit 非 None 且该段有 order_tie 时, 再把 ORDER BY <时间列> DESC + LIMIT
+    也下推进基表: 各段只捞自己最新的 row_limit 行, 由 idx_*_time 供序, 外层只做
+    小规模归并。正确性: 全局前 row_limit 名必落在"各段前 row_limit 名"的并集里
+    (同段内先于某行的行若已有 row_limit 个, 该行的全局排名就超出了); 段内并列
+    的取舍靠 order_tie 与外层 source_record_id 对齐, 否则页边界会漏行。
 
     days 沿用明细页滚动 N 天旧义与 365 上限 (Codex period 专属汇总走自然日,
     不在此处)。
@@ -4375,22 +4382,26 @@ def _unified_arm_inner(arm: _UnifiedArm, source: str, model: Optional[str],
         where.append(f"datetime({arm.time_col}) >= datetime('now', ?)")
         params.append(f"-{max(1, min(int(days), 365))} days")
     sql = arm.base.format(where=("WHERE " + " AND ".join(where)) if where else "")
+    if row_limit is not None and arm.order_tie:
+        sql += f" ORDER BY {arm.time_col} DESC, {arm.order_tie} LIMIT ?"
+        params.append(row_limit)
     return f"({sql})", params
 
 
 def _unified_source_sql(source: str = "all", model: Optional[str] = None,
-                        days: Optional[int] = None) -> tuple[str, list[Any]]:
+                        days: Optional[int] = None,
+                        row_limit: Optional[int] = None) -> tuple[str, list[Any]]:
     """归一投影 SQL + 绑定参数: 只拼 source 能产出的段, 过滤已下推到各段基表。
 
-    返回的 SQL 是一个可直接放进 FROM (...) 的 SELECT (或 UNION ALL 复合),
-    列序固定为 _UNIFIED_COLS; 调用方不再需要外层 WHERE。
+    row_limit 只给明细分页用 (见 unified_records_page): 会话聚合与模型下拉需要
+    全部命中行参与分组/去重, 必须传 None。
     """
     parts: list[str] = []
     params: list[Any] = []
     for arm in _UNIFIED_ARMS:
         if source != "all" and source not in arm.sources:
             continue
-        inner, arm_params = _unified_arm_inner(arm, source, model, days)
+        inner, arm_params = _unified_arm_inner(arm, source, model, days, row_limit)
         parts.append(arm.project(inner))
         params.extend(arm_params)
     if not parts:
@@ -4414,11 +4425,14 @@ def unified_records_page(source: str, page: int = 1, page_size: int = 20,
     conn = get_db()
     total = int(conn.execute(
         f"SELECT COUNT(*) AS c FROM ({unified})", params).fetchone()["c"])
+    # 取页专用: 各段只下捞 offset+page_size 行 (COUNT 不能带 row_limit)
+    paged, paged_params = _unified_source_sql(source, model, days,
+                                              row_limit=page * page_size)
     rows = conn.execute(
-        f"""SELECT {_UNIFIED_COLS} FROM ({unified})
+        f"""SELECT {_UNIFIED_COLS} FROM ({paged})
             ORDER BY started_at DESC, source ASC, source_record_id ASC
             LIMIT ? OFFSET ?""",
-        params + [page_size, (page - 1) * page_size],
+        paged_params + [page_size, (page - 1) * page_size],
     ).fetchall()
     records = [
         {

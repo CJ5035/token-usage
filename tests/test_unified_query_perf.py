@@ -247,3 +247,42 @@ def test_unknown_source_yields_empty_shape(unified_db):
     assert recs == [] and total == 0
 
 
+def test_pagination_pushes_order_into_base_table(unified_db):
+    """下推后, 单来源取页应由 idx_*_time 供序, 外层不再全量 TEMP B-TREE 排序。
+
+    旧实现外层 ORDER BY 落在 UNION 结果上, 必有 'USE TEMP B-TREE FOR ORDER BY'
+    (全量排序); 下推后各段走索引, 外层最多只需对 <=need 行做末位归并
+    ('FOR LAST ... TERM'), 不允许再出现全量排序那一条。
+    """
+    sql, params = db._unified_source_sql("zcode", row_limit=7)
+    plan = plan_of(
+        f"SELECT {db._UNIFIED_COLS} FROM ({sql}) "
+        "ORDER BY started_at DESC, source ASC, source_record_id ASC LIMIT 7", params)
+    joined = " | ".join(plan)
+    assert "idx_zcode_time" in joined, joined
+    assert "USE TEMP B-TREE FOR ORDER BY" not in plan, joined
+
+
+@pytest.mark.parametrize("source", ["all", "zcode", "codex"])
+@pytest.mark.parametrize("page_size", [1, 2, 3, 7])
+def test_paged_slices_equal_full_scan(unified_db, source, page_size):
+    """逐页拼接必须等于"一次拉全部"的同序切片。
+
+    这是 top-N 下推的核心不变量, 也是并列 (started_at 相同) 边界的回归闸门:
+    夹具里 zcode 有 z2/z3 并列、codex 有 cs:2/cs:3 并列, 小 page_size 会让页
+    边界正好落在并列对中间 —— 段内次序键 (order_tie) 若与外层不一致, 这里必挂。
+    """
+    full, total = db.unified_records_page(source, 1, 100)
+    assert len(full) == total
+    walked: list[dict] = []
+    page = 1
+    while len(walked) < total:
+        chunk, t = db.unified_records_page(source, page, page_size)
+        assert t == total
+        assert chunk, f"page={page} 提前取空, 已走 {len(walked)}/{total}"
+        walked.extend(chunk)
+        page += 1
+    assert [r["source_record_id"] for r in walked] == [r["source_record_id"] for r in full]
+
+
+
