@@ -205,6 +205,14 @@
       <div class="ph"><h2 class="ph-title" data-i18n="recordsPage">使用记录</h2></div>
       <div class="card sessions">
         <div class="card-h"><h3 data-i18n="sessionUsage">会话用量</h3><span class="hint" id="ses-count"></span></div>
+        <div class="ses-card" id="ses-card" hidden>
+          <div class="ses-card-h">
+            <span class="ses-card-t" data-i18n="sessionCardTitle">本会话统计</span>
+            <span class="ses-card-id" id="ses-card-id"></span>
+            <button class="btn btn-xs" id="ses-card-clear" data-i18n="sessionClear">清除</button>
+          </div>
+          <div class="tc-grid tc-6" id="ses-card-grid"></div>
+        </div>
         <div class="usage-scroll">
         <table class="tbl">
           <thead><tr><th data-i18n="colSource">来源</th><th data-i18n="colKey">Key 名称</th><th data-i18n="colSession">会话</th><th data-i18n="colLastUsed">最后使用</th><th class="num" data-i18n="colInput">输入</th><th class="num" data-i18n="colOutput">输出</th><th class="num" data-i18n="colReasoning">推理</th><th class="num" data-i18n="colCacheWrite">缓存写</th><th class="num" data-i18n="colTotal">总量</th><th class="num" data-i18n="colRequests">请求</th><th class="num" data-i18n="colSpeed">速度</th><th class="num" data-i18n="colCost">成本</th></tr></thead>

@@ -15,6 +15,7 @@ const I18N = {
     usageTrend: "用量趋势", usageRecords: "使用记录", allModels: "全部模型",
     recordsPage: "使用记录", navRecords: "使用记录",
     sessionUsage: "会话用量", colSession: "会话", colKey: "Key 名称", colLastUsed: "最后使用", colRequests: "请求/Token", unassigned: "未归属",
+    sessionCardTitle: "本会话统计", sessionRounds: "会话轮数", sessionOutSpeed: "输出速度", sessionTtft: "首字延迟", sessionCumIn: "累计输入", sessionCumOut: "累计输出", sessionClear: "清除", ttftZcodeOnly: "仅 ZCode 提供", sessionSamples: "有效样本", sessionAggregated: "聚合日志",
     accountOverview: "账户总览", navAccountsOverview: "账户总览", costTrend7d: "7 日费用趋势对比",
     todayTotalReq: "今日总请求", todayTotalTokens: "今日总 TOKEN", todayTotalCost: "今日总费用", todayTotalInput: "今日总输入",
     activeAccount: "当前活跃", quotaNotReady: "配额获取中…",
@@ -147,6 +148,7 @@ const I18N = {
     usageTrend: "Usage Trend", usageRecords: "Usage Records", allModels: "All Models",
     recordsPage: "Records", navRecords: "Records",
     sessionUsage: "Session Usage", colSession: "Session", colKey: "Key Name", colLastUsed: "Last Used", colRequests: "Requests/Token", unassigned: "Unassigned",
+    sessionCardTitle: "Session Stats", sessionRounds: "Rounds", sessionOutSpeed: "Output Speed", sessionTtft: "First-Token Latency", sessionCumIn: "Total Input", sessionCumOut: "Total Output", sessionClear: "Clear", ttftZcodeOnly: "ZCode only", sessionSamples: "valid samples", sessionAggregated: "aggregated log",
     accountOverview: "Accounts Overview", navAccountsOverview: "Accounts Overview", costTrend7d: "7-Day Cost Trend",
     todayTotalReq: "Today Requests", todayTotalTokens: "Today Tokens", todayTotalCost: "Today Cost", todayTotalInput: "Today Input",
     activeAccount: "Active", quotaNotReady: "Fetching quota…",
@@ -285,7 +287,9 @@ let state = {
   syncTimer: null,
   quotaRetryTimer: null,
   ovRetryTimer: null,
-  records: { page: 1, pageSize: 7, total: 0, model: "", source: "all" },
+  // groupId/session: 单会话下钻态。groupId 传给明细接口做过滤, session 是被点击
+  // 那一行的快照 (卡片 6 个指标全部来自它, 故点击不需要额外请求)
+  records: { page: 1, pageSize: 7, total: 0, model: "", source: "all", groupId: "", session: null },
   sessions: { page: 1, pageSize: 7, total: 0 },
   settings: { sync_interval_sec: 300, window_days: 60, auto_sync: true },
   channel: "all",        // 首页渠道 tab; 冷启动强制 all (spec v2)
@@ -1790,6 +1794,7 @@ function refreshCodexVisible() {
   if (state.page === "stats") loadCodexSummary().catch(() => {});
   else if (state.page === "records") {
     state.records.page = 1; state.sessions.page = 1;   // 后台导入数据集变化: 回第 1 页
+    clearSessionSelection(false);   // 数据集变了, 旧 group_id 可能已不存在
     Promise.all([loadRecords().catch(() => {}), loadSessions().catch(() => {})]);
   }
 }
@@ -2030,6 +2035,7 @@ function fmtTps(v) {
   return v == null ? "—" : Number(v).toFixed(1) + " tok/s";
 }
 let sesSeq = 0;
+let lastSessionRows = [];   // 最近一次 loadSessions 的行数组, 供行点击按 group_id 回查
 async function loadSessions() {
   const seq = ++sesSeq;
   const body = $("sessions-body");
@@ -2039,12 +2045,13 @@ async function loadSessions() {
     const data = await api(`/api/usage/sessions?${q}`);
     if (seq !== sesSeq) return; // 丢弃过期响应 (快速切页/翻页时旧请求)
     state.sessions.total = data.total;
+    lastSessionRows = data.records || [];
     $("ses-count").textContent = `${t("totalN")} ${fmtInt(data.total)} ${t("sessions")}`;
     if (!data.records.length) {
       body.innerHTML = `<tr><td colspan="12" style="text-align:center;color:var(--text3);padding:20px">${t("noData")}</td></tr>`;
     } else {
       let html = data.records.map((s) => `
-        <tr><td>${sourceBadge(s.source)}</td>
+        <tr class="ses-row${s.group_id === state.records.groupId ? " sel" : ""}" data-gid="${escapeHtml(s.group_id || "")}"><td>${sourceBadge(s.source)}</td>
         <td class="key-name">${escapeHtml(s.key_name || "—")}</td>
         ${s.session_id
           ? `<td title="${escapeHtml(s.session_id)}">${escapeHtml(shortId(s.session_id))}</td>`
@@ -2060,7 +2067,8 @@ async function loadSessions() {
         <td class="num">${fmtOptionalMoney(s.total_cost_usd)}</td></tr>`).join("");
       // 固定 7 行, 不足补空行
       if (data.records.length < 7) {
-        html += ('<tr>' + '<td>&nbsp;</td>'.repeat(12) + '</tr>').repeat(7 - data.records.length);
+        // 占位空行不挂 ses-row, 免得被点击委托当成可下钻的会话
+        html += ('<tr class="ses-pad">' + '<td>&nbsp;</td>'.repeat(12) + '</tr>').repeat(7 - data.records.length);
       }
       body.innerHTML = html;
     }
@@ -2068,9 +2076,58 @@ async function loadSessions() {
     $("ses-pager").textContent = `${t("pageOf")} ${state.sessions.page} ${t("ofPages")} ${totalPages}`;
     $("ses-prev").disabled = state.sessions.page <= 1;
     $("ses-next").disabled = state.sessions.page >= totalPages;
+    // 翻页/重载后: 若当前选中的会话还在本页, 用新数据刷新卡片; 不在本页则保留卡片快照
+    const still = data.records.find((x) => x.group_id === state.records.groupId);
+    if (still) { state.records.session = still; renderSessionCard(still); }
   } catch (e) {
     if (seq === sesSeq) body.innerHTML = `<tr><td colspan="12" style="text-align:center;color:var(--danger-text);padding:20px">${t("loadFailed")}: ${escapeHtml(e.message)}</td></tr>`;
   }
+}
+/* ---------------- 单会话统计卡片 ---------------- */
+/* 6 个指标全部来自 loadSessions 已返回的那一行对象, 点击不发新请求。
+   口径说明:
+   - 轮数: request_count; request_count_exact=false (Codex 聚合日志) 时标 "≥"
+   - 输出速度: 后端 AVG(speed_tps), zcode 侧的逐行速率已按
+     "输出 token ÷ (请求耗时 − 首字延迟)" 算过 (见 db.py _ZCODE_TPS_SQL)
+   - 首字延迟: 只有 ZCode 有源列, ttft_samples=0 表示无有效样本 → 显 "—" 并说明原因,
+     不能显 0 (那会被当成"零延迟")
+   - 命中率: 后端 hit_rate = 命中/总输入 (含 cache_write 的分母) */
+function renderSessionCard(s) {
+  const box = $("ses-card");
+  if (!box) return;
+  if (!s) { box.hidden = true; $("ses-card-grid").innerHTML = ""; return; }
+  box.hidden = false;
+  $("ses-card-id").textContent = s.session_id ? shortId(s.session_id) : t("unassigned");
+  $("ses-card-id").title = s.session_id || "";
+  const rounds = s.request_count_exact === false
+    ? `≥${fmtInt(s.request_count)}` : fmtInt(s.request_count);
+  const hasTtft = (s.ttft_samples || 0) > 0 && s.avg_ttft_ms != null;
+  const cards = [
+    { l: t("sessionRounds"), v: rounds,
+      s: s.request_count_exact === false
+        ? t("sessionAggregated") : `${t("totalTokens")} ${fmtTokens(s.total_tokens)}` },
+    { l: t("sessionOutSpeed"), v: s.avg_tps == null ? "—" : Number(s.avg_tps).toFixed(1) + " tok/s",
+      s: `${t("sessionSamples")} ${fmtInt(s.speed_samples || 0)}/${fmtInt(s.request_count)}` },
+    { l: t("sessionTtft"), v: hasTtft ? Math.round(Number(s.avg_ttft_ms)) + " ms" : "—",
+      s: hasTtft ? `${t("sessionSamples")} ${fmtInt(s.ttft_samples)}/${fmtInt(s.request_count)}`
+                 : t("ttftZcodeOnly") },
+    { l: t("sessionCumIn"), v: fmtTokens(s.total_input_tokens), s: t("inclCache") },
+    { l: t("sessionCumOut"), v: fmtTokens(s.total_output_tokens),
+      s: `${t("colReasoning")} ${fmtTokens(s.total_reasoning_tokens)}` },
+    { l: t("hitRate"), v: (Number(s.hit_rate) || 0).toFixed(1) + "%",
+      s: `${t("hitAmount")} ${fmtTokens(s.cache_hit_tokens)}` },
+  ];
+  $("ses-card-grid").innerHTML = cards.map((c) => `
+    <div class="tc"><div class="tc-l">${c.l}</div><div class="tc-v">${c.v}</div><div class="tc-s">${c.s}</div></div>`).join("");
+}
+/* 清除下钻态: 去选中样式 + 隐卡片 + 明细表回第 1 页。切来源/切模型/后台导入回第 1 页
+   时都要调, 否则会出现"卡片显示 A 会话、明细表却是全量"的错位。 */
+function clearSessionSelection(reload) {
+  state.records.groupId = "";
+  state.records.session = null;
+  document.querySelectorAll("#sessions-body tr.sel").forEach((tr) => tr.classList.remove("sel"));
+  renderSessionCard(null);
+  if (reload) { state.records.page = 1; loadRecords().catch(() => {}); }
 }
 function shortId(id) {
   const s = String(id || "");
@@ -2110,6 +2167,7 @@ async function loadRecords() {
   try {
     const q = new URLSearchParams({ page: state.records.page, page_size: 7, source: state.records.source });
     if (state.records.model) q.set("model", state.records.model);
+    if (state.records.groupId) q.set("group_id", state.records.groupId);   // 单会话下钻过滤
     if (!wantModels) q.set("with_models", "0");
     const data = await api(`/api/usage/records?${q}`);
     if (seq !== recSeq) return; // 丢弃过期响应 (快速切页/翻页时旧请求)
@@ -2861,11 +2919,29 @@ function bindEvents() {
   $("pg-next").addEventListener("click", () => { state.records.page++; loadRecords(); });
   $("ses-prev").addEventListener("click", () => { if (state.sessions.page > 1) { state.sessions.page--; loadSessions(); } });
   $("ses-next").addEventListener("click", () => { state.sessions.page++; loadSessions(); });
+  // 会话行点击下钻 (事件委托: 表体每次重渲都会换 DOM, 不能逐行绑)
+  $("sessions-body").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr.ses-row");
+    if (!tr) return;
+    const gid = tr.dataset.gid || "";
+    if (!gid) return;
+    if (gid === state.records.groupId) { clearSessionSelection(true); return; }  // 再点一次取消
+    state.records.groupId = gid;
+    const row = (lastSessionRows || []).find((x) => x.group_id === gid);
+    state.records.session = row || null;
+    document.querySelectorAll("#sessions-body tr.sel").forEach((x) => x.classList.remove("sel"));
+    tr.classList.add("sel");
+    renderSessionCard(row || null);
+    state.records.page = 1;
+    loadRecords().catch(() => {});
+  });
+  $("ses-card-clear").addEventListener("click", () => clearSessionSelection(true));
   $("rec-model-filter").addEventListener("change", (e) => {
     // 模型筛选同步应用两表 (T6): 两表各自回第 1 页并携同过滤重载
     state.records.model = e.target.value;
     state.records.page = 1;
     state.sessions.page = 1;
+    clearSessionSelection(false);   // 换筛选条件后旧会话选择已无意义, 且会与两表错位
     loadRecords();
     loadSessions();
   });
@@ -2875,6 +2951,7 @@ function bindEvents() {
     state.records.model = "";
     state.records.page = 1;
     state.sessions.page = 1;
+    clearSessionSelection(false);
     loadRecords();
     loadSessions();
   });
