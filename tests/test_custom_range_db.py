@@ -82,3 +82,53 @@ def test_report_range_sql_no_args_regression():
     assert db._report_range_sql("all", "x.started_at") == ("1=1", [])
     sql, params = db._report_range_sql("today", "x.started_at")
     assert ">= datetime(?)" in sql and "< datetime(?)" in sql and len(params) == 2
+
+
+# ---------- _period_where / totals / model_stats (Task 2) ----------
+
+def _seed_records(*created_at_list):
+    """usage_records 直插 (列齐全, 同 tests/test_report_api.py::_mkrec 模式)."""
+    aid = db.add_account("tok-crange", "ws-crange")
+    conn = db.get_db()
+    for i, created in enumerate(created_at_list):
+        conn.execute(
+            "INSERT INTO usage_records (usg_id, created_at, model, provider,"
+            " input_tokens, output_tokens, reasoning_tokens, cache_read_tokens,"
+            " cache_write_5m_tokens, cache_write_1h_tokens, cost_raw, cost_usd,"
+            " key_id, session_id, plan, account_id, synced_at)"
+            " VALUES (?, ?, 'm', 'anthropic', 10, 20, 0, 0, 0, 0, 0, 0.5, NULL, NULL, NULL, ?, ?)",
+            (f"u{i}", created, aid, created))
+    conn.commit()
+    return aid
+
+
+def test_period_where_custom_closed_interval(tmp_crange_db):
+    """Review Focus #2: 记录时刻恰等于 start/end 秒端点必须计入 (闭区间).
+
+    造数时区无关: 区间内中点/区间外前后 1 秒都由 _custom_bounds_utc 的
+    转换结果推算, 不写死 UTC 时刻."""
+    b = db._custom_bounds_utc("2026-09-20 08:00:00", "2026-09-20 18:00:00")
+    fmt = "%Y-%m-%d %H:%M:%S"
+    s_dt, e_dt = datetime.strptime(b[0], fmt), datetime.strptime(b[1], fmt)
+    iso = lambda dt: dt.strftime(fmt).replace(" ", "T") + "Z"
+    mid, before, after = s_dt + (e_dt - s_dt) / 2, s_dt - timedelta(seconds=1), e_dt + timedelta(seconds=1)
+    _seed_records(iso(s_dt), iso(mid), iso(e_dt), iso(before), iso(after))
+    t = db.totals("all", start="2026-09-20 08:00:00", end="2026-09-20 18:00:00")
+    assert t["request_count"] == 3          # 含两个端点, 排除前后各 1 秒
+    t_all = db.totals("all")
+    assert t_all["request_count"] == 5      # 不传新参与现状一致
+
+
+def test_model_stats_custom_window(tmp_crange_db):
+    b = db._custom_bounds_utc("2026-09-20 08:00:00", "2026-09-20 18:00:00")
+    fmt = "%Y-%m-%d %H:%M:%S"
+    _seed_records(b[0].replace(" ", "T") + "Z", "2026-09-21T12:00:00Z")
+    rows = db.model_stats("all", start="2026-09-20 08:00:00", end="2026-09-20 18:00:00")
+    assert len(rows) == 1 and rows[0]["request_count"] == 1
+
+
+def test_period_where_custom_invalid_falls_back(tmp_crange_db):
+    """Review Focus #1: 非法自定义参数回退枚举档位逻辑 (period=all -> 全量)."""
+    _seed_records("2026-09-20T12:00:00Z", "2026-09-01T12:00:00Z")
+    t = db.totals("all", start="bad", end=None)
+    assert t["request_count"] == 2

@@ -1568,7 +1568,12 @@ _PERIOD_CLAUSES = {
 }
 
 
-def _period_where(period: str) -> tuple[str, list[Any]]:
+def _period_where(period: str, start: Optional[str] = None,
+                  end: Optional[str] = None) -> tuple[str, list[Any]]:
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: 秒级闭区间, 优先于枚举档位
+        return ("WHERE datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?)",
+                [b[0], b[1]])
     clauses: list[str] = []
     params: list[Any] = []
     if period in _PERIOD_CLAUSES:
@@ -1586,9 +1591,10 @@ def _period_where(period: str) -> tuple[str, list[Any]]:
 _NUM_DAYS_RE = __import__("re").compile(r"^(\d+)d$")
 
 
-def model_stats(period: str = "30d", account_id: Optional[int] = None) -> list[dict[str, Any]]:
+def model_stats(period: str = "30d", account_id: Optional[int] = None,
+                start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按模型聚合: 请求数 / 会话数 / 输入(含缓存) / 普通输入 / 推理 / 缓存命中 / 缓存写入 / 输出 / 成本 / 命中率."""
-    where, params = _period_where(period)
+    where, params = _period_where(period, start, end)
     where, params = _account_filter(where, params, _resolve_account_id(account_id))
     rows = get_db().execute(
         f"""
@@ -1712,9 +1718,10 @@ def today_trend(account_id: Optional[int] = None) -> list[dict[str, Any]]:
     return result
 
 
-def totals(period: str = "30d", account_id: Optional[int] = None) -> dict[str, Any]:
+def totals(period: str = "30d", account_id: Optional[int] = None,
+           start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
     """总览指标, 口径与模型占比一致."""
-    where, params = _period_where(period)
+    where, params = _period_where(period, start, end)
     where, params = _account_filter(where, params, _resolve_account_id(account_id))
     row = get_db().execute(
         f"""
