@@ -650,13 +650,38 @@ def _midnight_ms(day: Any, tz: Any) -> int:
     return int(datetime(day.year, day.month, day.day, tzinfo=tz).timestamp() * 1000)
 
 
-def _range_bounds(range_: str, now: datetime) -> tuple[str, int | None, int | None, int, Any]:
-    """规范化范围并返回 [start, end) 的本地自然日边界 (非法 range 回退 today)."""
-    selected = range_ if range_ in _RANGES else "today"
+def _parse_custom_dt(s: str) -> datetime | None:
+    """自定义范围入参解析 (容错同 db._parse_local_dt; dsh 独立实现避免反向依赖)."""
+    t = (s or "").strip().replace("T", " ")
+    if len(t) == 16:
+        t += ":00"
+    try:
+        return datetime.strptime(t, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _range_bounds(range_: str, now: datetime, start: str | None = None,
+                  end: str | None = None) -> tuple[str, int | None, int | None, int, Any]:
+    """规范化范围并返回 [start, end) 的本地自然日边界 (非法 range 回退 today).
+
+    custom: start/end 本地时间串 -> 秒级闭区间, 用半开毫秒上界表达
+    (end 秒端点含入, 即 [start_ms, end_ms+999])."""
     local_now = _local_now(now)
     tz = local_now.tzinfo
     today = local_now.date()
     now_ms = int(local_now.timestamp() * 1000)
+    if range_ == "custom":
+        s = _parse_custom_dt(start or "")
+        if s is not None:
+            e = _parse_custom_dt(end) if (end or "").strip() else local_now.replace(tzinfo=None)
+            if e is not None and e >= s:
+                start_ms = int(s.replace(tzinfo=tz).timestamp() * 1000)
+                end_ms = int(e.replace(tzinfo=tz).timestamp() * 1000) + 999
+                return "custom", start_ms, end_ms, now_ms, tz
+        return ("today", _midnight_ms(today, tz), _midnight_ms(today + timedelta(days=1), tz),
+                now_ms, tz)
+    selected = range_ if range_ in _RANGES else "today"
     if selected == "all":
         return selected, None, None, now_ms, tz
     if selected == "today":
@@ -692,13 +717,15 @@ def _public_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
     return _totals_row(bucket)
 
 
-def query_dsh_usage(snapshot: dict[str, Any], range_: str, now: datetime) -> dict[str, Any]:
+def query_dsh_usage(snapshot: dict[str, Any], range_: str, now: datetime,
+                    start: str | None = None, end: str | None = None) -> dict[str, Any]:
     """对单一扫描快照做纯历史范围查询。
 
     ``snapshot`` 只读；范围使用本地自然日的半开区间，且统一剔除 ``now``
     之后的完成记录。调用方负责只捕获一次 ``now`` 并传入此函数。
+    custom: start/end 本地时间串的秒级闭区间 (无 hourly, 趋势补齐自定义区间)。
     """
-    selected, start_ms, end_ms, now_ms, tz = _range_bounds(range_, now)
+    selected, start_ms, end_ms, now_ms, tz = _range_bounds(range_, now, start, end)
     total = _new_public_bucket()
     providers: dict[str, dict[str, Any]] = {}
     models: dict[tuple[str, str], dict[str, Any]] = {}
@@ -763,7 +790,12 @@ def query_dsh_usage(snapshot: dict[str, Any], range_: str, now: datetime) -> dic
     # 30d 30 个日期、all 从最早有效日到今天逐日 (无有效日期为 []); 补齐的空日
     # 为零值桶 (tps=null), 不能当成观测数据 (公共 daily 的 extra_rows 取 steps>0)
     today = datetime.fromtimestamp(now_ms / 1000, tz).date()
-    if selected == "all":
+    if selected == "custom":
+        # 自定义区间补齐 [start.date(), min(end.date(), today)] (end 毫秒含 +999, 取日期即可)
+        start_day = datetime.fromtimestamp(start_ms / 1000, tz).date()
+        end_day = min(datetime.fromtimestamp(end_ms / 1000, tz).date(), today)
+        calendar_days = [start_day + timedelta(days=i) for i in range((end_day - start_day).days + 1)]
+    elif selected == "all":
         first_day = min((datetime.fromisoformat(day).date() for day in daily), default=None)
         calendar_days = ([] if first_day is None else
                          [first_day + timedelta(days=i) for i in range((today - first_day).days + 1)])
@@ -858,8 +890,11 @@ def get_dsh_usage() -> dict[str, Any]:
     return _legacy_payload(snapshot)
 
 
-def get_dsh_summaries(*ranges: str) -> dict[str, dict[str, Any]]:
-    """在一次冻结快照上查询多个范围，供需要兼容范围字段的单个响应使用。"""
+def get_dsh_summaries(*ranges: str, start: str | None = None,
+                      end: str | None = None) -> dict[str, dict[str, Any]]:
+    """在一次冻结快照上查询多个范围，供需要兼容范围字段的单个响应使用。
+
+    start/end 为自定义范围 (range="custom") 的本地时间串, 透传至 query_dsh_usage。"""
     captured_now = datetime.now().astimezone()
     snapshot, stale = _snapshot_for_read()
     with _scan_cond:   # 刷新状态与快照发布同锁读出, 避免撕裂视图
@@ -874,13 +909,14 @@ def get_dsh_summaries(*ranges: str) -> dict[str, dict[str, Any]]:
             "updated_at": snapshot.get("updated_at"),
             "retry_after_seconds": retry_after,
         }
-    return {range_: {**status, **query_dsh_usage(snapshot, range_, captured_now)}
+    return {range_: {**status, **query_dsh_usage(snapshot, range_, captured_now, start, end)}
             for range_ in dict.fromkeys(ranges)}
 
 
-def get_dsh_summary(range_: str) -> dict[str, Any]:
+def get_dsh_summary(range_: str, start: str | None = None,
+                    end: str | None = None) -> dict[str, Any]:
     """返回范围聚合和刷新状态；内部快照及路径、日志内容永不序列化。"""
-    return get_dsh_summaries(range_)[range_]
+    return get_dsh_summaries(range_, start=start, end=end)[range_]
 
 
 def scan_sync() -> dict[str, Any]:
