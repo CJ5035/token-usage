@@ -1486,6 +1486,25 @@ def _claudecode_summary_payload(range_param: str) -> dict[str, Any]:
 _RANGE_WHITELIST = ("today", "yesterday", "7d", "30d", "all")
 
 
+def _custom_range_from_query(query: dict[str, list[str]]) -> tuple[Optional[str], Optional[str]]:
+    """range=custom 时读取 start/end (本地时间串原样下发, 时区转换在 db/dsh 层).
+
+    仅语法校验 (可解析 + start<=end); 非法返回 (None, None) 由调用方走枚举回退."""
+    if (query.get("range", [""])[0] or "") != "custom":
+        return None, None
+    start = (query.get("start", [""])[0] or "").strip()
+    end = (query.get("end", [""])[0] or "").strip()
+    s = db._parse_local_dt(start)
+    if not start or s is None:
+        logging.warning("custom range invalid: start=%r", start)
+        return None, None
+    e = db._parse_local_dt(end) if end else s  # end 空合法; 仅当给了 end 才比较
+    if end and (e is None or e < s):
+        logging.warning("custom range invalid: start=%r end=%r", start, end)
+        return None, None
+    return start, end
+
+
 def _maybe_trigger_codex_import() -> None:
     """读取端点按需增量: 距上次触发超过 60s 才后台导入 (请求不等待导入).
 
