@@ -186,3 +186,54 @@ def test_claudecode_totals_custom_window(tmp_crange_db):
                                        end="2026-09-20 18:00:00")[0]["request_count"] == 1
     assert db.claudecode_model_stats("30d", start="2026-09-20 08:00:00",
                                      end="2026-09-20 18:00:00")[0]["request_count"] == 1
+
+
+# ---------- 自然日体系: workbuddy / codex / report_totals / channel_totals (Task 4) ----------
+
+def test_workbuddy_summary_custom_window(tmp_crange_db):
+    """远端 workbuddy_usage 表 (request_time 为本地时间串)."""
+    conn = db.get_db()
+    aid = db.add_account("tok-wb", "ws-wb")
+    for i, ts in enumerate(["2026-09-20 10:00:00", "2026-09-21 10:00:00"]):
+        conn.execute(
+            "INSERT INTO workbuddy_usage (account_id, request_id, request_time, model,"
+            " client, credit, synced_at) VALUES (?, ?, ?, 'wm', 'cli', 1.5, ?)",
+            (aid, f"r{i}", ts, ts))
+    conn.commit()
+    s = db.workbuddy_summary("7d", start="2026-09-20 00:00:00", end="2026-09-20 23:59:59")
+    assert s["requests"] == 1
+    assert db.workbuddy_summary("7d")["requests"] == 2    # 不传新参回归
+
+
+def test_codex_totals_custom_window(tmp_codex_db, codex_row):
+    b = db._custom_bounds_utc("2026-09-20 08:00:00", "2026-09-20 18:00:00")
+    in_iso = b[0].replace(" ", "T") + "Z"
+    rows = [codex_row(started_at=in_iso), codex_row("s:2", started_at="2026-09-21T10:00:00Z")]
+    assert db.import_codex_usage(rows) == 2
+    t = db.codex_totals("30d", start="2026-09-20 08:00:00", end="2026-09-20 18:00:00")
+    assert t["request_count"] == 1
+    assert db.codex_totals("30d")["request_count"] == 2
+
+
+def test_report_totals_custom_window(tmp_crange_db):
+    aid = db.add_account("tok-oc2", "ws-oc2")
+    conn = db.get_db()
+    b = db._custom_bounds_utc("2026-09-20 08:00:00", "2026-09-20 18:00:00")
+    for usg, created in (("ru1", b[0].replace(" ", "T") + "Z"), ("ru2", "2026-09-19T10:00:00Z")):
+        conn.execute(
+            "INSERT INTO usage_records (usg_id, created_at, model, provider,"
+            " input_tokens, output_tokens, reasoning_tokens, cache_read_tokens,"
+            " cache_write_5m_tokens, cache_write_1h_tokens, cost_raw, cost_usd,"
+            " key_id, session_id, plan, account_id, synced_at)"
+            " VALUES (?, ?, 'm', 'anthropic', 10, 20, 0, 0, 0, 0, 0, 0.5, NULL, NULL, NULL, ?, ?)",
+            (usg, created, aid, created))
+    conn.commit()
+    t = db.report_totals("7d", start="2026-09-20 08:00:00", end="2026-09-20 18:00:00")
+    assert t["request_count"] == 1
+
+
+def test_channel_totals_custom_window(tmp_crange_db):
+    b = db._custom_bounds_utc("2026-09-20 08:00:00", "2026-09-20 18:00:00")
+    _seed_zcode(b[0].replace(" ", "T") + "Z", "2026-09-22T10:00:00Z")
+    t = db.channel_totals("7d", "zcode", start="2026-09-20 08:00:00", end="2026-09-20 18:00:00")
+    assert t["request_count"] == 1
