@@ -237,3 +237,49 @@ def test_channel_totals_custom_window(tmp_crange_db):
     _seed_zcode(b[0].replace(" ", "T") + "Z", "2026-09-22T10:00:00Z")
     t = db.channel_totals("7d", "zcode", start="2026-09-20 08:00:00", end="2026-09-20 18:00:00")
     assert t["request_count"] == 1
+
+
+# ---------- daily 系列 + charts_aggregate (Task 5) ----------
+
+def test_daily_stats_custom_window(tmp_crange_db):
+    b = db._custom_bounds_utc("2026-09-15 00:00:00", "2026-09-25 23:59:59")
+    _ = b
+    _seed_records("2026-09-16T12:00:00Z", "2026-09-24T12:00:00Z", "2026-09-10T12:00:00Z")
+    rows = db.daily_stats(30, start="2026-09-15 00:00:00", end="2026-09-25 23:59:59")
+    assert [r["request_count"] for r in rows] == [1, 1]      # 只含 16/24 两天
+    assert sum(r["request_count"] for r in db.daily_stats(30)) == 3   # 不传新参回归 (近 30 天全量)
+
+
+def test_zcode_daily_custom_window(tmp_crange_db):
+    _seed_zcode("2026-09-16T12:00:00Z", "2026-09-26T12:00:00Z")
+    rows = db.zcode_daily(7, start="2026-09-15 00:00:00", end="2026-09-25 23:59:59")
+    assert len(rows) == 1 and rows[0]["request_count"] == 1
+
+
+def test_claudecode_daily_custom_window(tmp_crange_db):
+    _seed_cc("2026-09-16T12:00:00Z", "2026-09-26T12:00:00Z")
+    rows = db.claudecode_daily(7, start="2026-09-15 00:00:00", end="2026-09-25 23:59:59")
+    assert len(rows) == 1 and rows[0]["request_count"] == 1
+
+
+def test_codex_daily_custom_window_zero_fill(tmp_codex_db, codex_row):
+    """codex_daily 补零区间 = 自定义区间 [start.date(), end.date()]."""
+    assert db.import_codex_usage([codex_row(started_at="2026-09-19T12:00:00Z")]) == 1
+    rows = db.codex_daily(7, start="2026-09-18 00:00:00", end="2026-09-20 23:59:59")
+    dates = [r["date"] for r in rows]
+    assert len(dates) == 3   # 18/19/20 三天, 空日补零
+
+
+def test_charts_aggregate_custom_window(tmp_crange_db):
+    """commandcode 桶表: totals/models/trend/daily 随自定义窗口, today/today_trend 不变."""
+    aid = db.add_account("tok-cc", "cc-crange", switch=True, source="commandcode", dedupe_key="cc-crange")
+    conn = db.get_db()
+    cols = "(account_id, time_bucket, model, provider, requests, tokens_in, tokens_out, cache_read_tokens)"
+    for i, ts in enumerate(["2026-09-19T12:00:00Z", "2026-09-21T12:00:00Z"]):
+        conn.execute(f"INSERT INTO charts_buckets {cols} VALUES (?, ?, 'cm', 'cp', 1, 10, 20, 0)",
+                     (aid, ts))
+    conn.commit()
+    agg = db.charts_aggregate(aid, days=30, start="2026-09-19 00:00:00", end="2026-09-19 23:59:59")
+    assert agg["totals"]["request_count"] == 1
+    assert agg["models"][0]["request_count"] == 1
+    assert len(agg["trend"]) >= 1

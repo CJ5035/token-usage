@@ -1221,7 +1221,8 @@ def _charts_daily_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def charts_aggregate(account_id: Optional[int] = None, days: Optional[int] = None) -> dict[str, Any]:
+def charts_aggregate(account_id: Optional[int] = None, days: Optional[int] = None,
+                     start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
     """commandcode charts_buckets 聚合, 产出与 dashboard 六个统计键同构的数据.
 
     time_bucket 是服务端原样 UTC 字符串, 统一用 datetime(time_bucket, 'localtime')
@@ -1232,31 +1233,55 @@ def charts_aggregate(account_id: Optional[int] = None, days: Optional[int] = Non
     - today_trend: 今日 24 小时补 0, input=未缓存输入 (对照 today_trend 的
       input_tokens 口径), 桶无推理 token 故 reasoning 恒 0
     - models: 按模型聚合 (对应 dashboard "models")
+    自定义范围 (start/end, 秒级闭区间): totals/daily/trend/models 随窗口过滤
+    (time_bucket 为 UTC, 与 _report_range_sql 同侧比较); today/today_trend 不变.
     hit_rate 口径与现有函数一致: cache_read / (cache_read + uncached_input + cache_write) (命中/总输入).
     """
     aid = _resolve_account_id(account_id)
     conn = get_db()
     day_expr = "substr(datetime(time_bucket, 'localtime'), 1, 10)"
     today_cond = f"{day_expr} = date('now', 'localtime')"
+    b = _custom_bounds_utc(start, end)
+    custom_where = ""
+    custom_params: list[Any] = []
+    if b is not None:
+        custom_where = (" AND datetime(time_bucket) >= datetime(?)"
+                        " AND datetime(time_bucket) <= datetime(?)")
+        custom_params = [b[0], b[1]]
 
     row_all = conn.execute(
-        f"SELECT {_CHARTS_AGG_COLS} FROM charts_buckets WHERE account_id = ?", (aid,)
+        f"SELECT {_CHARTS_AGG_COLS} FROM charts_buckets"
+        f" WHERE account_id = ?{custom_where}",
+        [aid] + custom_params,
     ).fetchone()
     row_today = conn.execute(
         f"SELECT {_CHARTS_AGG_COLS} FROM charts_buckets WHERE account_id = ? AND {today_cond}",
         (aid,),
     ).fetchone()
-    daily_rows = conn.execute(
-        f"""SELECT {day_expr} AS date, {_CHARTS_AGG_COLS}
+    if b is not None:
+        daily_where = " AND datetime(time_bucket) >= datetime(?) AND datetime(time_bucket) <= datetime(?)"
+        daily_sql = (f"""SELECT {day_expr} AS date, {_CHARTS_AGG_COLS}
         FROM charts_buckets
-        WHERE account_id = ? AND {day_expr} >= date('now', 'localtime', '-7 days')
+        WHERE account_id = ?{daily_where}
         GROUP BY {day_expr}
-        ORDER BY date ASC""",
-        (aid,),
-    ).fetchall()
+        ORDER BY date ASC""")
+        daily_rows = conn.execute(daily_sql, [aid] + custom_params).fetchall()
+    else:
+        daily_rows = conn.execute(
+            f"""SELECT {day_expr} AS date, {_CHARTS_AGG_COLS}
+            FROM charts_buckets
+            WHERE account_id = ? AND {day_expr} >= date('now', 'localtime', '-7 days')
+            GROUP BY {day_expr}
+            ORDER BY date ASC""",
+            (aid,),
+        ).fetchall()
     trend_where = ""
     trend_params: list[Any] = [aid]
-    if days is not None:
+    if b is not None:
+        trend_where = (" AND datetime(time_bucket) >= datetime(?)"
+                       " AND datetime(time_bucket) <= datetime(?)")
+        trend_params = [aid] + custom_params
+    elif days is not None:
         n = max(1, min(int(days), 365))
         trend_where = f" AND {day_expr} >= date('now', 'localtime', ?)"
         trend_params.append(f"-{n} days")
@@ -1271,10 +1296,10 @@ def charts_aggregate(account_id: Optional[int] = None, days: Optional[int] = Non
     model_rows = conn.execute(
         f"""SELECT model, {_CHARTS_AGG_COLS}
         FROM charts_buckets
-        WHERE account_id = ?
+        WHERE account_id = ?{custom_where}
         GROUP BY model
         ORDER BY (SUM(tokens_in) + SUM(tokens_out)) DESC""",
-        (aid,),
+        [aid] + custom_params,
     ).fetchall()
     hour_rows = conn.execute(
         f"""SELECT CAST(strftime('%H', datetime(time_bucket, 'localtime')) AS INTEGER) AS h,
@@ -1641,13 +1666,21 @@ def model_stats(period: str = "30d", account_id: Optional[int] = None,
     return result
 
 
-def daily_stats(days: int = 30, account_id: Optional[int] = None) -> list[dict[str, Any]]:
+def daily_stats(days: int = 30, account_id: Optional[int] = None,
+                start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """每日聚合: 输入(含缓存) / 普通输入 / 推理 / 缓存命中 / 缓存写入 / 输出 / 成本 / 请求数."""
-    days = max(1, min(days, 365))
     aid = _resolve_account_id(account_id)
-    start_utc = _local_day_utc_start((datetime.now().astimezone() - timedelta(days=days)).date())
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: 精确闭区间, 365 cap 不适用
+        where_extra = " AND datetime(created_at) <= datetime(?)"
+        params: list[Any] = [aid, b[0], b[1]]
+    else:
+        days = max(1, min(days, 365))
+        where_extra = ""
+        start_utc = _local_day_utc_start((datetime.now().astimezone() - timedelta(days=days)).date())
+        params = [aid, start_utc]
     rows = get_db().execute(
-        """
+        f"""
         SELECT substr(datetime(created_at, 'localtime'), 1, 10) AS date,
                SUM(input_tokens + cache_read_tokens + cache_write_5m_tokens + cache_write_1h_tokens) AS total_input_tokens,
                SUM(input_tokens) AS uncached_input_tokens,
@@ -1658,11 +1691,11 @@ def daily_stats(days: int = 30, account_id: Optional[int] = None) -> list[dict[s
                SUM(cost_usd) AS total_cost_usd,
                COUNT(*) AS request_count
         FROM usage_records
-        WHERE account_id = ? AND datetime(created_at) >= datetime(?)
+        WHERE account_id = ? AND datetime(created_at) >= datetime(?){where_extra}
         GROUP BY substr(datetime(created_at, 'localtime'), 1, 10)
         ORDER BY date ASC
         """,
-        (aid, start_utc),
+        params,
     ).fetchall()
     result: list[dict[str, Any]] = []
     for r in rows:
@@ -2015,20 +2048,28 @@ def zcode_totals(period: str = "30d", start: Optional[str] = None, end: Optional
     }
 
 
-def zcode_daily(days: int = 7) -> list[dict[str, Any]]:
+def zcode_daily(days: int = 7, start: Optional[str] = None,
+                end: Optional[str] = None) -> list[dict[str, Any]]:
     """ZCode 每日聚合 (本地日归组), 口径镜像 daily_stats (无速度列)."""
-    days = max(1, min(days, 365))
     day_expr = "substr(datetime(started_at, 'localtime'), 1, 10)"
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: UTC 侧秒级闭区间, day_expr 本地日归组不变
+        where_sql = "datetime(started_at) >= datetime(?) AND datetime(started_at) <= datetime(?)"
+        where_params: list[Any] = [b[0], b[1]]
+    else:
+        days = max(1, min(days, 365))
+        where_sql = f"{day_expr} >= date('now', 'localtime', ?)"
+        where_params = [f"-{days} days"]
     rows = get_db().execute(
         f"""
         SELECT {day_expr} AS date,
                {_ZCODE_AGG_COLS}
         FROM zcode_usage
-        WHERE {day_expr} >= date('now', 'localtime', ?)
+        WHERE {where_sql}
         GROUP BY {day_expr}
         ORDER BY date ASC
         """,
-        (f"-{days} days",),
+        where_params,
     ).fetchall()
     result: list[dict[str, Any]] = []
     for r in rows:
@@ -2472,20 +2513,28 @@ def claudecode_totals(period: str = "30d", start: Optional[str] = None, end: Opt
     }
 
 
-def claudecode_daily(days: int = 7) -> list[dict[str, Any]]:
+def claudecode_daily(days: int = 7, start: Optional[str] = None,
+                     end: Optional[str] = None) -> list[dict[str, Any]]:
     """Claude Code 每日聚合 (本地日归组), 口径镜像 zcode_daily (无速度列)."""
-    days = max(1, min(days, 365))
     day_expr = "substr(datetime(started_at, 'localtime'), 1, 10)"
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: UTC 侧秒级闭区间, day_expr 本地日归组不变
+        where_sql = "datetime(started_at) >= datetime(?) AND datetime(started_at) <= datetime(?)"
+        where_params: list[Any] = [b[0], b[1]]
+    else:
+        days = max(1, min(days, 365))
+        where_sql = f"{day_expr} >= date('now', 'localtime', ?)"
+        where_params = [f"-{days} days"]
     rows = get_db().execute(
         f"""
         SELECT {day_expr} AS date,
                {_CC_AGG_COLS}
         FROM claudecode_usage
-        WHERE {day_expr} >= date('now', 'localtime', ?)
+        WHERE {where_sql}
         GROUP BY {day_expr}
         ORDER BY date ASC
         """,
-        (f"-{days} days",),
+        where_params,
     ).fetchall()
     result: list[dict[str, Any]] = []
     for r in rows:
@@ -4064,25 +4113,41 @@ def backfill_codex_cost(pricing: Any = None) -> int:
         return len(updates)
 
 
-def codex_daily(days: int = 7) -> list[dict[str, Any]]:
-    """Codex 每日聚合 (本地自然日归组), 补足近 N 个自然日 (含今天) 的 0。"""
-    days = max(1, min(int(days), 365))
-    today = datetime.now().astimezone().date()
-    start = _local_day_utc_start(today - timedelta(days=days - 1))
-    end = _local_day_utc_start(today + timedelta(days=1))
+def codex_daily(days: int = 7, start: Optional[str] = None,
+                end: Optional[str] = None) -> list[dict[str, Any]]:
+    """Codex 每日聚合 (本地自然日归组), 补足近 N 个自然日 (含今天) 的 0。
+
+    自定义范围: 窗口为秒级闭区间, 补零区间改为 [start.date(), min(end.date(), today)]。"""
     day_expr = "substr(datetime(started_at, 'localtime'), 1, 10)"
+    today = datetime.now().astimezone().date()
+    b = _custom_bounds_utc(start, end)
+    if b is not None:
+        start_utc, end_utc = b
+        where_tail = "datetime(started_at) >= datetime(?) AND datetime(started_at) <= datetime(?)"
+        s_day = _parse_local_dt((start or "").replace("T", " ")).date()
+        end_s = (end or "").strip()
+        e_day = (_parse_local_dt(end_s.replace("T", " ")) if end_s else datetime.now()).date()
+        e_day = min(e_day, today)
+        n_days = (e_day - s_day).days + 1
+    else:
+        days = max(1, min(int(days), 365))
+        start_utc = _local_day_utc_start(today - timedelta(days=days - 1))
+        end_utc = _local_day_utc_start(today + timedelta(days=1))
+        where_tail = "datetime(started_at) >= datetime(?) AND datetime(started_at) < datetime(?)"
+        s_day = today - timedelta(days=days - 1)
+        e_day = today
+        n_days = days
     rows = get_db().execute(
         f"""SELECT {day_expr} AS date, {_CODEX_AGG_COLS}
             FROM codex_usage
-            WHERE datetime(started_at) >= datetime(?)
-              AND datetime(started_at) < datetime(?)
+            WHERE {where_tail}
             GROUP BY {day_expr}""",
-        (start, end),
+        (start_utc, end_utc),
     ).fetchall()
     by_date = {r["date"]: r for r in rows}
     daily: list[dict[str, Any]] = []
-    for i in range(days):
-        d = (today - timedelta(days=days - 1 - i)).isoformat()
+    for i in range(n_days):
+        d = (s_day + timedelta(days=i)).isoformat()
         r = by_date.get(d)
         if r is None:
             daily.append({"date": d, "request_count": 0, "session_count": 0,
