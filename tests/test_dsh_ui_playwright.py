@@ -195,20 +195,24 @@ def test_dsh_real_page_ranges_race_states_and_tooltip(browser_page):
     _open_stats(page, url)
 
     stats_ranges = page.locator("#stats-pills .pill")
-    assert stats_ranges.count() == 4
+    assert stats_ranges.count() == 5   # 20260926 自定义范围 pill
     for index in range(stats_ranges.count()):
         pill = stats_ranges.nth(index)
         range_ = pill.get_attribute("data-r")
+        if range_ == "custom":
+            continue   # 20260926: custom 点击只开选择面板不发请求 (交互回归见 test_custom_range_ui_playwright)
         pill.click()
         page.wait_for_timeout(60)
         assert range_ in fixture.dsh_calls
 
     home_ranges = page.locator("#home-pills .pill")
-    assert home_ranges.count() == 5
+    assert home_ranges.count() == 6   # 20260926 自定义范围 pill (原 5 + custom)
     page.locator('.side-item[data-page="home"]').click()
     for index in range(home_ranges.count()):
         pill = home_ranges.nth(index)
         range_ = pill.get_attribute("data-r")
+        if range_ == "custom":
+            continue   # 20260926: custom 点击只开选择面板不发请求
         pill.click()
         page.wait_for_timeout(30)
         assert range_ in fixture.dashboard_ranges

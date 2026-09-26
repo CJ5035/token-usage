@@ -157,13 +157,13 @@ def test_sync_zcode_local_empty_short_circuit(tmp_db, zcode_state, monkeypatch):
 def _patch_aggregates(monkeypatch):
     """把四个 db 聚合换成记录 period 入参的桩."""
     monkeypatch.setattr(db, "zcode_totals",
-                        lambda period="30d": {"request_count": 3, "period": period})
+                        lambda period="30d", **kw: {"request_count": 3, "period": period})
     monkeypatch.setattr(db, "zcode_daily",
-                        lambda days=7: [{"date": "2026-09-01", "days": days}])
+                        lambda days=7, **kw: [{"date": "2026-09-01", "days": days}])
     monkeypatch.setattr(db, "zcode_provider_stats",
-                        lambda period="30d": [{"provider_id": "p1", "period": period}])
+                        lambda period="30d", **kw: [{"provider_id": "p1", "period": period}])
     monkeypatch.setattr(db, "zcode_model_stats",
-                        lambda period="30d": [{"model_id": "m1", "period": period}])
+                        lambda period="30d", **kw: [{"model_id": "m1", "period": period}])
 
 
 def _existing_zcode_db(tmp_db, monkeypatch):

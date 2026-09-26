@@ -95,7 +95,7 @@ def _mock_dsh(monkeypatch, today_tokens=70):
 
     # get_dsh_summary 内部委托 get_dsh_summaries, 打点一处即覆盖全部 server 调用路径
     monkeypatch.setattr(dsh_api, "get_dsh_summaries",
-                        lambda *ranges: {r: summary(r) for r in dict.fromkeys(ranges)})
+                        lambda *ranges, **kw: {r: summary(r) for r in dict.fromkeys(ranges)})
 
 
 def _four_step_dsh_summary(range_):
@@ -575,7 +575,7 @@ def test_dsh_history_report_contract_uses_one_range_summary(tmp_report_db, monke
 
     calls = []
 
-    def summaries(*ranges):
+    def summaries(*ranges, **kw):
         calls.append(tuple(ranges))
         return {r: _four_step_dsh_summary(r) for r in dict.fromkeys(ranges)}
 
@@ -644,7 +644,7 @@ def test_fixed_dsh_snapshot_flows_through_query_and_report_adapters(tmp_report_d
                     step(stamp(10, 11), 50, 0, 0, 1000, 0, 0),
                     step(stamp(4, 12), 10, 0, 0, 20, 20, 2),
                 ]}
-    def summaries(*ranges):
+    def summaries(*ranges, **kw):
         return {r: {"found": True, "scanning": False, "stale": False, "refresh_error": False,
                     "updated_at": snapshot["updated_at"], "retry_after_seconds": 0,
                     **dsh_api.query_dsh_usage(snapshot, r, fixed_now)}
@@ -771,7 +771,7 @@ def test_dsh_range_preserves_valid_speed_and_usage_today_alias(tmp_report_db, mo
     today_summary = summary("today", today.isoformat(), 100, "p-t", "m-t", 0, 0)
     calls = []
 
-    def summaries(*ranges):
+    def summaries(*ranges, **kw):
         calls.append(ranges)
         return {"yesterday": yesterday, "today": today_summary}
 
@@ -791,7 +791,7 @@ def test_hourly_dsh_status_is_present_even_without_usage(tmp_report_db, monkeypa
 
     status = {"found": True, "scanning": True, "stale": True, "refresh_error": True,
               "updated_at": "2026-09-10T12:00:00", "retry_after_seconds": 42}
-    monkeypatch.setattr(dsh_api, "get_dsh_summaries", lambda *ranges: {r: {
+    monkeypatch.setattr(dsh_api, "get_dsh_summaries", lambda *ranges, **kw: {r: {
         **status, "range": r, "totals": {"steps": 0, "tokens": 0},
         "trend": [], "hourly": [], "sessions_count": 0, "data_since": None}
         for r in dict.fromkeys(ranges)})

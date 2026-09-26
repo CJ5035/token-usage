@@ -293,7 +293,7 @@ def test_dashboard_commandcode_uses_charts_aggregate(tmp_db, monkeypatch):
     agg_calls: dict = {}
     real_agg = db.charts_aggregate
 
-    def spy_agg(account_id, days=None):
+    def spy_agg(account_id, days=None, **kw):
         agg_calls["days"] = days
         return real_agg(account_id, days=days)
 
