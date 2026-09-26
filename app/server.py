@@ -1308,7 +1308,8 @@ def _zcode_last_import_at() -> Optional[str]:
     return row["m"] if row else None
 
 
-def _zcode_summary_payload(range_param: str) -> dict[str, Any]:
+def _zcode_summary_payload(range_param: str, start: Optional[str] = None,
+                           end: Optional[str] = None) -> dict[str, Any]:
     """GET /api/zcode/summary 数据组装 (纯函数, 便于测试).
 
     db_found 以 ZCODE_DB.exists() 判定 (库"打不开"时 collect_local_usage 静默
@@ -1325,8 +1326,11 @@ def _zcode_summary_payload(range_param: str) -> dict[str, Any]:
             "providers": [],
             "models": [],
         }
-    # range 映射照抄 /api/dashboard 分支: today / 7d / all, 其余 → 30d 口径
-    if range_param == "today":
+    # range 映射照抄 /api/dashboard 分支: today / 7d / all, 其余 → 30d 口径;
+    # custom 携带显式边界时 db 层自定义分支优先, period 值不进枚举匹配
+    if start is not None:
+        period = "custom"
+    elif range_param == "today":
         period = "today"
     elif range_param == "7d":
         period = "7d"
@@ -1339,10 +1343,10 @@ def _zcode_summary_payload(range_param: str) -> dict[str, Any]:
         "last_import_at": _zcode_last_import_at(),
         "error": _zcode_sync_error,
         "range": range_param,
-        "totals": db.zcode_totals(period),
-        "daily7": db.zcode_daily(7),
-        "providers": db.zcode_provider_stats(period),
-        "models": db.zcode_model_stats(period),
+        "totals": db.zcode_totals(period, start=start, end=end),
+        "daily7": db.zcode_daily(7, start=start, end=end),   # custom 随范围; 档位保持固定 7 天
+        "providers": db.zcode_provider_stats(period, start=start, end=end),
+        "models": db.zcode_model_stats(period, start=start, end=end),
     }
 
 
@@ -1440,7 +1444,8 @@ def _maybe_trigger_workbuddy_import() -> None:
     workbuddy_import_async()
 
 
-def _claudecode_summary_payload(range_param: str) -> dict[str, Any]:
+def _claudecode_summary_payload(range_param: str, start: Optional[str] = None,
+                                end: Optional[str] = None) -> dict[str, Any]:
     """GET /api/claudecode/summary 数据组装 (纯函数, 便于测试).
 
     db_found 以 CLAUDE_PROJECTS.is_dir() 判定 (目录不存在 → 本机无 Claude Code
@@ -1457,8 +1462,11 @@ def _claudecode_summary_payload(range_param: str) -> dict[str, Any]:
             "channels": [],
             "models": [],
         }
-    # range 映射照 /api/zcode/summary 分支: today / 7d / all, 其余 → 30d 口径
-    if range_param == "today":
+    # range 映射照 /api/zcode/summary 分支: today / 7d / all, 其余 → 30d 口径;
+    # custom 携带显式边界时 db 层自定义分支优先
+    if start is not None:
+        period = "custom"
+    elif range_param == "today":
         period = "today"
     elif range_param == "7d":
         period = "7d"
@@ -1471,10 +1479,10 @@ def _claudecode_summary_payload(range_param: str) -> dict[str, Any]:
         "last_import_at": db.claudecode_last_import_at(),
         "error": _cc_sync_error,
         "range": range_param,
-        "totals": db.claudecode_totals(period),
-        "daily7": db.claudecode_daily(7),
-        "channels": db.claudecode_channel_stats(period),
-        "models": db.claudecode_model_stats(period),
+        "totals": db.claudecode_totals(period, start=start, end=end),
+        "daily7": db.claudecode_daily(7, start=start, end=end),   # custom 随范围; 档位保持固定 7 天
+        "channels": db.claudecode_channel_stats(period, start=start, end=end),
+        "models": db.claudecode_model_stats(period, start=start, end=end),
     }
 
 
@@ -1534,7 +1542,8 @@ def _codex_state_snapshot() -> dict[str, Any]:
     }
 
 
-def _codex_summary_payload(range_param: str) -> dict[str, Any]:
+def _codex_summary_payload(range_param: str, start: Optional[str] = None,
+                           end: Optional[str] = None) -> dict[str, Any]:
     """GET /api/codex/summary 数据组装 (固定数据契约, 需求 §4 CodexSummary).
 
     非法 range 回落 30d 默认, 不把非法 query 拼 SQL; DB 锁内一次读出聚合与
@@ -1543,15 +1552,15 @@ def _codex_summary_payload(range_param: str) -> dict[str, Any]:
     cost_unavailable_channels 包含 'codex', cost_partial 同步真实语义;
     request_count_exact 按范围内贡献记录的事件模式 (含 token_count 兼容模式记录即 false, 范围为空 false)。
     """
-    if range_param not in _RANGE_WHITELIST:
+    if range_param not in _RANGE_WHITELIST and start is None:
         range_param = "30d"
     with db._DB_LOCK:  # 一致 snapshot: 聚合与状态同锁读出 (RLock 可重入)
-        win = db._win_codex(*db._report_range_sql(range_param, "started_at"))
+        win = db._win_codex(*db._report_range_sql(range_param, "started_at", start, end))
         state = db.get_codex_import_state()
         data_at = db.codex_last_import_at()
         has_data = data_at is not None   # 严格按镜像表判定, 不用扫描时刻代替
         source_found = codex_api.sessions_dir().is_dir()
-        totals = db.codex_totals(range_param)
+        totals = db.codex_totals(range_param, start=start, end=end)
         cost_avail = bool(totals.get("cost_available"))
         payload = {
             "range": range_param,
@@ -1564,9 +1573,9 @@ def _codex_summary_payload(range_param: str) -> dict[str, Any]:
             "cost_unavailable_channels": ["codex"] if (win["requests"] > 0 and not cost_avail) else [],
             "totals": totals,
             "today": db.codex_totals("today"),
-            "channels": db.codex_channel_stats(range_param),
-            "models": db.codex_model_stats(range_param),
-            "daily": db.codex_daily(7),
+            "channels": db.codex_channel_stats(range_param, start=start, end=end),
+            "models": db.codex_model_stats(range_param, start=start, end=end),
+            "daily": db.codex_daily(7, start=start, end=end),   # custom 随范围; 档位保持固定 7 天
             "last_import_at": data_at or state["last_import_at"],
             "import_error": state["last_error"],
             "importing": bool(state["running"]),
@@ -1662,12 +1671,13 @@ def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
     return payload
 
 
-def _report_channels_response(range_: str) -> dict[str, Any]:
+def _report_channels_response(range_: str, start: Optional[str] = None,
+                              end: Optional[str] = None) -> dict[str, Any]:
     """GET /api/report/channels with DSH range totals and source status."""
     wb_running = _wb_import_running
-    rows = db.report_channels(range_)
+    rows = db.report_channels(range_, start=start, end=end)
     summary = db.list_channel_summary()
-    dsh = dsh_api.get_dsh_summary(range_)
+    dsh = dsh_api.get_dsh_summary(range_, start=start, end=end)
     if dsh.get("found"):
         totals = dsh["totals"]
         if _dsh_has_usage(totals):
@@ -1705,18 +1715,19 @@ def _totals_merge_dsh(totals: dict[str, Any], dsh_totals: dict[str, Any]) -> dic
     return out
 
 
-def _dashboard_all_payload(range_param: str) -> dict[str, Any]:
+def _dashboard_all_payload(range_param: str, start: Optional[str] = None,
+                           end: Optional[str] = None) -> dict[str, Any]:
     """GET /api/dashboard?scope=all 数据组装 (显式全渠道分支, 需求 §5 公共报表).
 
     totals=report_totals(range)、today=report_totals(today), 全渠道聚合含
     Codex; DSH 各窗口按选定范围经一次快照一次 now 的 get_dsh_summaries 并入。
     不伪装成 active account: 无 account/quota 键, 前端据此走公共报表分支。"""
     wb_running = _wb_import_running
-    if range_param not in _RANGE_WHITELIST:
+    if range_param not in _RANGE_WHITELIST and start is None:
         range_param = "today"
-    totals = db.report_totals(range_param)
+    totals = db.report_totals(range_param, start=start, end=end)
     today = db.report_totals("today")
-    windows = dsh_api.get_dsh_summaries(range_param, "today")
+    windows = dsh_api.get_dsh_summaries(range_param, "today", start=start, end=end)
     if windows[range_param].get("found"):
         totals = _totals_merge_dsh(totals, windows[range_param]["totals"])
         today = _totals_merge_dsh(today, windows["today"]["totals"])
@@ -1903,11 +1914,16 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         if (query.get("scope", [""])[0] or "") == "all":
             _maybe_trigger_codex_import()
             _maybe_trigger_workbuddy_import()
-            _json_response(handler, _dashboard_all_payload(query.get("range", ["today"])[0]))
+            start_l, end_l = _custom_range_from_query(query)
+            _json_response(handler, _dashboard_all_payload(
+                query.get("range", ["today"])[0], start_l, end_l))
             return
-        # 时间范围: today / 7d / 30d / all
+        # 时间范围: today / 7d / 30d / all; custom 携带显式边界时秒级闭区间优先
         range_param = query.get("range", ["today"])[0]
-        if range_param == "today":
+        start_l, end_l = _custom_range_from_query(query)
+        if start_l is not None:
+            period, days = "custom", None
+        elif range_param == "today":
             period, days = "today", 1
         elif range_param == "yesterday":
             period, days = "yesterday", 1
@@ -1931,16 +1947,17 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         # 24h, 桶表是其历史统计唯一来源; days 映射 all→None 其余照 range), 并附
         # 账期 summary 快照; 其余数据源路径不变
         if _account_source(active_id) == "commandcode":
-            stats = db.charts_aggregate(active_id, days=None if range_param == "all" else days)
+            stats = db.charts_aggregate(active_id, days=None if (range_param == "all" or start_l is not None) else days,
+                                        start=start_l, end=end_l)
             stats["cc_summary"] = db.get_cc_summary(active_id)
         else:
             stats = {
-                "totals": db.totals(period),
+                "totals": db.totals(period, start=start_l, end=end_l),
                 "today": db.totals("today"),
-                "daily": db.daily_stats(7),  # 每日趋势固定显示近 7 天
-                "trend": db.daily_stats(30),  # 用量趋势 (费用/请求双轴)
+                "daily": db.daily_stats(7, start=start_l, end=end_l),  # 每日趋势: 档位固定近 7 天, custom 随范围
+                "trend": db.daily_stats(30, start=start_l, end=end_l),  # 用量趋势 (费用/请求双轴): 档位固定 30 天, custom 随范围
                 "today_trend": db.today_trend(),  # 今日 24 小时趋势
-                "models": db.model_stats(period),
+                "models": db.model_stats(period, start=start_l, end=end_l),
             }
         _json_response(
             handler,
@@ -1972,14 +1989,16 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         # 进入端点先按需触发增量导入 (防抖 60s, 后台线程, 请求不等待导入)
         _maybe_trigger_zcode_import()
         range_param = query.get("range", ["30d"])[0]
-        _json_response(handler, _zcode_summary_payload(range_param))
+        start_l, end_l = _custom_range_from_query(query)
+        _json_response(handler, _zcode_summary_payload(range_param, start_l, end_l))
         return
 
     if route == "/api/claudecode/summary" and method == "GET":
         # 进入端点先按需触发增量导入 (防抖 60s, 后台线程, 请求不等待导入)
         _maybe_trigger_claude_import()
         range_param = query.get("range", ["30d"])[0]
-        _json_response(handler, _claudecode_summary_payload(range_param))
+        start_l, end_l = _custom_range_from_query(query)
+        _json_response(handler, _claudecode_summary_payload(range_param, start_l, end_l))
         return
 
     if route == "/api/codex/summary" and method == "GET":
@@ -1987,14 +2006,16 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         # Codex 汇总独立于远程账号登录, 未登录仍可用
         _maybe_trigger_codex_import()
         range_param = query.get("range", ["30d"])[0]
-        _json_response(handler, _codex_summary_payload(range_param))
+        start_l, end_l = _custom_range_from_query(query)
+        _json_response(handler, _codex_summary_payload(range_param, start_l, end_l))
         return
 
     if route == "/api/workbuddy/summary" and method == "GET":
         range_param = query.get("range", ["30d"])[0]
-        if range_param not in _RANGE_WHITELIST:
+        start_l, end_l = _custom_range_from_query(query)
+        if range_param not in _RANGE_WHITELIST and start_l is None:
             range_param = "30d"
-        _json_response(handler, db.workbuddy_summary(range_param))
+        _json_response(handler, db.workbuddy_summary(range_param, start=start_l, end=end_l))
         return
 
     if route == "/api/dsh/usage" and method == "GET":
@@ -2002,8 +2023,9 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         # §3.4: HTTP 不再走同步全扫描 — 所有请求一律只读统一摘要入口, 刷新由
         # 后台 worker 完成 (扫描中/失败/退避经刷新状态字段透出)。
         range_ = query.get("range", ["all"])[0]
-        range_ = range_ if range_ in _RANGE_WHITELIST else "today"
-        summaries = dsh_api.get_dsh_summaries(range_, "today")
+        start_l, end_l = _custom_range_from_query(query)
+        range_ = range_ if (range_ in _RANGE_WHITELIST or start_l is not None) else "today"
+        summaries = dsh_api.get_dsh_summaries(range_, "today", start=start_l, end=end_l)
         summary = summaries[range_]
         _json_response(handler, {**summary, "total": summary.get("totals") or {},
                                  "today": summaries["today"].get("totals") or {}})
@@ -2192,7 +2214,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
 
     if route == "/api/report/daily" and method == "GET":
         range_ = query.get("range", ["7d"])[0]
-        range_ = range_ if range_ in ("today", "yesterday", "7d", "30d", "all") else "7d"
+        start_l, end_l = _custom_range_from_query(query)
+        range_ = range_ if (range_ in ("today", "yesterday", "7d", "30d", "all") or start_l is not None) else "7d"
         metric = query.get("metric", ["tokens"])[0]
         metric = metric if metric in ("tokens", "cost", "requests") else "tokens"
         channel = query.get("channel", [""])[0] or None
@@ -2205,14 +2228,14 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         extra_rows: list[dict[str, Any]] = []
         unavailable_sources: list[str] = []
         if channel in (None, "dsh"):
-            dsh = dsh_api.get_dsh_summary(range_)
+            dsh = dsh_api.get_dsh_summary(range_, start=start_l, end=end_l)
             if dsh.get("found"):
                 if metric == "tokens":
                     extra_rows = _dsh_daily_rows(dsh)
                 else:
                     unavailable_sources = ["dsh"]
         payload = db.report_daily(range_, channel, metric, extra_rows=extra_rows,
-                                  unavailable_sources=unavailable_sources)
+                                  unavailable_sources=unavailable_sources, start=start_l, end=end_l)
         if dsh is not None:
             payload["dsh_status"] = _dsh_status(dsh)
         if channel in (None, "workbuddy"):
@@ -2241,15 +2264,17 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
 
     if route == "/api/report/channels" and method == "GET":
         range_ = query.get("range", ["7d"])[0]
-        range_ = range_ if range_ in ("today", "yesterday", "7d", "30d", "all") else "7d"
+        start_l, end_l = _custom_range_from_query(query)
+        range_ = range_ if (range_ in ("today", "yesterday", "7d", "30d", "all") or start_l is not None) else "7d"
         _maybe_trigger_codex_import()   # 全渠道明细必然含 codex
         _maybe_trigger_workbuddy_import()
-        _json_response(handler, _report_channels_response(range_))
+        _json_response(handler, _report_channels_response(range_, start_l, end_l))
         return
 
     if route == "/api/report/channel-overview" and method == "GET":
         range_ = query.get("range", ["today"])[0]
-        range_ = range_ if range_ in ("today", "yesterday", "7d", "30d", "all") else "today"
+        start_l, end_l = _custom_range_from_query(query)
+        range_ = range_ if (range_ in ("today", "yesterday", "7d", "30d", "all") or start_l is not None) else "today"
         channel = query.get("channel", [""])[0] or "opencode"
         if channel == "codex":
             _maybe_trigger_codex_import()
@@ -2257,9 +2282,10 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             _maybe_trigger_workbuddy_import()
         wb_running = _wb_import_running
         if channel == "dsh":
-            _json_response(handler, _dsh_channel_overview(dsh_api.get_dsh_summary(range_)))
+            _json_response(handler, _dsh_channel_overview(
+                dsh_api.get_dsh_summary(range_, start=start_l, end=end_l)))
             return
-        payload = db.channel_totals(range_, channel)
+        payload = db.channel_totals(range_, channel, start=start_l, end=end_l)
         if channel == "workbuddy":
             payload["workbuddy_local"] = {"running": wb_running, "error": _wb_sync_error}
         _json_response(handler, payload)
