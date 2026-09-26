@@ -47,3 +47,24 @@ def test_restore_pref_tolerates_corrupt_storage():
     """Review Focus #4: 恢复逻辑必须 try/catch + mode 校验 + start 可解析校验."""
     frag = JS.split("function restoreRangePref")[1][:2200]
     assert "JSON.parse" in frag and "catch" in frag and '"custom"' in frag and "mode" in frag
+
+
+# ---------- rangeQuery 调用点与 DSH 键 (Task 10) ----------
+
+def test_range_query_helper_and_call_sites():
+    body = JS.split("function rangeQuery(")[1].split("\n}")[0]
+    assert "encodeURIComponent" in body and '"custom"' in body
+    # 10 处调用点全部改走 rangeQuery (不再手拼 ?range=${...})
+    assert JS.count("rangeQuery(") >= 11          # 定义 1 + 调用 10
+    for stale in ("`/api/report/channel-overview?range=${range}",
+                  "`/api/dashboard?range=${range}`",
+                  "`/api/zcode/summary?range=${state.statsRange}`",
+                  "`/api/claudecode/summary?range=${state.statsRange}`"):
+        assert stale not in JS                    # 旧拼串必须清零
+
+
+def test_dsh_custom_range_cache_key():
+    """Review Focus #3: DSH 请求去重键与缓存判等必须并入 start/end."""
+    assert "dshRangeKey" in JS
+    assert JS.count("dshUsageLast.range ===") == 0
+    assert "dshUsageLast.key" in JS

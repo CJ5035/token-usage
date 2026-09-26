@@ -500,7 +500,7 @@ function applyLang(l) {
   // ZCode 区块随语言即时重渲染 (复用已拉取数据, 不重发请求)
   if (zcodeQuotaLast && state.page === "home" && state.channel === "zcode") renderZcodeQuota(zcodeQuotaLast);
   if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);
-  if (dshUsageLast && dshUsageLast.range === state.statsRange) renderDsh(dshUsageLast);
+  if (dshUsageLast && dshUsageLast.key === rangeQuery("stats")) renderDsh(dshUsageLast);
   else if (dshTransportError && dshTransportError.range === state.statsRange) renderDshTransportError();
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);
   if (codexSummaryLast) renderCodexSummary(codexSummaryLast);   // Codex 区块随语言即时重渲染 (复用已拉取数据)
@@ -770,7 +770,7 @@ async function loadDashboard(quiet = false, noAnim = false) {
     const seq = ++chSeq;                                  // 新增: 快速切渠道时丢弃过期响应 (方案4④)
     $("report-single").classList.add("swapping");         // 新增: 加载提示 (方案4③)
     const ch = state.channel, range = state.range;        // Step 8a: 请求发起时快照组 URL (防在途 state 漂移)
-    const overviewP = api(`/api/report/channel-overview?range=${range}&channel=${ch}`);
+    const overviewP = api(`/api/report/channel-overview?${rangeQuery("home")}&channel=${ch}`);
     // R54 (Step 8a): WorkBuddy 必须先得 overview (携带 workbuddy_local.running) 再发 trend —
     // overview 的 running=true 会安排完成后的整组重取; overview 迟到 (已切走) 时以 null 收敛,
     // 由 Promise.all 的 seq 守卫整体丢弃, 不再发 trend。其他渠道保持原并发结构。
@@ -821,7 +821,7 @@ async function loadDashboard(quiet = false, noAnim = false) {
   showLoading(true);
   try {
     const range = state.page === "stats" ? state.statsRange : state.range;
-    const data = await api(`/api/dashboard?range=${range}`);
+    const data = await api(`/api/dashboard?${rangeQuery(state.page === "stats" ? "stats" : "home")}`);
     if (seq !== loadSeq) return;
     renderAll(data);
     showLoading(false);
@@ -1116,7 +1116,7 @@ async function loadZcodeSummary() {
   const box = $("zcode-stats");
   if (!box) return;
   try {
-    const data = await api(`/api/zcode/summary?range=${state.statsRange}`);
+    const data = await api(`/api/zcode/summary?${rangeQuery("stats")}`);
     if (seq !== zcodeSumSeq) return;  // 丢弃过期响应 (快速切 range 时旧请求)
     renderZcodeSummary(data);
   } catch (e) {
@@ -1324,35 +1324,36 @@ async function refreshHomeDshStrip() {
 }
 async function loadDshUsage() {
   const range = state.statsRange;
+  const dshRangeKey = rangeQuery("stats");   // Review Focus #3: 去重/缓存键并入 custom 起止, 防不同自定义范围撞键
   const box = $("dsh-stats");
   if (!box || !dshStatsVisible()) return;
-  if (dshRequestControllers.has(range)) return;
+  if (dshRequestControllers.has(dshRangeKey)) return;
   clearDshRefreshTimer();
   const controller = new AbortController();
   dshRequestController = controller;
-  dshRequestControllers.set(range, controller);
+  dshRequestControllers.set(dshRangeKey, controller);
   let timedOut = false;
   const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, DSH_REQUEST_TIMEOUT_MS);
   box.classList.add("swapping");
   try {
-    const data = await api("/api/dsh/usage?range=" + encodeURIComponent(range), { signal: controller.signal });
-    if (range !== state.statsRange || !dshStatsVisible()) return;
+    const data = await api("/api/dsh/usage?" + dshRangeKey, { signal: controller.signal });
+    if (dshRangeKey !== rangeQuery("stats") || !dshStatsVisible()) return;
     dshTransportError = null;
-    dshUsageLast = data;
+    dshUsageLast = { ...data, key: dshRangeKey };
     renderDsh(data);
   } catch (e) {
-    if (range !== state.statsRange || !dshStatsVisible() || (controller.signal.aborted && !timedOut)) return;
+    if (dshRangeKey !== rangeQuery("stats") || !dshStatsVisible() || (controller.signal.aborted && !timedOut)) return;
     dshTransportError = { range, message: timedOut ? t("requestTimeout") : (e.message || String(e)) };
     renderDshTransportError();
     // HTTP 错误缺状态: 前端固定退避 60s 后自动重取 (§3.4), 不清除已显示内容
     scheduleDshRefresh({ refresh_error: true, retry_after_seconds: DSH_FAIL_BACKOFF_S });
   } finally {
     clearTimeout(timeoutId);
-    if (range === state.statsRange) {
+    if (dshRangeKey === rangeQuery("stats")) {
       box.classList.remove("swapping");
       if (dshRequestController === controller) dshRequestController = null;
     }
-    if (dshRequestControllers.get(range) === controller) dshRequestControllers.delete(range);
+    if (dshRequestControllers.get(dshRangeKey) === controller) dshRequestControllers.delete(dshRangeKey);
   }
 }
 function dshRenderHeads() {
@@ -1481,7 +1482,7 @@ function renderDshTransportError() {
   const box = $("dsh-stats");
   if (!box) return;
   box.hidden = false;
-  const cached = dshUsageLast && dshUsageLast.range === state.statsRange && dshUsageLast.found !== false;
+  const cached = dshUsageLast && dshUsageLast.key === rangeQuery("stats") && dshUsageLast.found !== false;
   if (cached) {
     renderDsh(dshUsageLast);
     return;
@@ -1526,7 +1527,7 @@ async function loadClaudecodeSummary() {
   const box = $("claudecode-stats");
   if (!box) return;
   try {
-    const data = await api(`/api/claudecode/summary?range=${state.statsRange}`);
+    const data = await api(`/api/claudecode/summary?${rangeQuery("stats")}`);
     if (seq !== claudecodeSumSeq) return;  // 丢弃过期响应 (快速切 range 时旧请求)
     renderClaudecodeSummary(data);
   } catch (e) {
@@ -1649,7 +1650,7 @@ async function loadWorkbuddySummary() {
   const box = $("workbuddy-stats");
   if (!box) return;
   try {
-    const data = await api("/api/workbuddy/summary?range=" + encodeURIComponent(state.statsRange));
+    const data = await api("/api/workbuddy/summary?" + rangeQuery("stats"));
     if (seq !== workbuddySumSeq) return;
     workbuddySummaryLast = data;
     renderWorkbuddySummary(data);
@@ -1689,7 +1690,7 @@ async function loadCodexSummary() {
   const seq = ++codexSumSeq;
   const range = state.statsRange;
   try {
-    const d = await api("/api/codex/summary?range=" + encodeURIComponent(range));
+    const d = await api("/api/codex/summary?" + rangeQuery("stats"));
     if (seq !== codexSumSeq || range !== state.statsRange) return;  // 丢弃过期响应 (快速切 range 时旧请求/旧 range 均不覆盖)
     codexSummaryLast = d;
     renderCodexSummary(d);
@@ -3157,14 +3158,14 @@ async function loadReportAll(quiet = false, noAnim = false) {
     const metric = state.reportMetric;
     const [w, rows, ov, zq, daily, hourly, all] = await Promise.all([   // 三波并一波 (hourly 并入消除 today 档两段式弹入)
       api(`/api/report/windows`),
-      api(`/api/report/channels?range=${range}`),
+      api(`/api/report/channels?${rangeQuery("home")}`),
       api(`/api/accounts/overview`),                    // R1: 摘要条数据并入同一并发 (T9 renderQuotaBar)
       api(`/api/zcode/quota`).catch(() => null),        // 问题5: ZCode 额度并入配额条, 失败不出卡
-      api(`/api/report/daily?range=${range}&metric=${metric}`),
+      api(`/api/report/daily?${rangeQuery("home")}&metric=${metric}`),
       (range === "today" || range === "yesterday")      // 档位条件保留 (条件性 promise)
         ? api(`/api/report/hourly?date=${range}`)
         : Promise.resolve(null),
-      api("/api/dashboard?scope=all&range=" + encodeURIComponent(range)),   // T5: 同范围 report_totals → 范围 KPI 条 (响应仅给 renderReportTotals, 不碰 state.data/不 renderAll)
+      api("/api/dashboard?scope=all&" + rangeQuery("home")),   // T5: 同范围 report_totals → 范围 KPI 条 (响应仅给 renderReportTotals, 不碰 state.data/不 renderAll)
     ]);
     if (seq !== allSeq) return;                         // 过期响应丢弃 (缓存写入在守卫后, 最新胜出)
     renderWindows(w, rows.rows.some((r) => r.estimated));
@@ -3382,7 +3383,7 @@ function chartReportStack(d, noAnim) {
   cStack.resize();
 }
 
-const RANGE_LABEL_KEY = { today: "today", yesterday: "yesterday", "7d": "d7", "30d": "d30", all: "all" };   // 环心范围标签 i18n 映射 (arena2)
+const RANGE_LABEL_KEY = { today: "today", yesterday: "yesterday", "7d": "d7", "30d": "d30", all: "all", custom: "customRange" };   // 环心范围标签 i18n 映射 (arena2)
 
 function chartReportDonut(d, noAnim, range) {
   const canvas = $("report-donut");
@@ -3525,7 +3526,7 @@ function rerenderCharts() {
   }
   // DSH 趋势 (§3.5): 不依赖 state.data 已有远程账号数据 — 统计页首屏 dashboard
   // 加载失败时主题切换仍以 noAnim 重渲, 不残留旧主题配色
-  if (!document.getElementById("page-stats").hidden && dshUsageLast && dshUsageLast.range === state.statsRange) {
+  if (!document.getElementById("page-stats").hidden && dshUsageLast && dshUsageLast.key === rangeQuery("stats")) {
     chartDshTrend(dshUsageLast.trend || [], true);
   }
   refreshIcons();   // 图标变体原地换 src + chartModel 重渲 (唯一入口)

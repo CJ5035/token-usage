@@ -28,8 +28,8 @@ def test_dsh_range_ui_contract():
     assert "dsh-dim" not in html
     for stale in ("dshDim", "dsh-today-note", "dataSinceToday"):
         assert stale not in js
-    assert '"/api/dsh/usage?range=" + encodeURIComponent(range)' in js
-    assert "if (range !== state.statsRange || !dshStatsVisible()) return;" in js
+    assert '"/api/dsh/usage?" + dshRangeKey' in js   # 20260926 自定义范围: URL 与去重键并入 custom 起止
+    assert "if (dshRangeKey !== rangeQuery(\"stats\") || !dshStatsVisible()) return;" in js
 
 
 def test_dsh_chart_and_status_use_cached_range_data():
@@ -39,7 +39,7 @@ def test_dsh_chart_and_status_use_cached_range_data():
     assert "function chartDshTrend" in js
     assert "function destroyDshTrend" in js
     assert "safeResize(cDshTrend)" in js
-    assert "dshUsageLast.range === state.statsRange" in js
+    assert 'dshUsageLast.key === rangeQuery("stats")' in js
     assert "fmtTps(totals.tps)" in js
 
 
@@ -110,7 +110,7 @@ def test_hanging_dsh_request_times_out_and_allows_same_range_retry():
     assert "controller.signal.aborted && !timedOut" in js
     assert "clearTimeout(timeoutId);" in js
     assert "const dshRequestControllers = new Map();" in js
-    assert "dshRequestControllers.has(range)" in js
+    assert "dshRequestControllers.has(dshRangeKey)" in js
 
 
 def test_dsh_unknown_home_values_and_data_since_are_safe():
