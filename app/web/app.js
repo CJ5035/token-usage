@@ -2899,10 +2899,11 @@ function bindEvents() {
     $("custom-start").value = cur.start || "";
     $("custom-end").value = cur.end || "";
     crPanel.dataset.kind = kind;
-    const r = pill.getBoundingClientRect();
-    crPanel.style.left = `${Math.max(8, r.right - 260)}px`;
+    crPanel.hidden = false;                    // 先显示才能量到实际宽度 (hidden 时 offsetWidth=0)
+    const r = pill.parentElement.getBoundingClientRect();   // pill-row 容器 (3px padding), 右缘以容器可见灰底为准
+    const pw = crPanel.offsetWidth || 266;     // 264 内容宽 + 2 边框
+    crPanel.style.left = `${Math.max(8, r.right - pw)}px`; // 右缘与 pills 容器右缘对齐
     crPanel.style.top = `${r.bottom + 6}px`;
-    crPanel.hidden = false;
   }
   document.addEventListener("click", (e) => {
     if (!crPanel.hidden && !crPanel.contains(e.target)) crPanel.hidden = true;
