@@ -1950,8 +1950,13 @@ _ZCODE_PERIOD_CLAUSES = {
 }
 
 
-def _zcode_period_where(period: str) -> tuple[str, list[Any]]:
+def _zcode_period_where(period: str, start: Optional[str] = None,
+                        end: Optional[str] = None) -> tuple[str, list[Any]]:
     """zcode_usage 的 period 过滤 (口径照抄 _period_where, 列换成 started_at)."""
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: 秒级闭区间, 优先于枚举档位
+        return ("WHERE datetime(started_at) >= datetime(?) AND datetime(started_at) <= datetime(?)",
+                [b[0], b[1]])
     clauses: list[str] = []
     params: list[Any] = []
     if period in _ZCODE_PERIOD_CLAUSES:
@@ -1983,9 +1988,9 @@ def _zcode_cost_usd(row: sqlite3.Row) -> float:
     return round(int(row["total_cost_raw"] or 0) / 100_000_000.0, 6)
 
 
-def zcode_totals(period: str = "30d") -> dict[str, Any]:
+def zcode_totals(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
     """ZCode 用量总览: token/费用口径与 totals() 一致, 附加速率与 TTFT."""
-    where, params = _zcode_period_where(period)
+    where, params = _zcode_period_where(period, start, end)
     row = get_db().execute(
         f"SELECT {_ZCODE_AGG_COLS}, {_ZCODE_SPEED_COLS} FROM zcode_usage {where}",
         params,
@@ -2048,11 +2053,11 @@ def zcode_daily(days: int = 7) -> list[dict[str, Any]]:
     return result
 
 
-def zcode_provider_stats(period: str = "30d") -> list[dict[str, Any]]:
+def zcode_provider_stats(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按渠道聚合; provider_name 取该渠道最新 synced_at 行的非空快照
     (config.json 改名后旧快照不回写; 全 NULL → None, 前端回退内置映射/截断 UUID).
     """
-    where, params = _zcode_period_where(period)
+    where, params = _zcode_period_where(period, start, end)
     rows = get_db().execute(
         f"""
         SELECT z1.provider_id,
@@ -2095,11 +2100,11 @@ def zcode_provider_stats(period: str = "30d") -> list[dict[str, Any]]:
     return result
 
 
-def zcode_model_stats(period: str = "30d") -> list[dict[str, Any]]:
+def zcode_model_stats(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按渠道+模型聚合, 行字段同 zcode_provider_stats 另含缓存命中率 hit_rate
     (算法照抄 model_stats: hit/(hit+miss+cw)*100, cache_write 计入未命中).
     """
-    where, params = _zcode_period_where(period)
+    where, params = _zcode_period_where(period, start, end)
     rows = get_db().execute(
         f"""
         SELECT z1.provider_id,
@@ -2405,8 +2410,13 @@ _CC_PERIOD_CLAUSES = {
 }
 
 
-def _cc_period_where(period: str) -> tuple[str, list[Any]]:
+def _cc_period_where(period: str, start: Optional[str] = None,
+                     end: Optional[str] = None) -> tuple[str, list[Any]]:
     """claudecode_usage 的 period 过滤 (口径照 _zcode_period_where, 支持 today/all/Nd)."""
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: 秒级闭区间, 优先于枚举档位
+        return ("WHERE datetime(started_at) >= datetime(?) AND datetime(started_at) <= datetime(?)",
+                [b[0], b[1]])
     clauses: list[str] = []
     params: list[Any] = []
     if period in _CC_PERIOD_CLAUSES:
@@ -2436,9 +2446,9 @@ def _cc_cost_usd(row: sqlite3.Row) -> float:
     return round(int(row["total_cost_raw"] or 0) / 100_000_000.0, 6)
 
 
-def claudecode_totals(period: str = "30d") -> dict[str, Any]:
+def claudecode_totals(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
     """Claude Code 用量总览: token/费用口径与 zcode_totals 一致, 附加速率."""
-    where, params = _cc_period_where(period)
+    where, params = _cc_period_where(period, start, end)
     row = get_db().execute(
         f"SELECT {_CC_AGG_COLS}, {_CC_SPEED_COLS} FROM claudecode_usage {where}",
         params,
@@ -2499,11 +2509,11 @@ def claudecode_daily(days: int = 7) -> list[dict[str, Any]]:
     return result
 
 
-def claudecode_channel_stats(period: str = "30d") -> list[dict[str, Any]]:
+def claudecode_channel_stats(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按渠道聚合 (channel 首插判定, 归属规则见实施文档 §4), 行字段同
     claudecode_totals 另含 channel; 按 输入+输出 token 降序.
     """
-    where, params = _cc_period_where(period)
+    where, params = _cc_period_where(period, start, end)
     rows = get_db().execute(
         f"""
         SELECT channel, {_CC_AGG_COLS}, {_CC_SPEED_COLS}
@@ -2539,9 +2549,9 @@ def claudecode_channel_stats(period: str = "30d") -> list[dict[str, Any]]:
     return result
 
 
-def claudecode_model_stats(period: str = "30d") -> list[dict[str, Any]]:
+def claudecode_model_stats(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按模型聚合, 行字段同 claudecode_channel_stats (model 替代 channel)."""
-    where, params = _cc_period_where(period)
+    where, params = _cc_period_where(period, start, end)
     rows = get_db().execute(
         f"""
         SELECT model, {_CC_AGG_COLS}, {_CC_SPEED_COLS}

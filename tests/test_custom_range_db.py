@@ -132,3 +132,57 @@ def test_period_where_custom_invalid_falls_back(tmp_crange_db):
     _seed_records("2026-09-20T12:00:00Z", "2026-09-01T12:00:00Z")
     t = db.totals("all", start="bad", end=None)
     assert t["request_count"] == 2
+
+
+# ---------- zcode / claudecode 聚合 (Task 3) ----------
+
+def _seed_zcode(*started_at_list):
+    conn = db.get_db()
+    for i, ts in enumerate(started_at_list):
+        conn.execute(
+            "INSERT INTO zcode_usage (id, session_id, started_at, model_id, provider_id,"
+            " input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,"
+            " reasoning_tokens, cost_raw, synced_at)"
+            " VALUES (?, ?, ?, 'zm', 'zp', 10, 0, 0, 20, 0, 0, ?)",
+            (f"z{i}", f"zs{i}", ts, ts))
+    conn.commit()
+
+
+def test_zcode_totals_custom_window(tmp_crange_db):
+    b = db._custom_bounds_utc("2026-09-20 08:00:00", "2026-09-20 18:00:00")
+    _seed_zcode(b[0].replace(" ", "T") + "Z", "2026-09-21T10:00:00Z")
+    t = db.zcode_totals("30d", start="2026-09-20 08:00:00", end="2026-09-20 18:00:00")
+    assert t["request_count"] == 1
+    assert db.zcode_totals("30d")["request_count"] == 2   # 不传新参回归
+
+
+def test_zcode_provider_and_model_stats_custom(tmp_crange_db):
+    b = db._custom_bounds_utc("2026-09-20 08:00:00", "2026-09-20 18:00:00")
+    _seed_zcode(b[0].replace(" ", "T") + "Z", "2026-09-22T10:00:00Z")
+    assert db.zcode_provider_stats("30d", start="2026-09-20 08:00:00",
+                                    end="2026-09-20 18:00:00")[0]["request_count"] == 1
+    assert db.zcode_model_stats("30d", start="2026-09-20 08:00:00",
+                                 end="2026-09-20 18:00:00")[0]["request_count"] == 1
+
+
+def _seed_cc(*started_at_list):
+    conn = db.get_db()
+    for i, ts in enumerate(started_at_list):
+        conn.execute(
+            "INSERT INTO claudecode_usage (dedupe_key, session_id, started_at, model, channel,"
+            " input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,"
+            " cost_raw, total_tokens, synced_at)"
+            " VALUES (?, ?, ?, 'cm', 'cp', 10, 0, 0, 20, 0, 30, ?)",
+            (f"ck{i}", f"cs{i}", ts, ts))
+    conn.commit()
+
+
+def test_claudecode_totals_custom_window(tmp_crange_db):
+    b = db._custom_bounds_utc("2026-09-20 08:00:00", "2026-09-20 18:00:00")
+    _seed_cc(b[0].replace(" ", "T") + "Z", "2026-09-21T10:00:00Z")
+    t = db.claudecode_totals("30d", start="2026-09-20 08:00:00", end="2026-09-20 18:00:00")
+    assert t["request_count"] == 1
+    assert db.claudecode_channel_stats("30d", start="2026-09-20 08:00:00",
+                                       end="2026-09-20 18:00:00")[0]["request_count"] == 1
+    assert db.claudecode_model_stats("30d", start="2026-09-20 08:00:00",
+                                     end="2026-09-20 18:00:00")[0]["request_count"] == 1
