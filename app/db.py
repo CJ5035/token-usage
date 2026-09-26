@@ -2616,15 +2616,50 @@ def _range_utc_bounds(range_: str) -> Optional[tuple[str, str]]:
     return _local_day_utc_start(start), _local_day_utc_start(end)
 
 
-def _report_range_sql(range_: str, ts_col: str) -> tuple[str, list[str]]:
+def _parse_local_dt(s: str) -> Optional[datetime]:
+    """自定义范围入参解析: 容错 T 分隔/缺秒, 非法返回 None (不抛出)."""
+    t = (s or "").strip().replace("T", " ")
+    if len(t) == 16:  # 缺秒 (datetime-local 默认分精度) 补 :00
+        t += ":00"
+    try:
+        return datetime.strptime(t, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _custom_bounds_utc(start: Optional[str], end: Optional[str]) -> Optional[tuple[str, str]]:
+    """自定义范围 -> (start_utc, end_utc) 秒级闭区间; end 空=当前时刻.
+
+    输入为本地时间串; 非法 (缺 start/不可解析/end<start) 返回 None,
+    调用方据 None 走枚举档位逻辑. 本地->UTC 的唯一转换点 (server 不转)."""
+    s = _parse_local_dt(start or "")
+    if s is None:
+        return None
+    end_s = (end or "").strip()
+    e = _parse_local_dt(end_s) if end_s else datetime.now()
+    if e is None or e < s:
+        return None
+    tz = datetime.now().astimezone().tzinfo
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return (s.replace(tzinfo=tz).astimezone(timezone.utc).strftime(fmt),
+            e.replace(tzinfo=tz).astimezone(timezone.utc).strftime(fmt))
+
+
+def _report_range_sql(range_: str, ts_col: str,
+                      start: Optional[str] = None, end: Optional[str] = None) -> tuple[str, list[str]]:
     """自然日窗口谓词 (v2 性能版): datetime(col) 确定性表达式走 idx_usage_*_utc.
-    返回 (sql 片段, 前置参数) — 谓词位于各 WHERE 首位, 调用方参数须以本参数开头."""
-    b = _range_utc_bounds(range_)
-    if b is None:
+    返回 (sql 片段, 前置参数) — 谓词位于各 WHERE 首位, 调用方参数须以本参数开头.
+    显式 start/end (自定义范围, 秒级闭区间) 优先于 range_ 枚举档位."""
+    b = _custom_bounds_utc(start, end)
+    if b is not None:
+        return (f"datetime({ts_col}) >= datetime(?) AND datetime({ts_col}) <= datetime(?)",
+                [b[0], b[1]])
+    b2 = _range_utc_bounds(range_)
+    if b2 is None:
         return "1=1", []
-    start, end = b
+    start2, end2 = b2
     return (f"datetime({ts_col}) >= datetime(?) AND datetime({ts_col}) < datetime(?)",
-            [start, end])
+            [start2, end2])
 
 
 def _report_channels_expr() -> str:
