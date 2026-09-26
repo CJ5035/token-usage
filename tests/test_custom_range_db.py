@@ -274,10 +274,11 @@ def test_charts_aggregate_custom_window(tmp_crange_db):
     """commandcode 桶表: totals/models/trend/daily 随自定义窗口, today/today_trend 不变."""
     aid = db.add_account("tok-cc", "cc-crange", switch=True, source="commandcode", dedupe_key="cc-crange")
     conn = db.get_db()
-    cols = "(account_id, time_bucket, model, provider, requests, tokens_in, tokens_out, cache_read_tokens)"
+    cols = ("(account_id, time_bucket, model, provider, requests, tokens_in, tokens_out,"
+            " cache_read_tokens, synced_at)")
     for i, ts in enumerate(["2026-09-19T12:00:00Z", "2026-09-21T12:00:00Z"]):
-        conn.execute(f"INSERT INTO charts_buckets {cols} VALUES (?, ?, 'cm', 'cp', 1, 10, 20, 0)",
-                     (aid, ts))
+        conn.execute(f"INSERT INTO charts_buckets {cols} VALUES (?, ?, 'cm', 'cp', 1, 10, 20, 0, ?)",
+                     (aid, ts, ts))
     conn.commit()
     agg = db.charts_aggregate(aid, days=30, start="2026-09-19 00:00:00", end="2026-09-19 23:59:59")
     assert agg["totals"]["request_count"] == 1
