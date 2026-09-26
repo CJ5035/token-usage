@@ -475,6 +475,7 @@ function applyLang(l) {
     el.textContent = t(el.dataset.i18n);
   });
   syncI18nTitles();   // EVOLUTION-9: tooltip/估算徽标随语言切换
+  syncRangePills();   // 20260926: data-i18n 刷新会把 custom pill 摘要重置为"自定义", 此处恢复
   document.querySelectorAll("#set-lang-pills .pill").forEach((b) => b.classList.toggle("active", b.dataset.v === lang));
   // 版本号: 唯一来源为后端 /api/version (app/__init__.py), 前端动态获取; 副题覆盖远程与本地多来源
   const ver = APP_VERSION ? "v" + APP_VERSION : "GoGauge";

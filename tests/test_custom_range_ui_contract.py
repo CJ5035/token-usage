@@ -68,3 +68,9 @@ def test_dsh_custom_range_cache_key():
     assert "dshRangeKey" in JS
     assert JS.count("dshUsageLast.range ===") == 0
     assert "dshUsageLast.key" in JS
+
+
+def test_apply_lang_resyncs_custom_pill():
+    """切语言后 custom pill 摘要不得被 data-i18n 全量刷新覆盖 (review Important #1)."""
+    body = JS.split("function applyLang(")[1].split("\n}")[0]
+    assert "syncRangePills(" in body
