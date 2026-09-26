@@ -81,7 +81,7 @@
 
     <!-- ============ 首页 ============ -->
     <section class="page" id="page-home">
-      <div class="ph"><h2 class="ph-title" data-i18n="homeTitle">用量统计总览</h2><div class="ph-right"><div class="pill-row" id="channel-tabs"><button class="pill active" data-ch="all" data-i18n="channelAll">全部渠道</button></div><div class="pill-row" id="home-pills"><button class="pill active" data-r="today" data-i18n="today">今天</button><button class="pill" data-r="yesterday" data-i18n="yesterday">昨天</button><button class="pill" data-r="7d" data-i18n="d7">近7天</button><button class="pill" data-r="30d" data-i18n="d30">近30天</button><button class="pill" data-r="all" data-i18n="all">全部</button></div></div></div>
+      <div class="ph"><h2 class="ph-title" data-i18n="homeTitle">用量统计总览</h2><div class="ph-right"><div class="pill-row" id="channel-tabs"><button class="pill active" data-ch="all" data-i18n="channelAll">全部渠道</button></div><div class="pill-row" id="home-pills"><button class="pill active" data-r="today" data-i18n="today">今天</button><button class="pill" data-r="yesterday" data-i18n="yesterday">昨天</button><button class="pill" data-r="7d" data-i18n="d7">近7天</button><button class="pill" data-r="30d" data-i18n="d30">近30天</button><button class="pill" data-r="all" data-i18n="all">全部</button><button class="pill" data-r="custom" data-i18n="customRange">自定义</button></div></div></div>
       <div class="scope-hint" id="report-scope" hidden></div>
       <div class="dsh-status" id="home-dsh-status" role="status" hidden></div>
       <div class="dsh-error" id="home-dsh-error" role="status" hidden></div>
@@ -121,7 +121,7 @@
 
     <!-- ============ 用量统计 ============ -->
     <section class="page" id="page-stats" hidden>
-      <div class="ph"><h2 class="ph-title" data-i18n="statsTitle">用量统计</h2><div class="ph-right"><div class="pill-row" id="stats-pills"><button class="pill" data-r="today" data-i18n="today">今天</button><button class="pill active" data-r="7d" data-i18n="d7">近7天</button><button class="pill" data-r="30d" data-i18n="d30">近30天</button><button class="pill" data-r="all" data-i18n="all">全部</button></div></div></div>
+      <div class="ph"><h2 class="ph-title" data-i18n="statsTitle">用量统计</h2><div class="ph-right"><div class="pill-row" id="stats-pills"><button class="pill" data-r="today" data-i18n="today">今天</button><button class="pill active" data-r="7d" data-i18n="d7">近7天</button><button class="pill" data-r="30d" data-i18n="d30">近30天</button><button class="pill" data-r="all" data-i18n="all">全部</button><button class="pill" data-r="custom" data-i18n="customRange">自定义</button></div></div></div>
       <div class="scope-hint stats-remote" id="stats-scope-hint" hidden></div>
       <div class="kpi-row kpi4 stats-remote" id="stats-total-cards"></div>
       <div class="card detail6 stats-remote">
@@ -352,6 +352,18 @@
     <div class="toast-wrap" id="toast-wrap"></div>
 
   </main>
+</div>
+
+<div id="custom-range-panel" class="cr-panel" hidden>
+  <div class="cr-row"><label for="custom-start" data-i18n="rangeStart">开始</label>
+    <input type="datetime-local" id="custom-start" step="1"></div>
+  <div class="cr-row"><label for="custom-end" data-i18n="rangeEnd">结束</label>
+    <input type="datetime-local" id="custom-end" step="1"></div>
+  <div class="cr-hint" data-i18n="endEmptyMeansNow">结束留空表示至今</div>
+  <div class="cr-actions">
+    <button class="btn" id="custom-apply" data-i18n="rangeApply">应用</button>
+    <button class="btn" id="custom-clear" data-i18n="rangeClear">清除</button>
+  </div>
 </div>
 
 <script src="chart.umd.min.js"></script>

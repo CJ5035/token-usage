@@ -8,6 +8,8 @@ const I18N = {
   zh: {
     syncing: "同步中", themeDark: "暗色", themeLight: "亮色", refresh: "刷新", themeToggle: "切换主题", themeSaveFailed: "主题未保存，重试", minimize: "最小化", close: "关闭", maximize: "最大化", restore: "还原",
     homeTitle: "用量统计总览", navHome: "首页", today: "今天", d7: "近7天", d30: "近30天", all: "全部",
+    customRange: "自定义", rangeStart: "开始", rangeEnd: "结束", rangeApply: "应用", rangeClear: "清除",
+    endEmptyMeansNow: "结束留空表示至今", rangeInvalid: "开始必填，且不能晚于结束",
     overviewTitle: "用量概览", followRange: "数据跟随时间范围",
     todayTrend: "今日趋势", hours24: "24 小时",
     statsTitle: "用量统计", tokenBreakdown: "Token 构成",
@@ -140,6 +142,8 @@ const I18N = {
   en: {
     syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh", themeToggle: "Toggle theme", themeSaveFailed: "Theme not saved, retrying", minimize: "Minimize", close: "Close", maximize: "Maximize", restore: "Restore",
     homeTitle: "Usage Overview", navHome: "Home", today: "Today", d7: "7 Days", d30: "30 Days", all: "All",
+    customRange: "Custom", rangeStart: "Start", rangeEnd: "End", rangeApply: "Apply", rangeClear: "Clear",
+    endEmptyMeansNow: "Leave end empty for up to now", rangeInvalid: "Start is required and must not be after end",
     overviewTitle: "Usage Overview", followRange: "Follows selected range",
     todayTrend: "Today's Trend", hours24: "24 Hours",
     statsTitle: "Usage Stats", tokenBreakdown: "Token Breakdown",
@@ -277,6 +281,8 @@ let state = {
   page: "home",
   range: "today",
   statsRange: "7d",
+  rangeCustom: { start: "", end: "" },   // 首页自定义范围 (datetime-local 串, end 空=至今)
+  statsCustom: { start: "", end: "" },   // 统计页自定义范围 (两页独立)
   modelDim: "input",
   data: null,
   exchangeRate: 7.0,
@@ -381,6 +387,59 @@ function fmtRelative(iso) {
 }
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+/* ---------------- 自定义范围: 偏好缓存与恢复 (两页独立) ---------------- */
+const RANGE_PREF_KEY = { home: "gousage-home-range", stats: "gousage-stats-range" };
+const RANGE_DEFAULT = { home: "today", stats: "7d" };
+function rangePrefOf(kind) {
+  return kind === "home"
+    ? { mode: state.range, custom: state.rangeCustom }
+    : { mode: state.statsRange, custom: state.statsCustom };
+}
+function saveRangePref(kind) {
+  try { localStorage.setItem(RANGE_PREF_KEY[kind], JSON.stringify(rangePrefOf(kind))); } catch (e) { /* ignore */ }
+}
+function restoreRangePref() {
+  const modes = ["today", "yesterday", "7d", "30d", "all", "custom"];
+  for (const kind of ["home", "stats"]) {
+    let pref = null;
+    try { pref = JSON.parse(localStorage.getItem(RANGE_PREF_KEY[kind]) || "null"); } catch (e) { pref = null; }
+    if (!pref || typeof pref !== "object" || !modes.includes(pref.mode)) continue;   // 损坏/非法回默认档
+    const custom = (pref.custom && typeof pref.custom.start === "string"
+                    && pref.custom.start && !Number.isNaN(Date.parse(pref.custom.start)))
+      ? { start: pref.custom.start, end: typeof pref.custom.end === "string" ? pref.custom.end : "" }
+      : null;
+    if (pref.mode === "custom" && !custom) continue;   // custom 但值不可用 -> 回默认档
+    if (kind === "home") { state.range = pref.mode; if (custom) state.rangeCustom = custom; }
+    else { state.statsRange = pref.mode; if (custom) state.statsCustom = custom; }
+  }
+  syncRangePills();
+}
+function customRangeSummary(v) {
+  if (!v || !v.start) return t("customRange");
+  const fmt = (s) => s.slice(5, 16).replace("T", " ");   // "MM-DD HH:mm"
+  return v.end ? `${fmt(v.start)}~${fmt(v.end)}` : `${fmt(v.start)}~`;
+}
+function syncRangePills() {
+  for (const [ids, kind] of [["home-pills", "home"], ["stats-pills", "stats"]]) {
+    const box = document.getElementById(ids);
+    if (!box) continue;
+    const mode = kind === "home" ? state.range : state.statsRange;
+    box.querySelectorAll(".pill").forEach((p) => p.classList.toggle("active", p.dataset.r === mode));
+    const cp = box.querySelector('.pill[data-r="custom"]');
+    if (cp) cp.textContent = mode === "custom"
+      ? customRangeSummary(kind === "home" ? state.rangeCustom : state.statsCustom)
+      : t("customRange");
+  }
+}
+function rangeQuery(kind) {
+  const mode = kind === "home" ? state.range : state.statsRange;
+  if (mode !== "custom") return "range=" + encodeURIComponent(mode);
+  const v = kind === "home" ? state.rangeCustom : state.statsCustom;
+  let q = "range=custom&start=" + encodeURIComponent(v.start);
+  if (v.end) q += "&end=" + encodeURIComponent(v.end);
+  return q;
 }
 
 /* ---------------- API ---------------- */
@@ -2815,19 +2874,60 @@ function bindEvents() {
     else if (state.page === "home" && (state.channel === "all" || state.channel === "dsh")) dshSchedulerTick("home");
   });
 
-  document.querySelectorAll("#home-pills .pill").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#home-pills .pill").forEach((b) => b.addEventListener("click", (e) => {
+    if (b.dataset.r === "custom") { e.stopPropagation(); openCustomPanel(b); return; }   // 自定义: 开面板而非立即切换
     document.querySelectorAll("#home-pills .pill").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active"); state.range = b.dataset.r; loadDashboard();
+    b.classList.add("active"); state.range = b.dataset.r; saveRangePref("home"); syncRangePills(); loadDashboard();
   }));
-  document.querySelectorAll("#stats-pills .pill").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#stats-pills .pill").forEach((b) => b.addEventListener("click", (e) => {
+    if (b.dataset.r === "custom") { e.stopPropagation(); openCustomPanel(b); return; }   // 自定义: 开面板而非立即切换
     document.querySelectorAll("#stats-pills .pill").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active"); state.statsRange = b.dataset.r; loadDashboard();
+    b.classList.add("active"); state.statsRange = b.dataset.r; saveRangePref("stats"); syncRangePills(); loadDashboard();
     loadDshUsage();
     loadZcodeSummary();  // ZCode 区块跟随 range 切换
     loadClaudecodeSummary();  // Claude Code 区块跟随 range 切换
     loadCodexSummary();  // Codex 区块跟随 range 切换
     loadWorkbuddySummary();  // WorkBuddy 区块跟随 range 切换
   }));
+  // 自定义范围: 两页 pill 共用一个面板, 应用才生效 (清除回本页默认档)
+  const crPanel = $("custom-range-panel");
+  function openCustomPanel(pill) {
+    const kind = pill.parentElement.id === "home-pills" ? "home" : "stats";
+    const cur = kind === "home" ? state.rangeCustom : state.statsCustom;
+    $("custom-start").value = cur.start || "";
+    $("custom-end").value = cur.end || "";
+    crPanel.dataset.kind = kind;
+    const r = pill.getBoundingClientRect();
+    crPanel.style.left = `${Math.max(8, r.right - 260)}px`;
+    crPanel.style.top = `${r.bottom + 6}px`;
+    crPanel.hidden = false;
+  }
+  document.addEventListener("click", (e) => {
+    if (!crPanel.hidden && !crPanel.contains(e.target)) crPanel.hidden = true;
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") crPanel.hidden = true; });
+  function customInputsValid() {
+    const s = $("custom-start").value, e2 = $("custom-end").value;
+    return !!s && (!e2 || e2 >= s);   // datetime-local 串同格式可字典序比较
+  }
+  $("custom-apply").addEventListener("click", () => {
+    if (!customInputsValid()) { toast(t("rangeInvalid"), "err"); return; }
+    const kind = crPanel.dataset.kind || "home";
+    const v = { start: $("custom-start").value, end: $("custom-end").value };
+    if (kind === "home") { state.range = "custom"; state.rangeCustom = v; }
+    else { state.statsRange = "custom"; state.statsCustom = v; }
+    saveRangePref(kind); syncRangePills(); crPanel.hidden = true;
+    loadDashboard();
+    if (kind === "stats") { loadDshUsage(); loadZcodeSummary(); loadClaudecodeSummary(); loadCodexSummary(); loadWorkbuddySummary(); }
+  });
+  $("custom-clear").addEventListener("click", () => {
+    const kind = crPanel.dataset.kind || "home";
+    if (kind === "home") state.range = RANGE_DEFAULT.home;
+    else state.statsRange = RANGE_DEFAULT.stats;
+    saveRangePref(kind); syncRangePills(); crPanel.hidden = true;
+    loadDashboard();
+    if (kind === "stats") { loadDshUsage(); loadZcodeSummary(); loadClaudecodeSummary(); loadCodexSummary(); loadWorkbuddySummary(); }
+  });
   $("mr-dim").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
     document.querySelectorAll("#mr-dim button").forEach((x) => x.classList.remove("active"));
@@ -3474,6 +3574,7 @@ let APP_VERSION = "";  // 后端版本号 (app/__init__.py), 唯一版本源
   applyLang(l);
   applyDarkMode(dark);
   applyCurrency(cur);
+  restoreRangePref();   // 自定义范围偏好: 完整恢复激活档位 (含 custom), bindEvents 前生效
   try { const v = await api("/api/version"); APP_VERSION = v.version || ""; } catch (e) { /* ignore */ }
   bindEvents();
   try { state.settings = await api("/api/settings"); } catch (e) { /* ignore */ }

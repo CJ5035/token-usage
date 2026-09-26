@@ -668,3 +668,13 @@ html[data-theme="dark"] .windows-bar .wb-cell:first-child { border-color: rgba(9
 }
 
 .ov-note { font-size: 12px; color: var(--text3); margin-top: 8px; }
+
+/* 自定义范围弹出面板 (两页共用, 绝对定位; 亮暗主题走既有 CSS 变量) */
+.cr-panel { position: fixed; z-index: 60; width: 250px; padding: 12px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.14); }
+.cr-panel .cr-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.cr-panel label { width: 34px; color: var(--text2); font-size: 12px; }
+.cr-panel input { flex: 1; min-width: 0; }
+.cr-hint { font-size: 11px; color: var(--text3); margin-bottom: 8px; }
+.cr-actions { display: flex; gap: 8px; justify-content: flex-end; }
