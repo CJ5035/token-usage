@@ -1060,12 +1060,17 @@ def insert_workbuddy_rows(rows: list[dict[str, Any]], account_id: Optional[int] 
 
 def workbuddy_summary(range_: str = "7d", account_id: Optional[int] = None,
                       start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
-    """Aggregate WorkBuddy credits without converting them to token/USD metrics."""
+    """Aggregate WorkBuddy credits without converting them to token/USD metrics.
+
+    db_found = 远程积分表 (workbuddy_usage) 或本地用量表 (workbuddy_local_usage)
+    任一有行 (数据源存在性, 不随 range 过滤); 前端据此整卡隐藏 (20260915 需求5 口径)。"""
     range_sql, params = _report_range_sql(range_, "w.request_time", start, end)
     aid = int(account_id) if account_id else None
     account_sql = " AND w.account_id = ?" if aid else ""
     all_params = params + ([aid] if aid else [])
     conn = get_db()
+    has_remote = conn.execute("SELECT 1 FROM workbuddy_usage LIMIT 1").fetchone()
+    has_local = conn.execute("SELECT 1 FROM workbuddy_local_usage LIMIT 1").fetchone()
     totals = conn.execute(
         f"SELECT COUNT(*) requests, SUM(w.credit) credits, MIN(substr(w.request_time,1,10)) data_since "
         f"FROM workbuddy_usage w WHERE {range_sql}{account_sql}", all_params
@@ -1079,6 +1084,7 @@ def workbuddy_summary(range_: str = "7d", account_id: Optional[int] = None,
         f"FROM workbuddy_usage w WHERE {range_sql}{account_sql} GROUP BY date ORDER BY date", all_params
     ).fetchall()
     return {
+        "db_found": bool(has_remote or has_local),
         "requests": int(totals["requests"] or 0),
         "credits": float(totals["credits"] or 0.0),
         "models": [{"model": r["model"], "requests": r["requests"], "credits": float(r["credits"] or 0.0)} for r in models],

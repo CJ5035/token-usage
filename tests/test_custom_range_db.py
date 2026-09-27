@@ -202,7 +202,7 @@ def test_workbuddy_summary_custom_window(tmp_crange_db):
     conn.commit()
     s = db.workbuddy_summary("7d", start="2026-09-20 00:00:00", end="2026-09-20 23:59:59")
     assert s["requests"] == 1
-    assert db.workbuddy_summary("7d")["requests"] == 2    # 不传新参回归
+    assert db.workbuddy_summary("all")["requests"] == 2    # 不传新参回归 ("all" 不受滚动窗口滑出影响, "7d" 会随日期过期)
 
 
 def test_codex_totals_custom_window(tmp_codex_db, codex_row):

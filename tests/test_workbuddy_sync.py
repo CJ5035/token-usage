@@ -94,6 +94,31 @@ def test_workbuddy_summary_route(tmp_workbuddy_server, monkeypatch, local_iso):
     assert captured["status"] == 200
     assert captured["data"]["requests"] == 1
     assert captured["data"]["credits"] == 2.0
+    assert captured["data"]["db_found"] is True   # 远程积分表有行 → 数据源存在
+
+
+def test_workbuddy_summary_db_found_false_when_empty(tmp_workbuddy_server, monkeypatch):
+    """空库 (未登录且本地无记录): db_found=False, 前端据此整卡隐藏 (20260915 需求5 口径)."""
+    captured = {}
+    monkeypatch.setattr(server, "_json_response", lambda _h, data, status=200: captured.update(data=data, status=status))
+    server._handle_api(type("H", (), {"command": "GET"})(), "/api/workbuddy/summary", {"range": ["today"]})
+    assert captured["data"]["db_found"] is False
+    assert captured["data"]["requests"] == 0
+
+
+def test_workbuddy_summary_db_found_true_with_local_rows_only(tmp_workbuddy_server):
+    """仅本地用量表有行 (未登录但本机有 WorkBuddy 客户端): 数据源存在, db_found=True;
+    远程积分聚合仍为 0 (本地积分并入 summary 不在本次范围)."""
+    db.import_workbuddy_local_usage([{
+        "dedupe_key": "k1", "session_id": "s1", "model": "m", "model_name": "",
+        "trace_id": "", "started_at": "2026-09-27 10:00:00",
+        "input_tokens": 1, "output_tokens": 1, "reasoning_tokens": 0,
+        "cache_read_tokens": 0, "cache_write_tokens": 0, "total_tokens": 2,
+        "credit": 1.0, "cost_raw": 0, "cost_available": 0, "file_path": "f",
+    }])
+    summary = db.workbuddy_summary("today")
+    assert summary["db_found"] is True
+    assert summary["requests"] == 0
 
 
 def test_workbuddy_counts_in_report_scope(tmp_workbuddy_server, monkeypatch):

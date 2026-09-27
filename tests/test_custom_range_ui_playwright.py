@@ -73,7 +73,7 @@ class _ApiFixture:
             "/api/zcode/summary": {"db_found": False},
             "/api/claudecode/summary": {"db_found": False},
             "/api/codex/summary": {"db_found": False},
-            "/api/workbuddy/summary": {"requests": 0, "credits": 0, "models": [], "daily": []},
+            "/api/workbuddy/summary": {"db_found": True, "requests": 0, "credits": 0, "models": [], "daily": []},
             "/api/dsh/usage": {"found": False, "totals": {}, "total": {}, "today": {}},
             "/api/accounts/overview": {"accounts": []},
             "/api/report/channels": {"rows": [], "summary": [], "dsh_status": {}},
