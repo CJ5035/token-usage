@@ -122,7 +122,7 @@ def test_custom_panel_open_close_and_apply(browser_page):
     page.wait_for_function("() => document.querySelectorAll('#home-pills .pill.active').length === 1")
     pill = page.locator("#home-pills .pill[data-r='custom']")
     assert "active" in (pill.get_attribute("class") or "")
-    assert "09-20 08:00~" in pill.inner_text()
+    assert "09-20 08:00~" in pill.inner_text() and "现在" in pill.inner_text()   # end 空: 摘要显式标注 ~现在
     page.wait_for_timeout(300)
     custom_q = [q for q in fixture.dashboard_queries if q.get("range") == "custom"]
     assert custom_q, fixture.dashboard_queries

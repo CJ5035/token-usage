@@ -73,7 +73,7 @@ const I18N = {
     pageOf: "第", ofPages: "页",
     loggedIn: "已登录", notLoggedIn: "未登录", connected: "已连接", notConnected: "未连接",
     lastSync: "上次同步", records: "条记录", updatedAt: "更新于",
-    justNow: "刚刚", minAgo: "分钟前", hrAgo: "小时前", dayAgo: "天前", never: "从未同步",
+    justNow: "刚刚", minAgo: "分钟前", hrAgo: "小时前", dayAgo: "天前", never: "从未同步", now: "现在",
     day: "天", hour: "小时", minute: "分钟", soon: "即将重置",
     dUnit: "天", hUnit: "小时", mUnit: "分钟",
     confirm: "确认", cancel: "取消", ok: "确定",
@@ -207,7 +207,7 @@ const I18N = {
     pageOf: "Page", ofPages: "of",
     loggedIn: "Logged in", notLoggedIn: "Not logged in", connected: "Connected", notConnected: "Not connected",
     lastSync: "Last sync", records: "records", updatedAt: "Updated",
-    justNow: "just now", minAgo: "min ago", hrAgo: "hr ago", dayAgo: "d ago", never: "Never synced",
+    justNow: "just now", minAgo: "min ago", hrAgo: "hr ago", dayAgo: "d ago", never: "Never synced", now: "now",
     day: "d", hour: "h", minute: "m", soon: "resets soon",
     dUnit: "d", hUnit: "h", mUnit: "m",
     confirm: "Confirm", cancel: "Cancel", ok: "OK",
@@ -419,7 +419,7 @@ function restoreRangePref() {
 function customRangeSummary(v) {
   if (!v || !v.start) return t("customRange");
   const fmt = (s) => s.slice(5, 16).replace("T", " ");   // "MM-DD HH:mm"
-  return v.end ? `${fmt(v.start)}~${fmt(v.end)}` : `${fmt(v.start)}~`;
+  return v.end ? `${fmt(v.start)}~${fmt(v.end)}` : `${fmt(v.start)}~${t("now")}`;   // end 空=至今, 摘要显式标注
 }
 function syncRangePills() {
   for (const [ids, kind] of [["home-pills", "home"], ["stats-pills", "stats"]]) {
