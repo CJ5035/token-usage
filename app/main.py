@@ -68,6 +68,32 @@ def _enable_taskbar_minimize(win) -> None:
         pass
 
 
+def _enable_edge_resize(win) -> None:
+    """无边框窗口修复: 补上 WS_THICKFRAME 样式, 恢复四边/四角拖拽调整大小.
+
+    pywebview frameless -> WinForms FormBorderStyle.None, 移除了 WS_THICKFRAME,
+    DefWindowProc 的 WM_NCHITTEST 不再把窗口边缘识别为 resize 区 (整个窗口都是
+    客户区/WebView2), 四边拖不动. 补上该样式位后系统自动接管: 边缘双向箭头光标、
+    sizing loop、按 WinForms MinimumSize 钳制下限. 副作用是窗口四周出现约 4~8px
+    的系统 resize 边框带 (底色已按主题对齐, 观感见 doc/20260926 方案 §三).
+    """
+    try:
+        # pythonnet IntPtr 需先 ToInt32() 再转 int (直接 int() 会抛 TypeError)
+        hwnd = int(win.native.Handle.ToInt32())
+        GWL_STYLE = -16
+        WS_THICKFRAME = 0x00040000
+        style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+        if style and not (style & WS_THICKFRAME):
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style | WS_THICKFRAME)
+            # FRAMECHANGED: 通知系统样式已变, 重算非客户区 (缺这步边框不生效)
+            ctypes.windll.user32.SetWindowPos(
+                hwnd, None, 0, 0, 0, 0,
+                0x0001 | 0x0002 | 0x0004 | 0x0020,  # SWP_NOSIZE|SWP_NOMOVE|SWP_NOZORDER|SWP_FRAMECHANGED
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _setup_maximize_bounds(win) -> None:
     """无边框窗口最大化支持: 动态维护 MaximizedBounds 为窗口当前所在屏工作区.
 
@@ -465,6 +491,34 @@ class WindowApi:
             pass
         return True
 
+    def set_border_color(self, hex_color: str) -> bool:
+        """边框观感跟随主题: DWM 三属性让边框与背景融合 (doc/20260927 方案).
+
+        Win11 22000+ per-window DWM 属性 (编号实测确认, 曾误用 33 设色导致
+        E_INVALIDARG——33 是圆角枚举):
+        - 34 DWMWA_BORDER_COLOR: 1px 边框描边
+        - 35 DWMWA_CAPTION_COLOR: 无 CAPTION 窗口顶边仍会被系统强调色画
+          ~7px 横带, 需同色覆盖
+        - 33 DWMWA_WINDOW_CORNER_PREFERENCE=2(ROUND): 无 CAPTION 窗口默认
+          直角, 恢复 Win11 圆角
+        Win10 无这些属性, 调用失败静默降级 (不影响四边缩放). hex "#RRGGBB"
+        -> COLORREF (0x00BBGGRR). 窗口未 bind / 句柄异常返回 False, 不抛错.
+        """
+        try:
+            if not self._win or not isinstance(hex_color, str) or len(hex_color) != 7:
+                return False
+            r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+            hwnd = int(self._win.native.Handle.ToInt32())
+            color = ctypes.c_uint(b << 16 | g << 8 | r)  # COLORREF = 0x00BBGGRR
+            dwm = ctypes.windll.dwmapi
+            hr = dwm.DwmSetWindowAttribute(hwnd, 34, ctypes.byref(color), 4)
+            hr |= dwm.DwmSetWindowAttribute(hwnd, 35, ctypes.byref(color), 4)
+            corner = ctypes.c_int(2)  # DWMWCP_ROUND
+            hr |= dwm.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(corner), 4)
+            return hr == 0  # 三项全部 S_OK
+        except Exception:  # noqa: BLE001
+            return False
+
     def close(self) -> bool:
         """关闭按钮: 托盘可用时最小化到托盘, 否则真正关闭."""
         global _quitting, _tray_ready
@@ -845,10 +899,15 @@ def main() -> None:
         _enable_taskbar_minimize(main_win)
         # 无边框窗口最大化防遮挡任务栏: 动态维护 MaximizedBounds (含多显示器跟随)
         _setup_maximize_bounds(main_win)
+        # 补 WS_THICKFRAME, 恢复四边/四角拖拽调整大小 (doc/20260926 方案)
+        _enable_edge_resize(main_win)
+        # 边框初始色 = 主题背景色, 边框带视觉隐形 (doc/20260927 方案); 运行时切换由前端通知
+        api.set_border_color(_theme_background_color())
 
     def on_restored() -> None:
         # 窗口最小化->恢复过程中 WinForms 可能重建句柄导致样式丢失, 恢复后重新补上
         _enable_taskbar_minimize(main_win)
+        _enable_edge_resize(main_win)
 
     main_win.events.closed += on_window_closed
     main_win.events.shown += on_shown

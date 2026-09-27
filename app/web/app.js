@@ -505,6 +505,7 @@ function applyLang(l) {
   else if (dshTransportError && dshTransportError.range === state.statsRange) renderDshTransportError();
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);
   if (codexSummaryLast) renderCodexSummary(codexSummaryLast);   // Codex 区块随语言即时重渲染 (复用已拉取数据)
+  if (workbuddySummaryLast) renderWorkbuddySummary(workbuddySummaryLast);   // WorkBuddy 区块随语言即时重渲染 (db_found=false 时重渲走整卡隐藏分支)
   // Step 8a: 语言切换后, 首页 workbuddy/all 报表的动态积分/来源/费用文案由后端数据驱动,
   // 仅当报表已在显示时重取 (init 首次 applyLang homeReportShown=false 不发请求)
   if (state.page === "home" && homeReportShown
@@ -625,6 +626,10 @@ function applyDarkMode(on) {
   document.documentElement.dataset.theme = on ? "dark" : "light";
   $("tb-theme").innerHTML = `◐ <span data-i18n="${on ? "themeLight" : "themeDark"}">${on ? t("themeLight") : t("themeDark")}</span>`;
   try { localStorage.setItem("gousage-dark", on ? "1" : "0"); } catch (e) { /* ignore */ }
+  // 边框颜色跟随主题 (doc/20260927): 与主题背景同色使系统边框带视觉隐形;
+  // fire-and-forget, bootstrap 早期 pywebview 未注入时 pywebviewApi() 为 null 跳过
+  // (初始色已由后端 on_shown 设置), 后端静默兜底 Win10 无 DWMWA_BORDER_COLOR
+  pywebviewApi().then(a => a && a.set_border_color(on ? "#0A0B0F" : "#f8fafc"));
   syncThemePills();
   rerenderCharts();   // EVOLUTION-4: refreshIcons 并入 rerenderCharts 末尾 (唯一入口, 消除双调用重复重建)
 }
@@ -1665,6 +1670,16 @@ function renderWorkbuddySummary(data) {
   const missing = $("workbuddy-missing");
   const kpis = $("workbuddy-kpis");
   const table = $("workbuddy-model-body");
+  if (!data || data.db_found === false) {
+    // 数据源不存在 (未登录且本地无记录): 整卡隐藏 (20260915 需求5 口径), 内部状态复位防残留
+    box.hidden = true;
+    missing.hidden = false;
+    kpis.hidden = true;
+    kpis.innerHTML = "";
+    table.innerHTML = "";
+    updateStatsEmptyState();
+    return;
+  }
   const requests = Number(data && data.requests) || 0;
   const credits = Number(data && data.credits) || 0;
   box.hidden = false;
@@ -2234,13 +2249,13 @@ function refreshIcons() {
    (opencode/bai/commandcode) 时置 true; rerenderCharts/refreshIcons 据此跳过
    重建 cModel/cTrend, 防切主题在 hidden canvas 上重建 */
 let statsRemoteHidden = false;
-/* stats 页空态兜底 (20260915 需求5): 顶部远程区块与四个本地区块全部隐藏时
-   显示一条提示, 避免整页空白; 由 renderAll 与四个本地渲染函数在显隐变更后调用 */
+/* stats 页空态兜底 (20260915 需求5): 顶部远程区块与五个本地区块全部隐藏时
+   显示一条提示, 避免整页空白; 由 renderAll 与各本地区块渲染函数在显隐变更后调用 */
 function updateStatsEmptyState() {
   const empty = $("stats-empty");
   if (!empty) return;
   const remoteHidden = $("stats-total-cards") ? $("stats-total-cards").hidden : true;
-  const allLocalHidden = ["zcode-stats", "dsh-stats", "claudecode-stats", "codex-stats"]
+  const allLocalHidden = ["zcode-stats", "dsh-stats", "claudecode-stats", "codex-stats", "workbuddy-stats"]
     .every((id) => { const el = $(id); return !el || el.hidden; });
   empty.hidden = !(remoteHidden && allLocalHidden);
 }
