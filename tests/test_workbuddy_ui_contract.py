@@ -259,7 +259,7 @@ def test_workbuddy_relogin_routing_already_locked_by_relogin_targeting():
     不重复 test_relogin_targeting.py 的行为断言 (见 test_workbuddy_relogin_resolves_clicked_account).
     """
     main_src = (ROOT / "app/main.py").read_text(encoding="utf-8")
-    assert 'source = "workbuddy" if account and account["source"] == "workbuddy" else "opencode"' in main_src
+    assert 'if account is not None and account["source"] in ("workbuddy", "commandcode", "bai"):' in main_src
 
 
 def test_workbuddy_local_dual_cost_contract():

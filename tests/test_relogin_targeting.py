@@ -175,3 +175,33 @@ def test_parse_login_mode_no_accounts_returns_opencode_none(tmp_db):
 def test_parse_login_mode_add_workbuddy(tmp_db):
     assert app_main._parse_login_mode("add_workbuddy") == ("add", "workbuddy", None)
 
+
+def test_parse_login_mode_commandcode_relogin(tmp_db):
+    """commandcode 账号重登 -> 渠道解析为 commandcode (修复误路由 opencode)."""
+    aid = db.add_account('[{"name":"s","value":"v"}]', "cc-uid", switch=False,
+                         source="commandcode", dedupe_key="cc-uid")
+    assert app_main._parse_login_mode("relogin", aid) == ("relogin", "commandcode", aid)
+
+
+def test_parse_login_mode_bai_relogin(tmp_db):
+    """bai 账号重登 -> 渠道解析为 bai (同型缺陷一并修复)."""
+    aid = db.add_account('[{"name":"s","value":"v"}]', "bai-uid", switch=False,
+                         source="bai", dedupe_key="bai-uid")
+    assert app_main._parse_login_mode("relogin", aid) == ("relogin", "bai", aid)
+
+
+def test_parse_login_mode_opencode_relogin(tmp_db):
+    """opencode 账号重登 -> 渠道仍为 opencode (回归保护)."""
+    aid = db.add_account("auth=oc-token", "ws-oc", switch=False)
+    assert app_main._parse_login_mode("relogin", aid) == ("relogin", "opencode", aid)
+
+
+def test_parse_login_mode_non_whitelisted_source_falls_back_opencode(tmp_db):
+    """脏行 source 为非白名单值时回落 opencode (防御分支; NULL 因
+    accounts.source NOT NULL 约束不可达, 取等价的未知脏值覆盖同一 else 路径)."""
+    aid = db.add_account("tok", "ws-x", switch=False)
+    conn = db.get_db()
+    conn.execute("UPDATE accounts SET source = 'unknown' WHERE id = ?", (aid,))
+    conn.commit()
+    assert app_main._parse_login_mode("relogin", aid) == ("relogin", "opencode", aid)
+

@@ -186,7 +186,9 @@ def _parse_login_mode(mode: str, account_id: int | None = None) -> tuple[str, st
     account = next((a for a in db.list_accounts() if a["id"] == target_id), None)
     if account_id is not None and account is None:
         raise ValueError("登录目标账号不存在")
-    source = "workbuddy" if account and account["source"] == "workbuddy" else "opencode"
+    source = "opencode"
+    if account is not None and account["source"] in ("workbuddy", "commandcode", "bai"):
+        source = account["source"]
     return "relogin", source, target_id
 
 
