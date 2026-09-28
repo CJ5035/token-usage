@@ -111,3 +111,32 @@ def test_clear_account_then_prune_still_trims_by_window(tmp_db):
     assert db.totals(period="all", account_id=a)["request_count"] == 1
     records, total = db.usage_records_page(page=1, page_size=10, account_id=a)
     assert total == 1 and records[0]["usg_id"] == "fresh"
+
+
+# ---------------------------------------------------------------------------
+# 凭证形态防护 (20260926 诊断): opencode 凭证不得写入 bai/commandcode 行
+# ---------------------------------------------------------------------------
+
+def test_save_token_rejects_opencode_credential_on_commandcode_row(tmp_db):
+    """commandcode 行拒收 auth= 形态凭证 (抛 ValueError), 原凭证不被破坏."""
+    aid = db.add_account('[{"name":"s","value":"old"}]', "cc-uid", switch=False,
+                         source="commandcode", dedupe_key="cc-uid")
+    with pytest.raises(ValueError, match="auth="):
+        db.save_token("auth=oc-credential", "cc-uid", account_id=aid)
+    assert db.get_account_credentials(aid)[0] == '[{"name":"s","value":"old"}]'
+
+
+def test_save_token_accepts_jar_credential_on_commandcode_row(tmp_db):
+    """控制组: cookie jar JSON 形态凭证写入 commandcode 行不受影响."""
+    aid = db.add_account('[{"name":"s","value":"old"}]', "cc-uid", switch=False,
+                         source="commandcode", dedupe_key="cc-uid")
+    db.save_token('[{"name":"s","value":"new"}]', "cc-uid", account_id=aid)
+    assert db.get_account_credentials(aid)[0] == '[{"name":"s","value":"new"}]'
+
+
+def test_save_token_opencode_row_still_accepts_auth_credential(tmp_db):
+    """控制组: opencode 行照常接收 auth= 凭证 (既有重登路径不受防护影响)."""
+    aid = db.add_account("auth=old-token", "ws-oc", switch=False)
+    db.save_token("auth=new-token", "ws-oc2", account_id=aid)
+    assert db.get_account_credentials(aid)[0] == "auth=new-token"
+    assert db.get_account_credentials(aid)[1] == "ws-oc2"

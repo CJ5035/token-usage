@@ -661,16 +661,27 @@ def _ensure_state_row(conn: sqlite3.Connection, account_id: int) -> None:
 
 
 def save_token(token: str, workspace_id: str = "Default", account_id: Optional[int] = None) -> None:
-    """重新登录语义: 更新指定/活跃账号的凭证并重置其增量游标 (account_id 定向落库, 无去重)."""
+    """重新登录语义: 更新指定/活跃账号的凭证并重置其增量游标 (account_id 定向落库, 无去重).
+
+    凭证形态防护 (20260926 诊断): opencode 凭证固定 "auth=" 前缀, bai/commandcode 行存
+    cookie jar JSON ("[" 前缀). 目标行为 bai/commandcode 而凭证呈 opencode 形态时拒绝
+    写入, 防错误路由的登录页把异渠道凭证落库致该行同步 401 死循环; workbuddy 行由
+    save_workbuddy_token 前置校验后复用本函数, jar JSON 形态不受影响.
+    """
     with _DB_LOCK:
         conn = get_db()
         aid = _resolve_account_id(account_id)
         if not aid:
             return
+        token = token.strip()
+        row = conn.execute("SELECT source FROM accounts WHERE id = ?", (aid,)).fetchone()
+        source = (row["source"] if row is not None else None) or "opencode"
+        if source in ("bai", "commandcode") and token.startswith("auth="):
+            raise ValueError(f"opencode 凭证 (auth=) 不能写入 {source} 账号行")
         conn.execute(
             """UPDATE accounts SET token = ?, workspace_id = ?, resolved_workspace_id = NULL,
                updated_at = ? WHERE id = ?""",
-            (token.strip(), workspace_id.strip() or "Default", _now_iso(), aid),
+            (token, workspace_id.strip() or "Default", _now_iso(), aid),
         )
         _ensure_state_row(conn, aid)
         conn.execute(
