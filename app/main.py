@@ -774,6 +774,19 @@ def main() -> None:
 
     def open_login(mode: str = "relogin", account_id: int | None = None) -> None:
         """弹出独立登录窗口并开始监听 (欢迎页/设置页按钮). 单飞守卫: 已有登录流程时忽略."""
+        # 先解析本次意图并写入 pending_mode: 窗口重建路径 (登录窗被手动关闭) 与
+        # _start_watcher 的 intent 都读 pending_mode, 必须携带本次请求的渠道,
+        # 不能沿用上次残留值 (诊断报告 缺陷2). ValueError (定向 id 已被删除) 记日志返回.
+        try:
+            sub_mode, account_type, target_id = _parse_login_mode(mode, account_id)
+        except ValueError as exc:
+            _mlog(f"[main] open_login parse error: {exc}")
+            return
+        pending_mode["mode"] = sub_mode
+        pending_mode["account_type"] = account_type
+        # 定向目标 id 无条件覆盖 (含 None): 防上次定向 id 残留导致活跃行重登串号落错行;
+        # 单飞守卫下重复点击也走到这里, 以最后一次调用为准
+        pending_mode["account_id"] = target_id
         # 登录窗已被手动关闭 => 旧监听已失效: 先停旧线程再重建窗口.
         # (修复: 依赖"线程存活"的单飞守卫会把死窗口场景永久拦截, 导致再次点击无响应)
         if not _login_win_alive():
@@ -787,13 +800,6 @@ def main() -> None:
         w = watcher.get("ref")
         if isinstance(w, LoginWatcher) and w._thread and w._thread.is_alive() and not w.done:
             return  # 已有登录监听进行中 (窗口存活)
-
-        sub_mode, account_type, target_id = _parse_login_mode(mode, account_id)
-        pending_mode["mode"] = sub_mode
-        pending_mode["account_type"] = account_type
-        # 定向目标 id 无条件覆盖 (含 None): 防上次定向 id 残留导致活跃行重登串号落错行;
-        # 单飞守卫下重复点击也走到这里, 以最后一次调用为准
-        pending_mode["account_id"] = target_id
         lw = login_win()
         try:
             lw.show()
