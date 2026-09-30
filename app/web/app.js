@@ -100,6 +100,22 @@ const I18N = {
     zcodeQuotaTitle: "GLM Coding Plan · ZCode",
     zcodeQuotaGuide: "未检测到 ZCode 登录凭证。请在 ZCode 客户端登录 GLM Coding Plan 订阅，额度将自动显示",
     zcodeQuotaFail: "ZCode 额度获取失败",
+    srcKiro: "Kiro", kiroCredits: "Credits", kiroTurns: "对话轮数", kiroApiRequests: "API 请求",
+    kiroAvgTurn: "平均每轮 {d}",
+    kiroQuotaTitle: "Kiro 额度", kiroQuotaUsed: "已用 {used} / {limit} Credits",
+    kiroQuotaNoAuth: "未检测到 kiro-cli 登录凭据，请先运行 kiro-cli login",
+    kiroQuotaExpired: "kiro-cli 登录已过期，请运行 kiro-cli login",
+    kiroQuotaNetwork: "暂时无法连接 Kiro 额度接口，请稍后刷新重试",
+    kiroQuotaBadShape: "Kiro 额度接口返回格式异常",
+    kiroQuotaFail: "Kiro 额度获取失败", kiroQuotaStale: "数据为 {n} 分钟前",
+    kiroTokensUnavailable: "Kiro 不提供 Token 数据",
+    kiroStatsTitle: "Kiro 本地用量", kiroStatsMissing: "暂无 Kiro 用量数据",
+    kiroCostHint: "费用按参考价估算（1 Credit ≈ $0.04），非实际扣费",
+    kiroAutoModel: "自动路由（实际模型未知）",
+    kiroSkipped: "有 {n} 轮对话元数据缺失或无效，未计入",
+    reportTokensIncomplete: "部分渠道未提供 Token",
+    kiroQuotaScope: "月度基础 + 试用额度；不含奖励和加购额度",
+    kiroRecordsCount: "Kiro：行数与会话请求列均为对话轮数，不是 API 请求数",
     mcpMonthly: "MCP 月度",
     zcodeStatsTitle: "ZCode 本地用量",
     zcodeStatsMissing: "未检测到 ZCode 本地数据（~/.zcode/cli/db/db.sqlite）",
@@ -233,6 +249,22 @@ const I18N = {
     zcodeQuotaTitle: "GLM Coding Plan · ZCode",
     zcodeQuotaGuide: "No ZCode credentials detected. Sign in to a GLM Coding Plan subscription in the ZCode client and quotas will appear automatically",
     zcodeQuotaFail: "Failed to fetch ZCode quota",
+    srcKiro: "Kiro", kiroCredits: "Credits", kiroTurns: "Turns", kiroApiRequests: "API Requests",
+    kiroAvgTurn: "avg {d} per turn",
+    kiroQuotaTitle: "Kiro Quota", kiroQuotaUsed: "{used} / {limit} Credits used",
+    kiroQuotaNoAuth: "No kiro-cli sign-in found. Run kiro-cli login first",
+    kiroQuotaExpired: "kiro-cli sign-in expired. Run kiro-cli login",
+    kiroQuotaNetwork: "Cannot reach the Kiro quota service; refresh to retry later",
+    kiroQuotaBadShape: "Unexpected response from the Kiro quota service",
+    kiroQuotaFail: "Failed to fetch Kiro quota", kiroQuotaStale: "Data from {n} min ago",
+    kiroTokensUnavailable: "Kiro does not provide token data",
+    kiroStatsTitle: "Kiro Local Usage", kiroStatsMissing: "No Kiro usage data",
+    kiroCostHint: "Cost estimated at a reference rate (1 Credit ≈ $0.04), not actual billing",
+    kiroAutoModel: "Auto routing (actual model unknown)",
+    kiroSkipped: "{n} turns have missing or invalid metadata and are not counted",
+    reportTokensIncomplete: "Some channels do not provide tokens",
+    kiroQuotaScope: "Monthly base + trial quota; excludes bonus and add-on credits",
+    kiroRecordsCount: "Kiro: rows and session request counts represent turns, not API requests",
     mcpMonthly: "MCP Monthly",
     zcodeStatsTitle: "ZCode Local Usage",
     zcodeStatsMissing: "ZCode local data not found (~/.zcode/cli/db/db.sqlite)",
@@ -2020,7 +2052,8 @@ function chartTrend(trend, noAnim) {
 const SOURCE_OPTIONS = [
   ["all", "allSources"], ["opencode", "srcOpencode"], ["bai", "sourceBai"],
   ["commandcode", "sourceCommandcode"], ["zcode", "srcZcode"],
-  ["claudecode", "srcClaudecode"], ["workbuddy", "workbuddyStatsTitle"], ["codex", "srcCodex"]];
+  ["claudecode", "srcClaudecode"], ["workbuddy", "workbuddyStatsTitle"], ["codex", "srcCodex"],
+  ["kiro", "srcKiro"]];
 function syncSourceFilter() {
   const sel = $("rec-source-filter");
   if (!sel) return;
@@ -3128,10 +3161,11 @@ function switchChannel(ch) {
 }
 
 const CH_COLOR = { opencode: "var(--ch-opencode)", bai: "var(--ch-bai)", commandcode: "var(--ch-commandcode)",
-  zcode: "var(--ch-zcode)", claudecode: "var(--ch-claudecode)", workbuddy: "var(--ch-workbuddy)", dsh: "var(--ch-dsh)", codex: "var(--ch-codex)" };   // WorkBuddy 渠道色
+  zcode: "var(--ch-zcode)", claudecode: "var(--ch-claudecode)", workbuddy: "var(--ch-workbuddy)", dsh: "var(--ch-dsh)", codex: "var(--ch-codex)",
+  kiro: "var(--ch-kiro)" };   // WorkBuddy / Kiro 渠道色
 /* 渠道显示名 (T5): 仅 codex 用品牌大小写, 已有渠道名保持原字符串; tabs/明细表/
    图表 legend 显示用, tabs data-ch 与 donut onClick 仍用原始渠道键 */
-const CH_LABEL = { codex: "Codex", workbuddy: "WorkBuddy" };
+const CH_LABEL = { codex: "Codex", workbuddy: "WorkBuddy", kiro: "Kiro" };
 
 /* EVOLUTION-4 模块级缓存: 切主题时 rerenderCharts 零网络请求重渲, 数据源为最近一次拉取结果.
    写入点均带键校验/序号守卫 (防快速连点响应乱序覆盖), 读取点 (rerenderCharts) 再校验一次 */
