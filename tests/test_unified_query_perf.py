@@ -220,10 +220,11 @@ def test_time_columns_are_utc_z_literals(unified_db, table, col):
 # 每段的基表名, 用于断言"只拼了该来源的段"
 ARM_TABLES = {"opencode": "usage_records", "bai": "usage_records",
               "commandcode": "usage_records", "zcode": "zcode_usage",
-              "claudecode": "claudecode_usage", "codex": "codex_usage"}
+              "claudecode": "claudecode_usage", "codex": "codex_usage",
+              "kiro": "kiro_usage"}
 
 
-@pytest.mark.parametrize("source", ["zcode", "claudecode", "codex", "opencode"])
+@pytest.mark.parametrize("source", ["zcode", "claudecode", "codex", "opencode", "kiro"])
 def test_single_source_prunes_other_arms(unified_db, source):
     """source != 'all' 时只应拼出该来源的段。
 
@@ -238,7 +239,8 @@ def test_single_source_prunes_other_arms(unified_db, source):
     sql, params = db._unified_source_sql(source)
     keep = ARM_TABLES[source]
     assert keep in sql
-    for other in {"usage_records", "zcode_usage", "claudecode_usage", "codex_usage"} - {keep}:
+    for other in {"usage_records", "zcode_usage", "claudecode_usage", "codex_usage",
+                  "kiro_usage"} - {keep}:
         assert other not in sql, f"source={source} 仍拼进了 {other}"
     plan = plan_of(f"SELECT {db._UNIFIED_COLS} FROM ({sql})", params)
     assert not [p for p in plan if "UNION ALL" in p or "COMPOUND QUERY" in p], plan

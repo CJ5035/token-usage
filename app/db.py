@@ -4439,13 +4439,13 @@ def codex_last_import_at() -> Optional[str]:
 
 # ---------------------------------------------------------------------------
 # 统一来源明细/会话分页 (交付二 T6): usage_records / zcode_usage /
-# claudecode_usage / codex_usage 四表归一为同一查询。每段 SELECT 只做常量与
+# claudecode_usage / codex_usage / kiro_usage 五表归一为同一查询。每段 SELECT 只做常量与
 # 原列映射, 输出 _UNIFIED_COLS 固定列序; source/model/days 筛选在归一 CTE 上
 # 用绑定参数完成, 统一 COUNT 与 ORDER BY ... LIMIT/OFFSET, 不在 Python 侧
 # 排序。CommandCode 只取 usage_records 已有明细 (charts_buckets 不当请求)。
 # ---------------------------------------------------------------------------
 
-# 对外固定列序 (四段投影一致): 记录与会话聚合共用同一输入形状
+# 对外固定列序 (五段投影一致): 记录与会话聚合共用同一输入形状
 _UNIFIED_COLS = (
     "source, account_id, source_record_id, started_at, model, provider_id,"
     " session_id, key_id, input_tokens, output_tokens, reasoning_tokens,"
@@ -4458,7 +4458,7 @@ _UNIFIED_COLS = (
 # ---------------------------------------------------------------------------
 # 归一分段注册表
 #
-# 旧实现是"四段全量 UNION ALL + 外层 WHERE/ORDER BY": 即使只查一个来源, 四张表
+# 旧实现是"五段全量 UNION ALL + 外层 WHERE/ORDER BY": 即使只查一个来源, 五张表
 # 也全表 SCAN, 且外层 ORDER BY 只能走 TEMP B-TREE (各表 idx_*_time 全失效)。
 # 把每段的差异 (基表、时间列、模型列、段内 source 判定、次序键、投影) 登记成数据后,
 # 下推逻辑只需写一份:
@@ -4472,11 +4472,12 @@ _UNIFIED_COLS = (
 def _unified_days_bound(days: int) -> str:
     """滚动 N 天下界字面量, 与各表时间列的存储形态同形。
 
-    四张表的时间列一律存 UTC ISO 'YYYY-MM-DDTHH:MM:SS[.ffffff]Z'
+    五张表的时间列一律存 UTC ISO 'YYYY-MM-DDTHH:MM:SS[.ffffff]Z'
     (由 tests/test_unified_query_perf.py::test_time_columns_are_utc_z_literals
-    守卫), 故可直接字典序比较, 让 idx_*_time 一个索引同时服务过滤与
-    ORDER BY started_at DESC —— 而 datetime(col) 写法只能命中按 datetime(col)
-    组织的 idx_*_utc, 排序仍得 TEMP B-TREE。
+    守卫其中已造数的四张; kiro_usage 未入该夹具), 故可直接字典序比较, 让
+    idx_*_time 一个索引同时服务过滤与 ORDER BY started_at DESC —— 而
+    datetime(col) 写法只能命中按 datetime(col) 组织的 idx_*_utc, 排序仍得
+    TEMP B-TREE。
 
     绝不能改用 datetime('now', ?) 的返回值当下界: 它是 'YYYY-MM-DD HH:MM:SS'
     (空格分隔), 空格 0x20 < 'T' 0x54, 字典序会多纳入约一天的行
@@ -4544,8 +4545,8 @@ def _unified_arm_zcode(inner: str) -> str:
     output/duration 现算, speed_source=duration (有值时); provider_name 快照
     优先于 provider_id。
 
-    ttft_ms 由 _ZCODE_TTFT_SQL 现算 (需落在 [0, duration] 内, 否则 NULL) —— 四张
-    源表里只有 zcode_usage 有这一列, 另三段恒 NULL, 不估算不补 0。"""
+    ttft_ms 由 _ZCODE_TTFT_SQL 现算 (需落在 [0, duration] 内, 否则 NULL) —— 五张
+    源表里只有 zcode_usage 有这一列, 另四段恒 NULL, 不估算不补 0。"""
     return f"""
     SELECT 'zcode' AS source, NULL AS account_id,
            'zcode:' || z.id AS source_record_id,
@@ -4732,7 +4733,7 @@ def _unified_count(source: str, model: Optional[str] = None,
                    days: Optional[int] = None) -> int:
     """归一命中行总数 = 各段基表子查询 COUNT(*) 之和。
 
-    比 COUNT(*) FROM (四段 UNION) 快两个量级: 后者要物化整个 UNION 协程,
+    比 COUNT(*) FROM (五段 UNION) 快两个量级: 后者要物化整个 UNION 协程,
     前者每段都能落在该表的覆盖索引上。source 未登记时和为 0, 与
     _UNIFIED_EMPTY_SQL 的零行语义一致。
     """
