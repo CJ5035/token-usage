@@ -108,3 +108,20 @@ def isolate_kiro_sources(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kiro_local_api, "KIRO_SESSIONS_DIR", tmp_path / "_no_kiro_sessions")
     monkeypatch.setattr(kiro_local_api, "_last_import_at", None)
+
+
+@pytest.fixture
+def kiro_row(local_iso):
+    """Kiro 本地用量行工厂 (字段对齐 kiro_local_api 行契约); cost_raw 按 credits × 0.04 USD 推出。
+    started_at 默认取今天本地 12:00 的 UTC 表示, 范围查询长期稳定。"""
+    def make(dedupe_key="s1:t1", session_id="s1", model="claude-opus-5", credits=2.5,
+             request_count=3, duration_ms=60_000, started_at=None, **overrides):
+        started = started_at or local_iso()
+        row = dict(dedupe_key=dedupe_key, session_id=session_id, model=model,
+                   started_at=started, ended_at=started, duration_ms=duration_ms,
+                   request_count=request_count, credits=credits,
+                   cost_raw=int(round(credits * 0.04 * 1e8)), context_pct=12.5,
+                   file_path="C:\\kiro\\s1.json")
+        row.update(overrides)
+        return row
+    return make

@@ -232,6 +232,40 @@ def _init_schema(conn: sqlite3.Connection) -> None:
           updated_at TEXT
         );
 
+        -- Kiro CLI 本机会话侧车 (~/.kiro/sessions/cli/<uuid>.json) → 本表; 一行 = 一个 user turn。
+        -- 无 token 列: kiro-cli 上游协议不下发 token (20260930-Kiro渠道接入实施计划.md §0.2),
+        -- 计量以官方 credits 为准, 费用按 credits × 超额单价 0.04 USD 估算
+        CREATE TABLE IF NOT EXISTS kiro_usage (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          dedupe_key TEXT NOT NULL UNIQUE,           -- "<session_id>:<end_timestamp 原文>"
+          session_id TEXT,
+          model TEXT,                                -- turn.model; auto = 服务端自动路由, 实际模型未知
+          started_at TEXT NOT NULL,                  -- UTC ISO: end_timestamp − turn_duration
+          ended_at TEXT NOT NULL,                    -- UTC ISO: end_timestamp
+          duration_ms INTEGER,
+          request_count INTEGER NOT NULL DEFAULT 0,  -- total_request_count (本 turn 的 API 请求数)
+          credits REAL NOT NULL DEFAULT 0,           -- Σ metering_usage credit
+          cost_raw INTEGER NOT NULL DEFAULT 0,       -- credits × 0.04 USD (1e-8 USD)
+          context_pct REAL,                          -- final_context_usage_percentage
+          file_path TEXT,
+          synced_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_kiro_time ON kiro_usage(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_kiro_utc ON kiro_usage(datetime(started_at));
+        CREATE INDEX IF NOT EXISTS idx_kiro_model ON kiro_usage(model);
+        CREATE INDEX IF NOT EXISTS idx_kiro_session ON kiro_usage(session_id);
+
+        -- Kiro 侧车导入进度: 侧车整体重写, 以 (mtime_ns, size) 签名判定变更;
+        -- skipped = 该文件最近一次解析跳过的 turn 数（缺失/非法计量、请求数或时间戳）, 供 UI 提示
+        CREATE TABLE IF NOT EXISTS kiro_file_progress (
+          path TEXT PRIMARY KEY,
+          mtime_ns INTEGER NOT NULL DEFAULT 0,
+          size INTEGER NOT NULL DEFAULT 0,
+          skipped INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS settings (
           id INTEGER PRIMARY KEY CHECK (id = 1),
           payload TEXT NOT NULL,
@@ -2392,6 +2426,152 @@ def import_workbuddy_local_usage(rows: list[dict[str, Any]]) -> int:
         after = int(conn.execute(
             "SELECT COUNT(*) AS c FROM workbuddy_local_usage").fetchone()["c"])
     return after - before
+
+
+# ---------------------------------------------------------------------------
+# Kiro CLI 本机会话用量 (数据来源: kiro_local_api 只读采集 ~/.kiro/sessions/cli 侧车)
+# 一行 = 一个 user turn; 无 token 口径, 计量为 credits, 费用 = credits × 0.04 USD (估算)
+# ---------------------------------------------------------------------------
+
+
+def get_kiro_file_progress_all() -> dict[str, tuple[int, int]]:
+    """全部 Kiro 侧车文件的导入签名: path → (mtime_ns, size)."""
+    rows = get_db().execute("SELECT path, mtime_ns, size FROM kiro_file_progress").fetchall()
+    return {r["path"]: (int(r["mtime_ns"]), int(r["size"])) for r in rows}
+
+
+def save_kiro_file_progress(path: str, mtime_ns: int, size: int, skipped: int) -> None:
+    """写入/覆盖单个侧车的导入签名与跳过数."""
+    with _DB_LOCK:
+        conn = get_db()
+        try:
+            conn.execute(
+                "INSERT INTO kiro_file_progress (path, mtime_ns, size, skipped, updated_at)"
+                " VALUES (?,?,?,?,?)"
+                " ON CONFLICT(path) DO UPDATE SET mtime_ns=excluded.mtime_ns,"
+                " size=excluded.size, skipped=excluded.skipped, updated_at=excluded.updated_at",
+                (path, int(mtime_ns), int(size), int(skipped), _now_iso()),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def import_kiro_usage(rows: list[dict[str, Any]]) -> int:
+    """返回新增条数；同键侧车修订覆盖原值，不假设结束后的计量永不补齐。"""
+    if not rows:
+        return 0
+    conn = get_db()
+    synced_at = _now_iso()
+    payload = [
+        (r.get("dedupe_key"), r.get("session_id"), r.get("model") or "auto",
+         r.get("started_at"), r.get("ended_at") or r.get("started_at"),
+         r.get("duration_ms"), int(r.get("request_count") or 0),
+         float(r.get("credits") or 0.0), int(r.get("cost_raw") or 0),
+         r.get("context_pct"), r.get("file_path"), synced_at)
+        for r in rows
+    ]
+    with _DB_LOCK:
+        before = int(conn.execute("SELECT COUNT(*) AS c FROM kiro_usage").fetchone()["c"])
+        try:
+            conn.executemany(
+                "INSERT INTO kiro_usage"
+                " (dedupe_key,session_id,model,started_at,ended_at,duration_ms,"
+                " request_count,credits,cost_raw,context_pct,file_path,synced_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(dedupe_key) DO UPDATE SET model=excluded.model,"
+                " started_at=excluded.started_at, ended_at=excluded.ended_at,"
+                " duration_ms=excluded.duration_ms, request_count=excluded.request_count,"
+                " credits=excluded.credits, cost_raw=excluded.cost_raw,"
+                " context_pct=excluded.context_pct, synced_at=excluded.synced_at"
+                " WHERE kiro_usage.model IS NOT excluded.model"
+                " OR kiro_usage.started_at IS NOT excluded.started_at"
+                " OR kiro_usage.ended_at IS NOT excluded.ended_at"
+                " OR kiro_usage.duration_ms IS NOT excluded.duration_ms"
+                " OR kiro_usage.request_count IS NOT excluded.request_count"
+                " OR kiro_usage.credits IS NOT excluded.credits"
+                " OR kiro_usage.cost_raw IS NOT excluded.cost_raw"
+                " OR kiro_usage.context_pct IS NOT excluded.context_pct",
+                payload,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        after = int(conn.execute("SELECT COUNT(*) AS c FROM kiro_usage").fetchone()["c"])
+    return after - before
+
+
+def kiro_last_import_at() -> Optional[str]:
+    """最近一次 Kiro 本地导入时刻 (ISO); 无数据 → None."""
+    row = get_db().execute("SELECT MAX(synced_at) AS m FROM kiro_usage").fetchone()
+    return row["m"] if row else None
+
+
+def kiro_skipped_total() -> int:
+    """各侧车最近一次解析跳过的 turn 数之和 (缺失/非法计量、请求数或时间戳，用于 UI 提示)."""
+    row = get_db().execute("SELECT COALESCE(SUM(skipped), 0) AS s FROM kiro_file_progress").fetchone()
+    return int(row["s"] or 0)
+
+
+def kiro_totals(range_: str) -> dict[str, Any]:
+    """Kiro 单渠道聚合。键与 db.totals 对齐以复用首页概览; token 类键恒 0 且
+    tokens_available=False —— 这里的 0 表示"不可得", 前端必须显示 —。
+    request_count = Σ 每 turn 的 API 请求数; turn_count = 对话轮数。"""
+    range_sql, params = _report_range_sql(range_, "k.started_at")
+    row = get_db().execute(
+        "SELECT COUNT(*) turns, COALESCE(SUM(k.request_count), 0) requests,"
+        " COUNT(DISTINCT CASE WHEN k.session_id IS NOT NULL AND k.session_id != ''"
+        " THEN k.session_id END) sessions,"
+        " COALESCE(SUM(k.credits), 0) credits, COALESCE(SUM(k.cost_raw), 0) / 1e8 cost,"
+        " AVG(k.duration_ms) avg_duration"
+        f" FROM kiro_usage k WHERE {range_sql}",
+        params,
+    ).fetchone()
+    turns = int(row["turns"] or 0)
+    avg = row["avg_duration"]
+    return {
+        "request_count": int(row["requests"] or 0),
+        "turn_count": turns,
+        "session_count": int(row["sessions"] or 0),
+        "total_input_tokens": 0, "uncached_input_tokens": 0, "total_output_tokens": 0,
+        "total_reasoning_tokens": 0, "cache_hit_tokens": 0, "cache_write_tokens": 0,
+        "total_tokens": 0, "hit_rate": 0.0,
+        "tokens_available": False,
+        "credits": round(float(row["credits"] or 0.0), 4),
+        "total_cost_usd": round(float(row["cost"] or 0.0), 6),
+        "cost_available": turns > 0,
+        "avg_duration_ms": None if avg is None else int(round(avg)),
+        "local_only": True,
+        "last_import_at": kiro_last_import_at(),
+    }
+
+
+def kiro_summary(range_: str = "30d") -> dict[str, Any]:
+    """统计页 Kiro 区块: 范围 totals + 按模型聚合 (credits 降序) + 数据起点 + 跳过数."""
+    totals = kiro_totals(range_)
+    range_sql, params = _report_range_sql(range_, "k.started_at")
+    rows = get_db().execute(
+        "SELECT k.model model, COUNT(*) turns, COALESCE(SUM(k.request_count), 0) requests,"
+        " COALESCE(SUM(k.credits), 0) credits, COALESCE(SUM(k.cost_raw), 0) / 1e8 cost"
+        f" FROM kiro_usage k WHERE {range_sql}"
+        " GROUP BY k.model ORDER BY SUM(k.credits) DESC, k.model ASC",
+        params,
+    ).fetchall()
+    since = get_db().execute(
+        "SELECT MIN(date(started_at,'localtime')) d FROM kiro_usage").fetchone()["d"]
+    return {
+        "range": range_,
+        "has_data": totals["turn_count"] > 0,
+        "totals": totals,
+        "models": [{"model": r["model"] or "auto", "turns": int(r["turns"] or 0),
+                    "requests": int(r["requests"] or 0),
+                    "credits": round(float(r["credits"] or 0.0), 4),
+                    "cost": round(float(r["cost"] or 0.0), 6)} for r in rows],
+        "data_since": since,
+        "skipped": kiro_skipped_total(),
+    }
 
 
 def workbuddy_local_last_import_at() -> Optional[str]:
