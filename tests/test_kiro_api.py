@@ -125,6 +125,14 @@ def test_read_credentials_missing_db_returns_none(tmp_path, monkeypatch):
     assert ka.read_credentials() is None
 
 
+def test_read_credentials_tolerates_non_path_source(monkeypatch):
+    """KIRO_DATA_DB 被置成非路径 / 含 NUL: 返回 None 而不是抛异常 (热路径不可 500)."""
+    monkeypatch.setattr(ka, "KIRO_DATA_DB", 12345)
+    assert ka.read_credentials() is None
+    monkeypatch.setattr(ka, "KIRO_DATA_DB", "\0bad")
+    assert ka.read_credentials() is None
+
+
 def test_fetch_without_credentials_is_no_auth(http):
     q = ka.fetch_quota(None)          # autouse 夹具已把 KIRO_DATA_DB 指向不存在的文件
     assert q == {"success": False, "state": "no_auth", "error": q["error"]}
@@ -295,6 +303,10 @@ def test_redirect_does_not_forward_credentials(monkeypatch):
     import urllib.request
     import urllib.response
     from email.message import Message
+    # 生产 opener 必须自带 _NoRedirect: 只断言本测试自建的 opener 时, 把
+    # kiro_api 的 _opener 改成裸 build_opener() 仍会全绿 (bearer + client secret 可被 302 带走)
+    assert any(isinstance(h, ka._NoRedirect) for h in ka._opener.handlers), \
+        "kiro_api._opener 必须装载 _NoRedirect"
     seen = []
     class FakeHTTPS(urllib.request.HTTPSHandler):
         def https_open(self, req):
@@ -309,3 +321,25 @@ def test_redirect_does_not_forward_credentials(monkeypatch):
                                   {'Authorization': 'Bearer FAKE'}, 1)
     assert status == 302
     assert seen == ['https://q.us-east-1.amazonaws.com/']
+
+
+def test_quota_500_is_http_error(kiro_db, http):
+    """额度端点 500: 非 400 不再 failover, 如实报 http_error (不伪装成 network)."""
+    kiro_db()
+    http[0].append(("https://q.", lambda u, b, h: (500, None)))
+    q = ka.fetch_quota(None)
+    assert q["success"] is False and q["state"] == "http_error"
+
+
+def test_quota_http_error_serves_stale_cache(kiro_db, http, monkeypatch):
+    """500 且同账号有未过重置时间的上次成功值: 回退旧值, 状态仍如实标 http_error."""
+    kiro_db()
+    routes, _ = http
+    routes.append(("https://q.", lambda u, b, h: (200, SAMPLE)))
+    monkeypatch.setattr(ka, "_now", lambda: RESET - 600)
+    assert ka.fetch_quota(None)["stale"] is False
+    routes.clear()
+    routes.append(("https://q.", lambda u, b, h: (500, None)))
+    q = ka.fetch_quota(None)
+    assert q["success"] is True and q["stale"] is True and q["state"] == "http_error"
+    assert q["used"] == 109.49 and q["reset_in_sec"] == 600

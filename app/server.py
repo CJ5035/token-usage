@@ -1317,6 +1317,8 @@ def _ensure_kiro_quota_async() -> None:
     def worker() -> None:
         try:
             _kiro_fetch_under_lock()
+        except Exception:  # noqa: BLE001 线程体意外异常不外抛 (锁仍在 finally 释放)
+            pass
         finally:
             _kiro_first_fetch_lock.release()
     try:
@@ -1555,9 +1557,12 @@ def _sync_kiro_local(force: bool = False) -> int:
 
 def kiro_import_async() -> None:
     """非阻塞单飞后台导入; 运行状态在启动前置位、finally 清理。"""
-    global _kiro_import_running
+    global _kiro_import_running, _kiro_sync_error
     if not kiro_local_api.sessions_dir_exists():
-        return  # 没有数据源不创建短命线程，也不产生无意义的 running 抖动
+        # 没有数据源不创建短命线程, 也不产生无意义的 running 抖动; 同时清掉上一次的
+        # 失败文案 (与 _sync_kiro_local 同条件同语义: 卸载 kiro 后不再永远报旧错)
+        _kiro_sync_error = ""
+        return
     if not _kiro_import_lock.acquire(blocking=False):
         return
     _kiro_import_running = True
@@ -1589,10 +1594,27 @@ def _maybe_trigger_kiro_import() -> None:
     kiro_import_async()
 
 
+def _kiro_present() -> bool:
+    """本机是否存在 Kiro 渠道的唯一谓词: 会话目录 / 已导入历史 / 可读的登录凭据。
+
+    /api/state 与 /api/report/channels 都在轮询热路径上调用 (home 页依赖), 因此
+    探测全过程兜异常: 任一子探测抛错都按"无此渠道"处理, 不得把整页 500 掉
+    (spec 保证 ②)。凭据读取顺序放在最后 (最重)。
+    """
+    try:
+        if kiro_local_api.sessions_dir_exists():
+            return True
+        if db.kiro_last_import_at() is not None:
+            return True
+        return kiro_api.read_credentials() is not None
+    except Exception:  # noqa: BLE001 探测失败 = 无此渠道, 绝不外抛
+        return False
+
+
 def _kiro_summary_payload(range_param: str) -> dict[str, Any]:
-    """GET /api/kiro/summary: found=侧车目录存在或镜像已有历史（源目录删除仍展示历史）。"""
+    """GET /api/kiro/summary: found 与 /api/state 同一谓词 (目录/历史/凭据任一条成立)。"""
     summary = db.kiro_summary(range_param)
-    return {"found": kiro_local_api.sessions_dir_exists() or summary["data_since"] is not None,
+    return {"found": _kiro_present(),
             "running": _kiro_import_running, "error": _kiro_sync_error,
             **summary}
 
@@ -1755,6 +1777,9 @@ def _dsh_window(bucket: dict[str, Any]) -> dict[str, Any]:
 
 def _merge_dsh_window(base: dict[str, Any], bucket: dict[str, Any]) -> dict[str, Any]:
     merged = db._win_merge(base, _dsh_window(bucket))
+    # _win_merge 只产出固定字段: 把 base 的 token 缺失标记搬过来 (与 request 标记同理),
+    # 否则 DSH + Kiro 共存时合入 dsh 会丢掉它, 首页又会说"今日 0 Token" (保证 ④)
+    merged["tokens_unavailable_channels"] = list(base.get("tokens_unavailable_channels") or [])
     if _dsh_has_usage(bucket):
         merged["request_count_exact"] = False
         merged["cost_partial"] = True
@@ -1810,8 +1835,7 @@ def _report_channels_response(range_: str) -> dict[str, Any]:
     kiro_running = _kiro_import_running  # 查询前快照，避免完成竞争导致不再重取
     rows = db.report_channels(range_)
     summary = db.list_channel_summary()
-    if (not any(x["channel"] == "kiro" for x in summary)
-            and (kiro_local_api.sessions_dir_exists() or kiro_api.read_credentials() is not None)):
+    if not any(x["channel"] == "kiro" for x in summary) and _kiro_present():
         summary.append({"channel": "kiro", "accounts": 0})
     dsh = dsh_api.get_dsh_summary(range_)
     if dsh.get("found"):
@@ -2021,9 +2045,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                 "datadir": db.data_dir(),
                 "codex": _codex_state_snapshot(),   # T7 登录遮罩分离消费
                 "dsh_found": dsh_found,
-                "kiro_found": (kiro_local_api.sessions_dir_exists()
-                               or db.kiro_last_import_at() is not None
-                               or kiro_api.read_credentials() is not None),
+                "kiro_found": _kiro_present(),
                 "kiro_running": _kiro_import_running,
                 # 欢迎页"不再提示": 前端显隐判断走 state, 不依赖 settings 缓存时序
                 "skip_welcome": db.get_settings().get("skip_welcome") is True,

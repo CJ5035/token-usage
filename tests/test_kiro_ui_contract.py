@@ -108,6 +108,13 @@ def test_kiro_quota_card_states_via_node():
     run(`renderKiroQuota({ success: true, stale: true, state: 'network', plan: 'P', used: 1, limit: 10,
         percent: 10, reset_in_sec: 60, fetched_at: new Date(Date.now() - 5 * 60000).toISOString() })`);
     assert(elements['kiro-quota-cards'].innerHTML.includes('数据为 5 分钟前'), 'stale note');
+
+    // 零上限额度 (percent=null): 数字位 —, 不画 0% 宽的进度条
+    run(`renderKiroQuota({ success: true, state: 'ok', stale: false, plan: 'P', used: 0, limit: 0,
+        percent: null, reset_in_sec: 0 })`);
+    h = elements['kiro-quota-cards'].innerHTML;
+    assert(!h.includes('ub-bar'), 'percent=null must not draw a 0% bar: ' + h);
+    assert(h.includes('—'), 'percent=null shows an em dash: ' + h);
     """)
 
 
@@ -119,6 +126,15 @@ def test_kiro_quota_bar_card_via_node():
     assert(h.includes('Kiro') && h.includes('KIRO STUDENT') && h.includes('109.49'), h);
     run(`renderQuotaBar([], null, { success: false, state: 'network' })`);
     assert(!elements['quota-bar'].innerHTML.includes('kiro'), 'failed quota must not render a card');
+    """)
+    # 保证 ④ 的零上限特例: percent=null 是合法额度 (显示 —), 不得画 0% 进度条
+    _run_node(r"""
+    run(`renderQuotaBar([], null, { success: true, plan: 'P', used: 0, limit: 0, percent: null,
+        reset_in_sec: 0, stale: false })`);
+    const z = elements['quota-bar'].innerHTML;
+    assert(z.includes('Kiro'), 'zero-limit card still renders: ' + z);
+    assert(!z.includes('qb-bar'), 'percent=null must not draw a 0% progress bar: ' + z);
+    assert(z.includes('—'), 'percent=null renders an em dash: ' + z);
     """)
 
 

@@ -540,8 +540,8 @@ html[data-theme="dark"] .src-badge { background: #123144; color: #67e8f9; }
 }
 
 /* ---------- ZCode (GLM Coding Plan) ---------- */
-/* 首页额度卡: 标题行 + 三窗口卡 */
-#zcode-quota { margin-bottom: 12px; }
+/* 首页额度卡: 标题行 + 三窗口卡 (Kiro 复用同款包裹节点, 需要同样的下间距) */
+#zcode-quota, #kiro-quota { margin-bottom: 12px; }
 .zcode-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .zcode-title { font-size: 13.5px; font-weight: 600; }
 .zcode-badge { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 99px; font-size: 10.5px; font-weight: 700; letter-spacing: .5px; background: var(--primary-soft); color: var(--primary); }

@@ -1108,12 +1108,14 @@ function renderKiroQuota(data) {
   head.hidden = false;
   plan.textContent = data.plan || "";
   plan.hidden = !data.plan;
-  const used = Math.min(100, Math.max(0, Number(data.percent) || 0));
+  // percent=null (零上限额度) 是合法值: 数字位显示 —, 且不画 0% 宽的进度条
+  const hasPct = data.percent != null;
+  const used = hasPct ? Math.min(100, Math.max(0, Number(data.percent) || 0)) : 0;
   const meta = data.stale ? kiroStaleText(data) + " · " + t(kiroQuotaStateKey(data.state))
     : data.reset_at_epoch === 0 ? "—" : zcodeResetCell(data.reset_in_sec);
   row.innerHTML = `<div class="ub c-month">
-    <div class="ub-head"><span class="ub-l">${escapeHtml(t("kiroCredits"))}</span><span class="ub-rem">${data.percent == null ? "—" : used.toFixed(0) + "%"}</span></div>
-    <div class="ub-bar"><div class="ub-bar-fill" style="width:${used.toFixed(1)}%"></div></div>
+    <div class="ub-head"><span class="ub-l">${escapeHtml(t("kiroCredits"))}</span><span class="ub-rem">${hasPct ? used.toFixed(0) + "%" : "—"}</span></div>
+    ${hasPct ? `<div class="ub-bar"><div class="ub-bar-fill" style="width:${used.toFixed(1)}%"></div></div>` : ""}
     <div class="ub-meta"><span>${escapeHtml(kiroQuotaUsedText(data))}</span><span>${escapeHtml(meta)}</span></div>
     <div class="ub-meta">${escapeHtml(t("kiroQuotaScope"))}</div>
   </div>`;
@@ -3468,11 +3470,13 @@ function renderQuotaBar(accounts, zdata = null, kdata = null) {
     </div>`);
   }
   if (kdata && kdata.success) {   // Kiro 额度 (本机 kiro-cli 凭据); 失败不出卡, 原因在 kiro 页签展示
-    const pct = Math.min(100, Math.max(0, Number(kdata.percent) || 0));
+    // percent=null 是合法额度 (零上限, spec 明示显示 —): 不画 0% 进度条, 改为隐藏
+    const hasPct = kdata.percent != null;
+    const pct = hasPct ? Math.min(100, Math.max(0, Number(kdata.percent) || 0)) : 0;
     cards.push(`<div class="qb-card">
       <div class="qb-head"><span class="qb-dot" style="background:${CH_COLOR["kiro"] || "#2563eb"}"></span><span class="qb-name" style="color:${CH_COLOR["kiro"] || "#2563eb"}">Kiro</span>${kdata.plan ? `<span class="zcode-badge">${escapeHtml(kdata.plan)}</span>` : ""}</div>
-      <div class="qb-bar"><div class="qb-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
-      <div class="qb-sub">${escapeHtml(kiroQuotaUsedText(kdata))} · <b>${kdata.percent == null ? "—" : pct.toFixed(0) + "%"}</b></div>
+      ${hasPct ? `<div class="qb-bar"><div class="qb-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>` : ""}
+      <div class="qb-sub">${escapeHtml(kiroQuotaUsedText(kdata))} · <b>${hasPct ? pct.toFixed(0) + "%" : "—"}</b></div>
       <div class="qb-foot">${escapeHtml(kdata.stale ? kiroStaleText(kdata) : kdata.reset_at_epoch === 0 ? "—" : zcodeResetCell(kdata.reset_in_sec))}</div>
       <div class="qb-foot">${escapeHtml(t("kiroQuotaScope"))}</div>
     </div>`);
@@ -3490,9 +3494,14 @@ function renderWindows(w, hasEst = false) {
   const cell = (key, label, sub) => `<div class="wb-cell" data-win="${key}"><div class="wb-l">${label}</div>
     <div class="wb-v">${fmtTokens(w[key].tokens)}</div><div class="wb-v2">${fmtOptionalMoney(w[key].cost)}</div>
     <div class="wb-s${w.compare.spike && key === "today" ? " spike" : ""}">${sub}</div></div>`;
+  // 保证 ④: 今日窗口有"字段缺失"的渠道 (Kiro 上游不下发 token) 时, 副行改说
+  // 未提供 Token, 而不是把缺失读成真实的"今日暂无用量"
+  const tokensMissing = Array.isArray(w.today.tokens_unavailable_channels)
+    && w.today.tokens_unavailable_channels.length > 0;
   const cmp = w.compare.insufficient_sample ? t("sampleInsufficient")
+    : (tokensMissing ? t("reportTokensIncomplete")
     : (w.today && w.today.tokens === 0 ? t("noUsageToday")   // EVOLUTION-7: 今日零用量不渲染涨跌箭头 (无昨日基线时避免荒谬涨跌)
-    : (w.compare.pct == null ? "" : `<span class="${w.compare.pct >= 0 ? "up" : "down"}">${w.compare.pct >= 0 ? "↑" : "↓"}${Math.abs(w.compare.pct)}%</span> ${t("vsSame")}`));
+    : (w.compare.pct == null ? "" : `<span class="${w.compare.pct >= 0 ? "up" : "down"}">${w.compare.pct >= 0 ? "↑" : "↓"}${Math.abs(w.compare.pct)}%</span> ${t("vsSame")}`)));
   $("windows-bar").innerHTML =
     cell("today", t("today"), cmp) + cell("yesterday", t("yesterday"), "") +   // 新R1: 昨日格副行为空 (规格布局)
     cell("7d", t("d7"), w["7d"].tokens ? `${t("dailyAvg")} ${fmtTokens(Math.round(w["7d"].tokens / 7))}` : "") +
@@ -3517,6 +3526,9 @@ function renderWindows(w, hasEst = false) {
    纯 DSH 请求计数显示 — (不显示 ~0), 混合态保留已知计数并列出未覆盖来源 */
 function renderReportTotals(totals) {
   const reqUnavail = Array.isArray(totals.request_unavailable_channels) ? totals.request_unavailable_channels : [];
+  // 保证 ④: Kiro 等无 token 口径的渠道只标缺失, KPI 数字本身保持原样 (渠道明细表 /
+  // Kiro 页签才是权威值), 提示走 title 与既有 cost/request 提示同一条通路
+  const tokUnavail = Array.isArray(totals.tokens_unavailable_channels) ? totals.tokens_unavailable_channels : [];
   const dshPartial = reqUnavail.includes("dsh");
   const approx = totals.request_count_exact === false && !dshPartial;   // Codex 近似口径保留
   const known = (Number(totals.request_count) || 0) > 0;
@@ -3533,7 +3545,8 @@ function renderReportTotals(totals) {
   $("report-range-kpis").title = [
     totals.cost_partial ? t("reportCostIncomplete") : "",
     dshPartial ? t("dshRequestsPartial").replace("{chs}", reqUnavail.map((ch) => CH_LABEL[ch] || ch).join(", "))
-      : (approx ? t("reportRequestsApprox") : "")
+      : (approx ? t("reportRequestsApprox") : ""),
+    tokUnavail.length ? t("reportTokensIncomplete") + " (" + tokUnavail.map((ch) => CH_LABEL[ch] || ch).join(", ") + ")" : ""
   ].filter(Boolean).join(" · ");
 }
 

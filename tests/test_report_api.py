@@ -591,6 +591,9 @@ def test_dsh_history_report_contract_uses_one_range_summary(tmp_report_db, monke
     assert windows["compare"]["excluded_channels"] == ["dsh"]
     assert windows["today"]["request_unavailable_channels"] == ["dsh"]
     assert windows["7d"]["request_unavailable_channels"] == ["dsh"]
+    # 合入 dsh 不得丢掉 Kiro 的 token 缺失标记 (本夹具无 Kiro 数据 → 空列表, 但键必须在)
+    assert windows["today"]["tokens_unavailable_channels"] == []
+    assert windows["7d"]["tokens_unavailable_channels"] == []
     assert windows["today"]["request_count_exact"] is False
     assert calls[0] == ("today", "yesterday", "7d", "30d")   # I7: 一次快照供四窗口
 

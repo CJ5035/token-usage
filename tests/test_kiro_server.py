@@ -139,8 +139,19 @@ def test_no_import_thread_when_source_is_missing(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("missing source must not create a thread")
     monkeypatch.setattr(server.threading, "Thread", forbidden)
+    monkeypatch.setattr(server, "_kiro_sync_error", "disk gone")   # 卸载 kiro 后旧错误不得残留
     server.kiro_import_async()
     assert server._kiro_import_running is False
+    assert server._kiro_sync_error == ""
+
+
+def test_kiro_probe_survives_raising_credential_read(tmp_db, api_call, kiro_triggers, monkeypatch):
+    """凭据读取意外抛错时 /api/state 与 /api/report/channels 不得 500 (spec 保证 ②)."""
+    def boom():
+        raise RuntimeError("odd data dir")
+    monkeypatch.setattr(server.kiro_api, "read_credentials", boom)
+    assert api_call("/api/state")["data"]["kiro_found"] is False
+    assert "kiro" not in [x["channel"] for x in api_call("/api/report/channels")["data"]["summary"]]
 
 
 def test_kiro_quota_first_call_fetches_with_oauth_cache_in_data_dir(tmp_db, api_call, monkeypatch):
@@ -167,7 +178,9 @@ def test_kiro_quota_expired_cache_returns_old_and_refreshes_async(tmp_db, api_ca
     server._kiro_quota_cache.update(at=1.0, source_id="fixture", data={"success": True, "plan": "OLD"})
     kicked = []
     monkeypatch.setattr(server, "_ensure_kiro_quota_async", lambda: kicked.append(1))
-    assert api_call("/api/kiro/quota")["data"]["plan"] == "OLD"
+    d = api_call("/api/kiro/quota")["data"]
+    # 过期缓存: 旧值照常返回, 但必须同时带 stale 与 refreshing (删掉任一即失败)
+    assert d["plan"] == "OLD" and d["stale"] is True and d["refreshing"] is True
     assert kicked == [1]
 
 

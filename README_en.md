@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <b>A local-first usage dashboard for AI coding tools</b>: aggregates OpenCode Go / BAI / CommandCode cloud accounts and local ZCode / Claude Code / Codex / DSH session usage. Quota windows, token breakdown, model ranking and usage records — all in one place.
+  <b>A local-first usage dashboard for AI coding tools</b>: aggregates OpenCode Go / BAI / CommandCode / WorkBuddy cloud accounts and local ZCode / Claude Code / Codex / DSH / Kiro CLI session usage. Quota windows, token breakdown, model ranking and usage records — all in one place.
 </p>
 
 <p align="center">
@@ -36,9 +36,9 @@
   - Cloud accounts (built-in WebView login, auto sync): OpenCode Go · BAI (chat.b.ai) · CommandCode (commandcode.ai) · WorkBuddy (workbuddy.cn)
   - Local CLIs / clients (no login needed, read-only): ZCode (GLM Coding Plan) · Claude Code · Codex · DSH · Kiro CLI
 - **All-channel report on the home page**: per-channel quota windows, stacked consumption trend, channel share donut, channel detail table; a single-channel view is also available with channel-specific quota and billing summary
-- **Quota monitoring**: OpenCode 5h / weekly / monthly, CommandCode 5h / weekly / monthly credits, GLM Coding Plan 5h / weekly / MCP monthly — progress bars, remaining % and reset countdown
+- **Quota monitoring**: OpenCode 5h / weekly / monthly, CommandCode 5h / weekly / monthly credits, GLM Coding Plan 5h / weekly / MCP monthly, Kiro CLI monthly credits — progress bars, remaining % and reset countdown
 - **Usage stats (layered by source)**: source share bar (click a block to expand its source), token breakdown (input / output / reasoning / cache read / cache write / sessions), model usage donut + ranking, all-channel trend, per-source detail panels
-- **Usage records**: session usage + request-level detail with unified source filtering (Codex included), source / model filters and pagination; click a session row to drill in — a single-session stats card appears (rounds / output speed tok/s / first-token latency / cumulative input & output / cache hit rate) and the detail table filters to that session
+- **Usage records**: session usage + request-level detail with unified source filtering (Codex and Kiro CLI included), source / model filters and pagination; click a session row to drill in — a single-session stats card appears (rounds / output speed tok/s / first-token latency / cumulative input & output / cache hit rate) and the detail table filters to that session
 - **Account overview**: multi-account aggregate view + 7-day cost trend comparison (toggle in Settings)
 - **Multi-account management**: add / re-login / switch accounts; the login window auto-fills cookie & workspace — no manual copy-paste
 - **Auto sync**: cloud channels incremental sync (1/5/15/30 min) + sync range (30/60/90/180 days / All); local channels import incrementally on startup

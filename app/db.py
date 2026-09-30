@@ -2854,7 +2854,8 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
                  extra_rows: Optional[list[dict[str, Any]]] = None,
                  unavailable_sources: Optional[list[str]] = None) -> dict[str, Any]:
     """按自然日 × 渠道堆叠序列 (R6: usage_records + zcode_usage + claudecode_usage
-    + codex_usage 四表 UNION); range=all 时粒度自适应 (>60 天按周 / >180 天按月)。
+    + codex_usage + workbuddy_local_usage + kiro_usage 六表 UNION); range=all 时
+    粒度自适应 (>60 天按周 / >180 天按月)。
     Codex 费用未知: metric=cost 省略 codex series 并追加 unavailable_channels。"""
     exprs = _report_metric_exprs(metric)
     unavailable = _daily_unavailable_channels(metric, channel)
@@ -3135,6 +3136,19 @@ def _win_kiro(where: str, params: list[Any]) -> dict[str, Any]:
             "request_count_exact": turns > 0}
 
 
+def _tokens_unavailable_channels(where: str, params: list[Any], channel: Optional[str]) -> list[str]:
+    """窗口内 token 口径不可用的渠道列表 (表别名 k 的窗口谓词, 与 _win_kiro 同参)。
+
+    Kiro 上游不下发 token: 该窗口内有轮次才算"字段缺失", 与真实 0 严格区分
+    (spec 保证 ④)。后续新增无 token 渠道在同一个探针里追加, 前端按同一字段渲染。
+    """
+    if channel not in (None, "kiro"):
+        return []
+    row = get_db().execute(
+        "SELECT 1 FROM kiro_usage k WHERE " + where + " LIMIT 1", params).fetchone()
+    return ["kiro"] if row else []
+
+
 def _win_merge(*rows: dict[str, Any]) -> dict[str, Any]:
     """多来源窗口行合并 (简报固定形态): 费用只合计有用量的来源的已知小计 (Kiro 按
     轮数判断用量, 其余来源按请求数); 空源不纳入 known; 有数据但费用未知 (如纯 Codex)
@@ -3161,9 +3175,9 @@ def _win_merge(*rows: dict[str, Any]) -> dict[str, Any]:
 
 
 def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
-    """时间窗口汇总条 (R6 四表求和: today/yesterday/7d/30d + 同时段环比 (样本保护)
+    """时间窗口汇总条 (R6 六表求和: today/yesterday/7d/30d + 同时段环比 (样本保护)
     + 数据深度 + 同步状态。dsh 今日由 server 层并入 (T6), db 层不碰 dsh_api;
-    codex 经 _win_codex 参与四表合并 (费用未知 → 纯 Codex 窗口 cost=NULL)。
+    codex 经 _win_codex 参与六表合并 (费用未知 → 纯 Codex 窗口 cost=NULL)。
 
     同时段口径 (spec v4/v5): 今日截至当前 vs 昨日同时刻; 7 天同时段均值 = 近 7 个
     完整自然日(不含今天)各日同时段之和/7; <03:00 由测试环境窗口保证, 或对比窗口
@@ -3198,7 +3212,7 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
         wlw, wlp = local_where(range_, "wl.started_at", same_time)
         wb = _win_wb(wlw, wlp) if (not channel or channel == "workbuddy") else dict(_WIN_ZERO)
         kw, kp = local_where(range_, "k.started_at", same_time)
-        return _win_merge(
+        out = _win_merge(
             _win_records(rw, rp),
             _win_zcode(zw, zp) if not channel or channel == "zcode" else dict(_WIN_ZERO),
             _win_cc(cw, cp) if not channel or channel == "claudecode" else dict(_WIN_ZERO),
@@ -3206,6 +3220,9 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
             wb,
             _win_kiro(kw, kp) if not channel or channel == "kiro" else dict(_WIN_ZERO),
         )
+        # 保证 ④: 本窗口 token 位缺失 (Kiro) 时标出渠道, 前端据此不再说"今日 0 Token"
+        out["tokens_unavailable_channels"] = _tokens_unavailable_channels(kw, kp, channel)
+        return out
 
     windows = {
         "today": window("today"),
@@ -3784,7 +3801,8 @@ def report_totals(range_: str) -> dict[str, Any]:
     """全渠道聚合 totals (复用 report_channels 同范围/同源聚合): request_count/
     total_tokens/total_input_tokens/total_output_tokens/cache_hit_tokens/
     total_cost_usd + 费用完整性 (cost_available/cost_partial/
-    cost_unavailable_channels) + request_count_exact。
+    cost_unavailable_channels) + token 缺失标记 (tokens_unavailable_channels) +
+    request_count_exact。
 
     NULL 不是 0: 仅 Codex 有数据时 total_cost_usd=NULL 并标 cost_partial,
     混合来源保留其余来源已知小计。DSH 无历史表, 由 server 层仅对 today 并入
@@ -3792,13 +3810,14 @@ def report_totals(range_: str) -> dict[str, Any]:
     """
     codex = _win_codex(*_report_range_sql(range_, "started_at"))
     wb = _win_wb(*_report_range_sql(range_, "wl.started_at"))
+    kiro = _win_kiro(*_report_range_sql(range_, "k.started_at"))
     merged = _win_merge(
         _win_records(*_report_range_sql(range_, "r.created_at")),
         _win_zcode(*_report_range_sql(range_, "z.started_at")),
         _win_cc(*_report_range_sql(range_, "c.started_at")),
         codex,
         wb,
-        _win_kiro(*_report_range_sql(range_, "k.started_at")),
+        kiro,
     )
     cost = merged["cost"]
     cost_unavail = []
@@ -3815,6 +3834,8 @@ def report_totals(range_: str) -> dict[str, Any]:
             "cost_available": merged["cost_available"],
             "cost_partial": merged["cost_partial"],
             "cost_unavailable_channels": cost_unavail,
+            # 保证 ④: 范围内有 Kiro 轮次时 token 位是"缺失"而非 0, 前端据此出提示
+            "tokens_unavailable_channels": ["kiro"] if kiro["turn_count"] > 0 else [],
             "request_count_exact": merged["request_count_exact"]}
 
 
@@ -4458,7 +4479,7 @@ _UNIFIED_COLS = (
 # ---------------------------------------------------------------------------
 # 归一分段注册表
 #
-# 旧实现是"五段全量 UNION ALL + 外层 WHERE/ORDER BY": 即使只查一个来源, 五张表
+# 旧实现是"四段全量 UNION ALL + 外层 WHERE/ORDER BY": 即使只查一个来源, 四张表
 # 也全表 SCAN, 且外层 ORDER BY 只能走 TEMP B-TREE (各表 idx_*_time 全失效)。
 # 把每段的差异 (基表、时间列、模型列、段内 source 判定、次序键、投影) 登记成数据后,
 # 下推逻辑只需写一份:

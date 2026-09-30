@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <b>本地优先的多渠道 AI 编码用量面板</b>：聚合 OpenCode Go / BAI / CommandCode 云端账号，汇总本机 ZCode / Claude Code / Codex / DSH 会话用量。配额窗口、Token 构成、模型排行、使用记录，打开即见。
+  <b>本地优先的多渠道 AI 编码用量面板</b>：聚合 OpenCode Go / BAI / CommandCode / WorkBuddy 云端账号，汇总本机 ZCode / Claude Code / Codex / DSH / Kiro CLI 会话用量。配额窗口、Token 构成、模型排行、使用记录，打开即见。
 </p>
 
 <p align="center">
@@ -36,9 +36,9 @@
   - 云端账号（内置 WebView 登录，自动同步）：OpenCode Go · BAI (chat.b.ai) · CommandCode (commandcode.ai) · WorkBuddy (workbuddy.cn)
   - 本机 CLI / 客户端（免登录，只读本地数据）：ZCode (GLM Coding Plan) · Claude Code · Codex · DSH · Kiro CLI
 - **首页全渠道报表**：各渠道配额窗口、分渠道消耗趋势、渠道占比环形图、渠道明细表；也可切到单渠道视图查看该渠道专属配额与账期汇总
-- **配额窗口监控**：OpenCode 5 小时 / 每周 / 每月、CommandCode 5 小时 / 每周 / 月度积分、GLM Coding Plan 5 小时 / 每周 / MCP 月度，进度条 + 剩余比例 + 重置倒计时
+- **配额窗口监控**：OpenCode 5 小时 / 每周 / 每月、CommandCode 5 小时 / 每周 / 月度积分、GLM Coding Plan 5 小时 / 每周 / MCP 月度、Kiro CLI 月度 Credits，进度条 + 剩余比例 + 重置倒计时
 - **用量统计（数据源分层）**：数据源占比条（点击色块展开对应数据源）、Token 构成（输入 / 输出 / 推理 / 缓存读 / 缓存写 / 会话）、模型用量环形图 + 排行、全渠道用量趋势、单数据源明细面板
-- **使用记录**：会话用量 + 请求级明细统一来源筛选（含 Codex），支持来源 / 模型筛选与分页浏览；点击会话行即下钻该会话——弹出单会话统计卡片（会话轮数 / 输出速度 tok/s / 首字延迟 / 累计输入输出 / 缓存命中率），下方明细表同步过滤到该会话
+- **使用记录**：会话用量 + 请求级明细统一来源筛选（含 Codex、Kiro CLI），支持来源 / 模型筛选与分页浏览；点击会话行即下钻该会话——弹出单会话统计卡片（会话轮数 / 输出速度 tok/s / 首字延迟 / 累计输入输出 / 缓存命中率），下方明细表同步过滤到该会话
 - **账户总览**：多账户聚合视图 + 7 日费用趋势对比（设置页可开启）
 - **多账号管理**：添加 / 重新登录 / 切换账号，登录窗口自动回填 cookie 与工作区，无需手动复制
 - **自动同步**：云端渠道增量同步（1/5/15/30 分钟可选）+ 同步范围（30/60/90/180 天 / 所有）；本机渠道启动时自动增量导入

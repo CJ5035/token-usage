@@ -116,13 +116,23 @@ def _kv_json(con: sqlite3.Connection, table: str, pattern: str) -> dict[str, Any
 
 
 def read_credentials() -> Optional[dict[str, Any]]:
-    """只读取唯一登录 token；多套登录无可靠活跃标识时不猜测。"""
-    path = Path(KIRO_DATA_DB)
-    if not path.is_file():
+    """只读取唯一登录 token；多套登录无可靠活跃标识时不猜测。
+
+    KIRO_DATA_DB 被置成非法值 (非路径 / 含 NUL / 路径不可解析) 时同样返回 None 而不
+    抛异常: 本函数位于 /api/state、/api/report/channels 等热路径, 意外异常会 500 掉
+    整页 (spec 保证 ②), 因此路径解析与打开都纳入同一个 try。
+    """
+    try:
+        resolved_path = Path(KIRO_DATA_DB).resolve()
+        if not resolved_path.is_file():
+            return None
+        resolved = str(resolved_path)
+        uri = resolved_path.as_uri() + "?mode=ro"
+    except (TypeError, ValueError, OSError):
         return None
     try:
-        con = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
-    except sqlite3.Error:
+        con = sqlite3.connect(uri, uri=True, timeout=2)
+    except (sqlite3.Error, OSError):
         return None
     try:
         rows = con.execute("SELECT key, value FROM auth_kv WHERE key LIKE 'kirocli:%:token'").fetchall()
@@ -160,7 +170,7 @@ def read_credentials() -> Optional[dict[str, Any]]:
         "profile_arn": str(profile.get("arn") or ""),
         "flow": key.split(":")[1],
     }
-    identity = [str(path.resolve()), key, result["access_token"], result["refresh_token"],
+    identity = [resolved, key, result["access_token"], result["refresh_token"],
                 result["region"], result["client_id"], result["profile_arn"]]
     result["source_id"] = hashlib.sha256(json.dumps(identity).encode("utf-8")).hexdigest()
     return result

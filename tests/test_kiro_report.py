@@ -99,3 +99,43 @@ def test_channel_row_zero_request_turns_keep_cost_available(tmp_db, kiro_row):
     assert k["local_only"] is True
     assert k["credits"] == pytest.approx(2.5)
     assert db.kiro_totals("7d")["cost_available"] is True
+
+
+def test_report_totals_and_windows_mark_kiro_tokens_unavailable(tmp_db, kiro_row):
+    """保证 ④: Kiro 有轮次时 token 位是"未提供"而不是 0, 聚合层必须给出标记;
+    无 Kiro 数据时标记为空 (两个方向都要钉住, 否则"缺失"又会被当成真实 0)."""
+    assert db.report_totals("today")["tokens_unavailable_channels"] == []
+    assert db.report_windows()["today"]["tokens_unavailable_channels"] == []
+    db.import_kiro_usage([kiro_row("a", credits=2.5, request_count=3)])
+    assert db.report_totals("today")["tokens_unavailable_channels"] == ["kiro"]
+    assert db.report_windows()["today"]["tokens_unavailable_channels"] == ["kiro"]
+    assert db.report_totals("today")["total_tokens"] == 0        # KPI 数字保持原样, 不清零改写
+    # 标记跟着窗口与渠道作用域走
+    assert db.report_windows()["yesterday"]["tokens_unavailable_channels"] == []
+    assert db.report_windows("zcode")["today"]["tokens_unavailable_channels"] == []
+    assert db.report_windows("kiro")["today"]["tokens_unavailable_channels"] == ["kiro"]
+
+
+def test_win_merge_keeps_kiro_and_zcode_contributions(tmp_db, kiro_row, local_iso):
+    """_win_merge (本期改动的共享合并器) 合并 Kiro 与 zcode 两路时双方贡献都存活:
+    Kiro 只出 requests/cost, zcode 出 token; 任一方都不被对方覆盖或抹平."""
+    db.import_kiro_usage([kiro_row("a", credits=2.5, request_count=3)])
+    conn = db.get_db()
+    conn.execute(
+        "INSERT INTO zcode_usage (id, started_at, provider_id, provider_name, model_id, status,"
+        " input_tokens, output_tokens, reasoning_tokens, cache_write_tokens, cache_read_tokens,"
+        " total_tokens, cost_raw, synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("z1", local_iso(), "prov-1", "Provider1", "glm-4", "ok", 30, 50, 0, 0, 0,
+         80, 8_000_000, local_iso()),
+    )
+    conn.commit()
+    kiro = db._win_kiro(*db._report_range_sql("today", "k.started_at"))
+    zcode = db._win_zcode(*db._report_range_sql("today", "z.started_at"))
+    merged = db._win_merge(zcode, kiro)
+    assert zcode["tokens"] == 80 and zcode["requests"] == 1
+    assert kiro["turn_count"] == 1 and kiro["requests"] == 3 and kiro["tokens"] == 0
+    assert merged["tokens"] == 80                    # Kiro 的缺失不写成 0 参与合计
+    assert merged["requests"] == 4                   # zcode 1 行 + Kiro 3 个 API 请求
+    assert merged["cost"] == pytest.approx(0.18)     # zcode 0.08 + Kiro 2.5 credits × 0.04
+    assert merged["cost_available"] is True and merged["cost_partial"] is False
+    assert merged["request_count_exact"] is True
