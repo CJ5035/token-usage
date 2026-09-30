@@ -33,7 +33,7 @@
 ## ✨ 功能
 
 - **9 大数据源聚合**
-  - 云端账号（内置 WebView 登录，自动同步）：OpenCode Go · BAI (chat.b.ai) · CommandCode (commandcode.ai)
+  - 云端账号（内置 WebView 登录，自动同步）：OpenCode Go · BAI (chat.b.ai) · CommandCode (commandcode.ai) · WorkBuddy (workbuddy.cn)
   - 本机 CLI / 客户端（免登录，只读本地数据）：ZCode (GLM Coding Plan) · Claude Code · Codex · DSH · Kiro CLI
 - **首页全渠道报表**：各渠道配额窗口、分渠道消耗趋势、渠道占比环形图、渠道明细表；也可切到单渠道视图查看该渠道专属配额与账期汇总
 - **配额窗口监控**：OpenCode 5 小时 / 每周 / 每月、CommandCode 5 小时 / 每周 / 月度积分、GLM Coding Plan 5 小时 / 每周 / MCP 月度，进度条 + 剩余比例 + 重置倒计时
@@ -54,7 +54,7 @@
 下载 [Releases](../../releases) 中的 `GoGauge.exe`（单文件，无需安装）：
 
 1. 双击运行，欢迎页点击「立即登录」弹出官方授权窗口
-2. 完成登录后自动进入面板并同步用量数据；本机渠道（ZCode / Claude Code / Codex / DSH）无需登录，自动读取本机数据
+2. 完成登录后自动进入面板并同步用量数据；本机渠道（ZCode / Claude Code / Codex / DSH / Kiro CLI）无需登录，自动读取本机数据
 3. 数据保存在 exe 同目录 `data\` 文件夹
 
 > 需要 Windows 10/11（自带 WebView2 Runtime）。关闭窗口会最小化到系统托盘。
@@ -91,6 +91,7 @@ build.bat
 | OpenCode Go | 云端（登录） | opencode.ai 配额页 HTML 解析 + `/_server` server-fn 用量接口 |
 | BAI | 云端（登录） | chat.b.ai trpc 接口（积分余额 / 月度汇总 / 用量明细） |
 | CommandCode | 云端（登录） | api.commandcode.ai 内部接口（配额 / 订阅 / 用量明细） |
+| WorkBuddy | 云端（登录） | `workbuddy.cn/profile/plans-usage` 配额页 WebView 登录并捕获全量 cookie jar；请求级明细仅保存 requestId / 时间 / 模型 / 客户端 / credit（不保存 input/inputTrunc），积分配额走现有 30 秒账号缓存 |
 | ZCode | 本机（免登录） | `~/.zcode/v2` 凭证查询 GLM 开放平台额度 + 本地用量库只读采集（支持 dataBaseDir 迁移目录） |
 | Claude Code | 本机（免登录） | `~/.claude/projects` 会话 JSONL（支持 `CLAUDE_CONFIG_DIR` 覆盖），只计 assistant 行 |
 | Codex | 本机（免登录） | `GOUSAGE_CODEX_HOME` > `ZBAR_CODEX_HOME` > `~/.codex` 的 `sessions` rollout 日志 |
