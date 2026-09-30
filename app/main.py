@@ -588,6 +588,9 @@ def main() -> None:
     server.codex_import_async()
     # ZCode 额度缓存启动预热 (问题5): 首个 /api/zcode/quota 请求免 15s 同步首采
     threading.Thread(target=server.zcode_quota_warmup, daemon=True, name="gousage-zcode-quota-warm").start()
+    # Kiro 本地用量启动导入 (函数自身起后台线程) + 额度缓存预热 (均不阻塞窗口创建)
+    server.kiro_import_async()
+    threading.Thread(target=server.kiro_quota_warmup, daemon=True, name="gousage-kiro-quota-warm").start()
     # DSH 用量启动预热 (EVOLUTION-5): 触发一次后台预热扫描 (get_dsh_usage 冷启动
     # 即 spawn daemon 线程, 不阻塞), 预热完成后首页/统计页 dsh 行免冷启动空窗
     dsh_api.get_dsh_usage()

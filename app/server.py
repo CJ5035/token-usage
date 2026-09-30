@@ -1286,6 +1286,81 @@ def _zcode_quota_payload() -> dict[str, Any]:
     return slot["data"]
 
 
+# Kiro 额度缓存：HTTP 读取不等待远端，锁只允许一个刷新线程。
+_kiro_quota_cache: dict[str, Any] = {"at": 0.0, "data": None, "source_id": None}
+_kiro_first_fetch_lock = threading.Lock()
+
+
+def _kiro_oauth_cache_path() -> str:
+    return os.path.join(db.data_dir(), "kiro_oauth.json")
+
+
+def _kiro_fetch_under_lock() -> bool:
+    """调用方持有单飞锁；抓取后复核源凭据，防止在途响应污染新账号。"""
+    slot = _kiro_quota_cache
+    before = kiro_api.read_credentials()
+    identity = before.get("source_id") if before else None
+    data = kiro_api.fetch_quota(_kiro_oauth_cache_path())
+    after = kiro_api.read_credentials()
+    if (after.get("source_id") if after else None) != identity:
+        return False
+    if slot is not _kiro_quota_cache:
+        return False
+    slot.update(data=data, at=time.time(), source_id=identity)
+    return True
+
+
+def _ensure_kiro_quota_async() -> None:
+    if not _kiro_first_fetch_lock.acquire(blocking=False):
+        return
+
+    def worker() -> None:
+        try:
+            _kiro_fetch_under_lock()
+        finally:
+            _kiro_first_fetch_lock.release()
+    try:
+        threading.Thread(target=worker, daemon=True, name="gousage-kiro-quota").start()
+    except Exception:
+        _kiro_first_fetch_lock.release()
+
+
+def kiro_quota_warmup() -> None:
+    _ensure_kiro_quota_async()
+
+
+def _kiro_quota_payload() -> dict[str, Any]:
+    """空缓存立即返回 loading；过期先返同账号未重置旧值并标 stale。"""
+    creds = kiro_api.read_credentials()
+    identity = creds.get("source_id") if creds else None
+    slot = _kiro_quota_cache
+    if slot.get("source_id") != identity:
+        slot.update(at=0.0, data=None, source_id=identity)
+    if identity is None:
+        slot.update(at=0.0, data=None)
+        return {"success": False, "state": "no_auth", "error": "未检测到唯一 kiro-cli 登录凭据"}
+    now = time.time()
+    data = slot["data"]
+    if data and data.get("success"):
+        reset = data.get("reset_at_epoch", 0)
+        if reset and reset <= now:
+            slot.update(at=0.0, data=None)
+            data = None
+    fresh = data is not None and now - slot["at"] < QUOTA_CACHE_TTL
+    if not fresh:
+        _ensure_kiro_quota_async()
+    if data is None:
+        return {"success": False, "state": "loading"}
+    result = dict(data)
+    if result.get("success"):
+        reset = result.get("reset_at_epoch", 0)
+        result["reset_in_sec"] = max(0, int(reset - now)) if reset else 0
+        if not fresh:
+            result["stale"] = True
+    result["refreshing"] = not fresh
+    return result
+
+
 def _maybe_trigger_zcode_import() -> None:
     """summary 请求路径按需增量: 距上次触发超过 60s 才后台导入 (请求不等待导入).
 
@@ -2042,6 +2117,10 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
 
     if route == "/api/zcode/quota" and method == "GET":
         _json_response(handler, _zcode_quota_payload())
+        return
+
+    if route == "/api/kiro/quota" and method == "GET":
+        _json_response(handler, _kiro_quota_payload())
         return
 
     if route == "/api/zcode/summary" and method == "GET":

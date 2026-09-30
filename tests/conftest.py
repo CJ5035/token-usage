@@ -116,6 +116,7 @@ def isolate_kiro_sources(tmp_path, monkeypatch):
 
     monkeypatch.setattr(server, "_kiro_last_import_trigger", None)
     monkeypatch.setattr(server, "_kiro_sync_error", "")
+    monkeypatch.setattr(server, "_kiro_quota_cache", {"at": 0.0, "data": None})
 
 
 @pytest.fixture

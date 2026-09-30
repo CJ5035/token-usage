@@ -141,3 +141,51 @@ def test_no_import_thread_when_source_is_missing(monkeypatch):
     monkeypatch.setattr(server.threading, "Thread", forbidden)
     server.kiro_import_async()
     assert server._kiro_import_running is False
+
+
+def test_kiro_quota_first_call_fetches_with_oauth_cache_in_data_dir(tmp_db, api_call, monkeypatch):
+    seen = []
+
+    def fake(path):
+        seen.append(path)
+        return {"success": True, "state": "ok", "plan": "KIRO STUDENT", "used": 1.0, "limit": 10.0}
+    monkeypatch.setattr(server.kiro_api, "fetch_quota", fake)
+    monkeypatch.setattr(server.kiro_api, "read_credentials", lambda: {"source_id": "fixture"})
+    kicked = []
+    monkeypatch.setattr(server, "_ensure_kiro_quota_async", lambda: kicked.append(1))
+    assert api_call("/api/kiro/quota")["data"]["state"] == "loading"
+    assert seen == [] and kicked == [1]  # HTTP 读取没有执行网络请求
+    server._kiro_fetch_under_lock()       # 模拟单个后台 worker 完成
+    assert api_call("/api/kiro/quota")["data"]["plan"] == "KIRO STUDENT"
+    assert seen == [os.path.join(str(tmp_db), "kiro_oauth.json")]
+    api_call("/api/kiro/quota")
+    assert len(seen) == 1                        # 30 秒 TTL 内直返缓存
+
+
+def test_kiro_quota_expired_cache_returns_old_and_refreshes_async(tmp_db, api_call, monkeypatch):
+    monkeypatch.setattr(server.kiro_api, "read_credentials", lambda: {"source_id": "fixture"})
+    server._kiro_quota_cache.update(at=1.0, source_id="fixture", data={"success": True, "plan": "OLD"})
+    kicked = []
+    monkeypatch.setattr(server, "_ensure_kiro_quota_async", lambda: kicked.append(1))
+    assert api_call("/api/kiro/quota")["data"]["plan"] == "OLD"
+    assert kicked == [1]
+
+
+def test_main_warms_up_kiro_import_and_quota():
+    src = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    assert "server.kiro_import_async()" in src
+    assert "target=server.kiro_quota_warmup" in src
+
+def test_quota_cache_invalidates_identity_and_reset(tmp_db, monkeypatch):
+    identity = ["A"]
+    monkeypatch.setattr(server.kiro_api, "read_credentials", lambda: {"source_id": identity[0]})
+    monkeypatch.setattr(server, "_ensure_kiro_quota_async", lambda: None)
+    monkeypatch.setattr(server.time, "time", lambda: 1000.0)
+    server._kiro_quota_cache.update(at=999, source_id="A", data={
+        "success": True, "reset_at_epoch": 1100, "reset_in_sec": 999})
+    assert server._kiro_quota_payload()["reset_in_sec"] == 100
+    identity[0] = "B"
+    assert server._kiro_quota_payload() == {"success": False, "state": "loading"}
+    server._kiro_quota_cache.update(at=999, source_id="B", data={
+        "success": True, "reset_at_epoch": 1000})
+    assert server._kiro_quota_payload()["state"] == "loading"
