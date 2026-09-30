@@ -743,6 +743,12 @@ async function loadDashboard(quiet = false, noAnim = false) {
                          if (state.channel !== "zcode") $("zcode-quota").hidden = true;
                        });
     }
+    // Kiro 额度卡只属于 kiro 页签; 每次进入都刷新 (后端 30 秒缓存), 迟到响应切走后重新隐藏
+    $("kiro-quota").hidden = state.channel !== "kiro";
+    if (state.channel === "kiro") {
+      if (kiroQuotaLast) renderKiroQuota(kiroQuotaLast);
+      loadKiroQuota().then(() => { if (state.channel !== "kiro") $("kiro-quota").hidden = true; });
+    }
     $("report-scope").hidden = true;
     // 单渠道: 消耗走 report 接口(与活跃账号无关), 配额块/账期卡走 accounts/overview 逐账号 (spec v5/v8)
     const seq = ++chSeq;                                  // 新增: 快速切渠道时丢弃过期响应 (方案4④)
@@ -772,6 +778,7 @@ async function loadDashboard(quiet = false, noAnim = false) {
       renderQuotaSingle(chAccounts);
       const rangeHint = document.querySelector(".overview .hint");   // 新R1 N13: dsh 仅今日口径提示
       if (rangeHint) rangeHint.textContent = t("followRange");
+      if (totals.kiro_local && totals.kiro_local.running) pollUntilIdle();
       renderOverview(totals, state.channel);          // 概览 6 格: channel_totals 键与 db.totals 对齐 (T5)
       // §3.4: 首页 dsh 页签消费 channel-overview 顶层 dsh_status。
       // 20260911 问题1 方案A②: 仅 dsh 渠道响应携带 dsh_status (server.py:1513 无条件键),
@@ -780,6 +787,7 @@ async function loadDashboard(quiet = false, noAnim = false) {
       // :652 已 cancelDshRefresh() 显式停表 —— 本守卫是纵深防御, 不是周期保活的关键路径。
       if (totals.dsh_status) renderHomeDshStatus(totals.dsh_status);
       chartToday(trend, noAnim);                      // 24h input/output 双系列 (spec v8)
+      if (state.channel === "kiro") setChartEmpty("today-chart", "today-empty", "kiroTokensUnavailable");   // Kiro 无 token 口径: 空态说明"不提供"而非"无用量"
       const isCc = state.channel === "commandcode";
       $("cc-summary").hidden = !isCc;
       if (isCc) renderCcAccounts(chAccounts);         // 账期卡逐账号 (spec v5); 全部 tab 不显示
@@ -1033,6 +1041,91 @@ function zcodeLevelText(level) {
 function zcodeResetCell(sec) {
   // reset_in_sec 为 0 表示未知 (后端契约), 显示 "—" 而非 fmtDur 的"即将重置"
   return (Number(sec) || 0) > 0 ? `${t("resetsIn")} ${fmtDur(sec)}` : "—";
+}
+/* ---------------- Kiro (额度卡 / 概览 / 通用单元格) ---------------- */
+/* token 不可得的来源显示 "—" (这些行里的 0 表示"不提供", 不是"用了 0 个") */
+function tokCell(unavailable, v) {
+  return unavailable ? `<span class="ts" title="${escapeHtml(t("kiroTokensUnavailable"))}">—</span>` : fmtTokens(v);
+}
+function fmtCredits(v) {
+  return Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+function kiroDurText(ms) {
+  const s = Math.round((Number(ms) || 0) / 1000);
+  return s < 60 ? `${s}s` : fmtDur(s);
+}
+function kiroQuotaStateKey(state) {
+  return { loading: "quotaNotReady", no_auth: "kiroQuotaNoAuth", auth_expired: "kiroQuotaExpired",
+           network: "kiroQuotaNetwork", bad_shape: "kiroQuotaBadShape" }[state] || "kiroQuotaFail";
+}
+function kiroQuotaUsedText(d) {
+  return t("kiroQuotaUsed").replace("{used}", fmtCredits(d.used)).replace("{limit}", fmtCredits(d.limit));
+}
+function kiroStaleText(d) {
+  const ms = Date.now() - new Date(d.fetched_at || 0).getTime();
+  return t("kiroQuotaStale").replace("{n}", String(Math.max(0, Math.round(ms / 60000))));
+}
+let kiroQuotaLast = null;
+let kiroQuotaSeq = 0;
+let kiroQuotaTimer = null;
+async function loadKiroQuota() {
+  const seq = ++kiroQuotaSeq;
+  clearTimeout(kiroQuotaTimer);
+  try {
+    const data = await api("/api/kiro/quota");
+    if (seq !== kiroQuotaSeq) return;
+    kiroQuotaLast = data;
+  } catch (e) {
+    if (seq !== kiroQuotaSeq) return;
+    kiroQuotaLast = { success: false, state: "network" };
+  }
+  if (seq !== kiroQuotaSeq || state.page !== "home" || state.channel !== "kiro") return;
+  renderKiroQuota(kiroQuotaLast);
+  if (kiroQuotaLast.state === "loading" || kiroQuotaLast.refreshing) {
+    kiroQuotaTimer = setTimeout(() => {
+      if (!document.hidden && state.page === "home" && state.channel === "kiro") loadKiroQuota();
+    }, 1000);
+  }
+}
+/* ② 分级提示: 失败按 state 给可操作文案; stale (接口失败但上次结果未过重置时间) 仍画进度条并标注时效 */
+function renderKiroQuota(data) {
+  const box = $("kiro-quota");
+  if (!box) return;
+  const head = $("kiro-quota-head");
+  const plan = $("kiro-plan");
+  const row = $("kiro-quota-cards");
+  box.hidden = false;
+  if (!data || !data.success) {
+    head.hidden = true;
+    const key = kiroQuotaStateKey(data && data.state);
+    row.innerHTML = `<div class="ub ${key === "kiroQuotaNoAuth" || key === "quotaNotReady" ? "ub-hint" : "ub-error"}">${escapeHtml(t(key))}</div>`;
+    return;
+  }
+  head.hidden = false;
+  plan.textContent = data.plan || "";
+  plan.hidden = !data.plan;
+  const used = Math.min(100, Math.max(0, Number(data.percent) || 0));
+  const meta = data.stale ? kiroStaleText(data) + " · " + t(kiroQuotaStateKey(data.state))
+    : data.reset_at_epoch === 0 ? "—" : zcodeResetCell(data.reset_in_sec);
+  row.innerHTML = `<div class="ub c-month">
+    <div class="ub-head"><span class="ub-l">${escapeHtml(t("kiroCredits"))}</span><span class="ub-rem">${data.percent == null ? "—" : used.toFixed(0) + "%"}</span></div>
+    <div class="ub-bar"><div class="ub-bar-fill" style="width:${used.toFixed(1)}%"></div></div>
+    <div class="ub-meta"><span>${escapeHtml(kiroQuotaUsedText(data))}</span><span>${escapeHtml(meta)}</span></div>
+    <div class="ub-meta">${escapeHtml(t("kiroQuotaScope"))}</div>
+  </div>`;
+}
+/* 首页 Kiro 页签 6 格: token 卡保留并显示 —, 让用户知道是"不提供"而不是漏了 */
+function kiroOverviewCards(totals) {
+  const avg = totals.avg_duration_ms == null ? "—" : t("kiroAvgTurn").replace("{d}", kiroDurText(totals.avg_duration_ms));
+  return [
+    { cls: "c-green", l: t("kiroCredits"), v: fmtCredits(totals.credits), s: t("currentRange") },
+    { cls: "c-blue", l: t("totalTokens"), v: "—", s: t("kiroTokensUnavailable") },
+    { cls: "c-slate", l: t("kiroApiRequests"), v: fmtInt(totals.request_count), s: t("currentRange") },
+    { cls: "c-amber", l: t("totalCost") + ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>`,
+      v: fmtOptionalMoney(totals.total_cost_usd), s: t("kiroCostHint") },
+    { cls: "c-cyan", l: t("kiroTurns"), v: fmtInt(totals.turn_count), s: avg },
+    { cls: "c-violet", l: t("sessions"), v: fmtInt(totals.session_count), s: t("dedup") },
+  ];
 }
 function renderZcodeQuota(data) {
   const box = $("zcode-quota");
@@ -1836,13 +1929,14 @@ function renderOverview(totals, source) {
   const isEst = ["bai", "zcode", "claudecode", "codex", "workbuddy"].includes(source)
     && (source !== "workbuddy" || totals.cost_available === true);   // 未知费用不挂估算徽章
   const isDsh = source === "dsh";
+  const isKiro = source === "kiro";
   /* T5 codex: 后端提供显式 total_tokens (缓存读/reasoning 是子项不二次相加),
      优先采用; 其余渠道无该键走原 input+output+reasoning 和式 (行为不变) */
   const totalTokens = totals.total_tokens != null ? totals.total_tokens
     : totals.total_input_tokens + totals.total_output_tokens + totals.total_reasoning_tokens;
   /* §3.5 DSH 六卡: 缓存命中率/平均输出 tok/s/总 token/步数/费用/会话数 —
      原重复的"缓存命中量"卡替换为速度, 命中量并入命中率副文案, 请求数占位卡移除 */
-  const cards = isDsh ? [
+  const cards = isKiro ? kiroOverviewCards(totals) : isDsh ? [
     { cls: "c-green", l: t("hitRate"), v: totals.hit_rate.toFixed(1) + "%", s: `${t("hit")} ${fmtTokens(totals.cache_hit_tokens)} · ${t("miss")} ${fmtTokens(totals.uncached_input_tokens)}` },
     { cls: "c-cyan", l: t("dshKpiAvgTps"), v: fmtTps(totals.avg_tps), s: t("currentRange") },
     { cls: "c-blue", l: t("totalTokens"), v: fmtTokens(totalTokens), s: `${t("input")} ${fmtTokens(totals.total_input_tokens)} · ${t("output")} ${fmtTokens(totals.total_output_tokens)}` },
@@ -2365,7 +2459,7 @@ function pollUntilIdle() {
       renderSyncBanner(st.progress, st.codex);
       renderSettingsSyncProgress(st.progress);
       // 账号同步与 Codex 后台导入都空闲才恢复按钮并刷新 (任一在跑继续等)
-      if (!st.progress.running && !(st.codex && st.codex.running)) {
+      if (!st.progress.running && !(st.codex && st.codex.running) && !st.kiro_running) {
         clearInterval(state.syncTimer); state.syncTimer = null;
         $("tb-refresh").disabled = false;
         $("btn-full-sync").disabled = false;
@@ -2854,7 +2948,7 @@ let loginPollTimer = null;
    与远程账号登录状态 (logged_in) 相互独立; 所有"无账号则回欢迎页"的
    判断统一走本函数, 不复制条件 */
 function canUseLocalCodex(st) {
-  return !!((st.codex && (st.codex.source_found || st.codex.has_data)) || st.dsh_found);
+  return !!((st.codex && (st.codex.source_found || st.codex.has_data)) || st.dsh_found || st.kiro_found);
 }
 function showLoginOverlay(show) {
   // 遮罩背景不透明, 直接显示即可覆盖页面; 不要隐藏 .app (会连同遮罩一起隐藏)
@@ -2890,7 +2984,7 @@ async function checkState() {
     showLoginOverlay(false);
     // 账号同步或 Codex 后台导入进行中: 轮询至空闲后统一刷新 (首次 source_found
     // 未导入完成时保持本地访问, 完成自动刷新)
-    if ((st.progress && st.progress.running) || (st.codex && st.codex.running)) pollUntilIdle();
+    if ((st.progress && st.progress.running) || (st.codex && st.codex.running) || st.kiro_running) pollUntilIdle();
     await loadDashboard();
   } catch (e) { console.error("state check failed", e); }
 }
@@ -3185,11 +3279,12 @@ async function loadReportAll(quiet = false, noAnim = false) {
   try {
     const range = state.range;                          // 局部快照防在途 state 漂移 (daily URL 与缓存键都用快照)
     const metric = state.reportMetric;
-    const [w, rows, ov, zq, daily, hourly, all] = await Promise.all([   // 三波并一波 (hourly 并入消除 today 档两段式弹入)
+    const [w, rows, ov, zq, kq, daily, hourly, all] = await Promise.all([   // 三波并一波 (hourly 并入消除 today 档两段式弹入)
       api(`/api/report/windows`),
       api(`/api/report/channels?range=${range}`),
       api(`/api/accounts/overview`),                    // R1: 摘要条数据并入同一并发 (T9 renderQuotaBar)
       api(`/api/zcode/quota`).catch(() => null),        // 问题5: ZCode 额度并入配额条, 失败不出卡
+      api(`/api/kiro/quota`).catch(() => null),         // Kiro 额度并入配额条, 失败不出卡 (原因在 kiro 页签展示)
       api(`/api/report/daily?range=${range}&metric=${metric}`),
       (range === "today" || range === "yesterday")      // 档位条件保留 (条件性 promise)
         ? api(`/api/report/hourly?date=${range}`)
@@ -3202,16 +3297,25 @@ async function loadReportAll(quiet = false, noAnim = false) {
     renderHomeDshStatus(w.dsh_status);                  // §3.4: 首页 all 消费 windows 顶层 dsh_status, 同一节奏刷新
     const costHint = $("report-cost-hint");             // metric=cost/requests 且含未覆盖渠道 → 不完整提示 (CH_LABEL 文案; 空已知集由图表空态兜底)
     if (costHint) {
-      const unavailable = metric === "tokens" ? [] : (Array.isArray(daily.unavailable_channels) ? daily.unavailable_channels : []);
+      // Kiro 接入: tokens 指标同样可能有不可用渠道 (kiro 无 token 口径), 不再对 tokens 硬编码空列表
+      const unavailable = Array.isArray(daily.unavailable_channels) ? daily.unavailable_channels : [];
       const hintKey = metric === "requests" ? "reportRequestsIncomplete" : "reportCostIncomplete";
+      const hintKeyFinal = metric === "tokens" ? "reportTokensIncomplete" : hintKey;
       const incomplete = unavailable.length > 0;
       costHint.hidden = !incomplete;
       if (incomplete) {
-        costHint.setAttribute("data-i18n", hintKey);
-        costHint.textContent = t(hintKey);
+        costHint.setAttribute("data-i18n", hintKeyFinal);
+        costHint.textContent = t(hintKeyFinal);
       }
     }
-    renderQuotaBar(ov.accounts, zq);
+    renderQuotaBar(ov.accounts, zq, kq);
+    if (rows.kiro_local && rows.kiro_local.running) pollUntilIdle();
+    clearTimeout(kiroQuotaTimer);
+    if (kq && (kq.state === "loading" || kq.refreshing)) {
+      kiroQuotaTimer = setTimeout(() => {
+        if (!document.hidden && state.page === "home" && state.channel === "all" && seq === allSeq) loadReportAll(true, true);
+      }, 1000);
+    }
     renderChannelTable(rows.rows, rows.summary);
     $("report-scope").textContent = t("scopeHint").replace("{n}", w.channel_count).replace("{m}", w.account_count);
     // 估算徽章: 仅 指标=费用 且 含估算渠道(bai/zcode/claudecode)时显示 (新R5 N24: 注释随 R6 est 集合更新)
@@ -3246,7 +3350,7 @@ async function loadReportAll(quiet = false, noAnim = false) {
   }
 }
 
-function renderQuotaBar(accounts, zdata = null) {
+function renderQuotaBar(accounts, zdata = null, kdata = null) {
   const byCh = {};
   for (const a of accounts) {
     (byCh[a.source] = byCh[a.source] || []).push(a);
@@ -3292,6 +3396,16 @@ function renderQuotaBar(accounts, zdata = null) {
       <div class="qb-head"><span class="qb-dot" style="background:${CH_COLOR["zcode"] || "#2563eb"}"></span><span class="qb-name" style="color:${CH_COLOR["zcode"] || "#2563eb"}">zcode</span>${zdata.level ? `<span class="zcode-badge">${escapeHtml(zcodeLevelText(zdata.level))}</span>` : ""}</div>
       <div class="qb-sub">${segs.join(" · ") || t("zcodeNoData")}</div>
       <div class="qb-foot">GLM Coding Plan</div>
+    </div>`);
+  }
+  if (kdata && kdata.success) {   // Kiro 额度 (本机 kiro-cli 凭据); 失败不出卡, 原因在 kiro 页签展示
+    const pct = Math.min(100, Math.max(0, Number(kdata.percent) || 0));
+    cards.push(`<div class="qb-card">
+      <div class="qb-head"><span class="qb-dot" style="background:${CH_COLOR["kiro"] || "#2563eb"}"></span><span class="qb-name" style="color:${CH_COLOR["kiro"] || "#2563eb"}">Kiro</span>${kdata.plan ? `<span class="zcode-badge">${escapeHtml(kdata.plan)}</span>` : ""}</div>
+      <div class="qb-bar"><div class="qb-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
+      <div class="qb-sub">${escapeHtml(kiroQuotaUsedText(kdata))} · <b>${kdata.percent == null ? "—" : pct.toFixed(0) + "%"}</b></div>
+      <div class="qb-foot">${escapeHtml(kdata.stale ? kiroStaleText(kdata) : kdata.reset_at_epoch === 0 ? "—" : zcodeResetCell(kdata.reset_in_sec))}</div>
+      <div class="qb-foot">${escapeHtml(t("kiroQuotaScope"))}</div>
     </div>`);
   }
   $("quota-bar").innerHTML = cards.join("");
@@ -3500,15 +3614,16 @@ function renderChannelTable(rows, summary) {
     : "";
   $("report-table").innerHTML = rows.map((r) => `<tr>
     <td style="color:${CH_COLOR[r.channel] || "#2563eb"}">${escapeHtml(CH_LABEL[r.channel] || r.channel)}${r.estimated ? ` <span class="est-badge" title="${t("estimateTip")}">${t("estimateBadge")}</span>` : ""}</td>
-    <td class="num">${fmtTokens(r.tokens)}</td><td class="num">${fmtTokens(r.input)}</td><td class="num">${fmtTokens(r.output)}</td>
-    <td class="num">${fmtTokens(r.cache_read)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshRequestsUnavailable") : fmtInt(r.requests)}</td><td class="num">${r.channel === "workbuddy"
+    <td class="num">${tokCell(r.tokens_available === false, r.tokens)}</td><td class="num">${tokCell(r.tokens_available === false, r.input)}</td><td class="num">${tokCell(r.tokens_available === false, r.output)}</td>
+    <td class="num">${tokCell(r.tokens_available === false, r.cache_read)}</td><td class="num">${r.channel === "dsh" ? dshUnavailableCell("dshRequestsUnavailable") : fmtInt(r.requests)}</td><td class="num">${r.channel === "workbuddy"
       ? (r.cost == null
          ? `— <span class="ts">${t("codexCostUnavailable")}</span>`
          : `${fmtOptionalMoney(r.cost)}`)
         + (r.credits == null ? "" : ` <span class="ts">(${Number(r.credits).toLocaleString(undefined, {maximumFractionDigits: 4})} ${t("workbuddyCredits")})</span>`)
         + ` <span class="ts">${t(r.local_only ? "wbLocalOnly" : "wbRemoteCreditsOnly")}</span>`
         + (r.local_only && r.cost_partial ? ` <span class="ts">${t("wbUnpricedModels")}</span>` : "")
-      : r.channel === "dsh" ? dshUnavailableCell("dshCostUnavailable") : fmtOptionalMoney(r.cost)}</td>
+      : r.channel === "dsh" ? dshUnavailableCell("dshCostUnavailable")
+      : fmtOptionalMoney(r.cost) + (r.channel === "kiro" && r.credits != null ? ` <span class="ts">(${fmtCredits(r.credits)} ${t("kiroCredits")})</span>` : "")}</td>
     <td>${escapeHtml(r.data_since || "—")}</td></tr>`).join("") + foot;
 }
 
@@ -3543,6 +3658,7 @@ function rerenderCharts() {
   if (!document.getElementById("page-home").hidden && !$("report-single").hidden && chTrendCache
     && chTrendCache.channel === state.channel && chTrendCache.range === state.range) {
     chartToday(chTrendCache.data, true);
+    if (chTrendCache.channel === "kiro") setChartEmpty("today-chart", "today-empty", "kiroTokensUnavailable");
   }
   // 总览页 7 日趋势
   if (!document.getElementById("page-overview").hidden && ovAccountsCache) chartOvTrend(ovAccountsCache, true);
