@@ -4603,6 +4603,22 @@ def _unified_arm_codex(inner: str) -> str:
     FROM {inner} x"""
 
 
+def _unified_arm_kiro(inner: str) -> str:
+    """kiro_usage 段: 一行 = 一个 user turn。token 类列恒 0 (上游不下发 token, 前端对
+    source=kiro 显示 —); 费用为 credits × 超额单价估算; 速度/首字无源数据 → NULL。"""
+    return f"""
+    SELECT 'kiro' AS source, NULL AS account_id,
+           'kiro:' || k.id AS source_record_id,
+           k.started_at AS started_at, k.model AS model, NULL AS provider_id,
+           k.session_id AS session_id, NULL AS key_id,
+           0 AS input_tokens, 0 AS output_tokens, 0 AS reasoning_tokens,
+           0 AS cache_read_tokens, 0 AS cache_write_tokens, 0 AS total_tokens,
+           k.duration_ms AS duration_ms, NULL AS speed_tps, NULL AS speed_source,
+           k.cost_raw / 1e8 AS cost_usd, 1 AS cost_available, 1 AS request_count_exact,
+           NULL AS ttft_ms
+    FROM {inner} k"""
+
+
 _UNIFIED_ARMS: tuple[_UnifiedArm, ...] = (
     _UnifiedArm(
         sources=("opencode", "bai", "commandcode"),
@@ -4640,6 +4656,15 @@ _UNIFIED_ARMS: tuple[_UnifiedArm, ...] = (
         source_pred=None,
         order_tie="id ASC",
         project=_unified_arm_codex,
+    ),
+    _UnifiedArm(
+        sources=("kiro",),
+        base="SELECT * FROM kiro_usage {where}",
+        time_col="started_at",
+        model_col="model",
+        source_pred=None,
+        order_tie="('kiro:' || id) ASC",
+        project=_unified_arm_kiro,
     ),
 )
 

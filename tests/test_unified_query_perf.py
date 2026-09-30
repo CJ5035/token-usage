@@ -244,13 +244,14 @@ def test_single_source_prunes_other_arms(unified_db, source):
     assert not [p for p in plan if "UNION ALL" in p or "COMPOUND QUERY" in p], plan
 
 
-def test_all_source_keeps_four_arms(unified_db):
-    """source='all' 必须仍覆盖四张表, 且确实是四段复合 (裁剪不能误伤全渠道口径)."""
+def test_all_source_keeps_five_arms(unified_db):
+    """source='all' 必须覆盖全部五张表, 且确实是五段复合 (裁剪不能误伤全渠道口径).
+    20260930 Kiro 接入新增 kiro_usage 段 (四段 → 五段)。"""
     sql, params = db._unified_source_sql("all")
-    for tbl in ("usage_records", "zcode_usage", "claudecode_usage", "codex_usage"):
+    for tbl in ("usage_records", "zcode_usage", "claudecode_usage", "codex_usage", "kiro_usage"):
         assert tbl in sql
     plan = plan_of(f"SELECT {db._UNIFIED_COLS} FROM ({sql})", params)
-    assert len([p for p in plan if "UNION ALL" in p]) == 3, plan
+    assert len([p for p in plan if "UNION ALL" in p]) == 4, plan
 
 
 def test_unknown_source_yields_empty_shape(unified_db):
