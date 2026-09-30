@@ -97,3 +97,14 @@ def wb_row(local_iso):
         row.update(overrides)
         return row
     return make
+
+
+@pytest.fixture(autouse=True)
+def isolate_kiro_sources(tmp_path, monkeypatch):
+    """默认把 Kiro 本机数据源指向本用例 tmp 下不存在的路径 (理由同
+    isolate_workbuddy_scan_root: 读取端点会触发后台导入)。需要真实目录的用例在
+    用例体内自行 monkeypatch 覆盖 (autouse 先于用例体执行)。"""
+    from app import kiro_local_api
+
+    monkeypatch.setattr(kiro_local_api, "KIRO_SESSIONS_DIR", tmp_path / "_no_kiro_sessions")
+    monkeypatch.setattr(kiro_local_api, "_last_import_at", None)
