@@ -32,9 +32,9 @@
 
 ## ✨ Features
 
-- **7 data sources in one place**
+- **9 data sources in one place**
   - Cloud accounts (built-in WebView login, auto sync): OpenCode Go · BAI (chat.b.ai) · CommandCode (commandcode.ai)
-  - Local CLIs / clients (no login needed, read-only): ZCode (GLM Coding Plan) · Claude Code · Codex · DSH
+  - Local CLIs / clients (no login needed, read-only): ZCode (GLM Coding Plan) · Claude Code · Codex · DSH · Kiro CLI
 - **All-channel report on the home page**: per-channel quota windows, stacked consumption trend, channel share donut, channel detail table; a single-channel view is also available with channel-specific quota and billing summary
 - **Quota monitoring**: OpenCode 5h / weekly / monthly, CommandCode 5h / weekly / monthly credits, GLM Coding Plan 5h / weekly / MCP monthly — progress bars, remaining % and reset countdown
 - **Usage stats (layered by source)**: source share bar (click a block to expand its source), token breakdown (input / output / reasoning / cache read / cache write / sessions), model usage donut + ranking, all-channel trend, per-source detail panels
@@ -95,6 +95,7 @@ Output: `dist\GoGauge.exe` (~38 MB, --noconsole, logo icon and tray support incl
 | Claude Code | Local (no login) | `~/.claude/projects` session JSONL (override via `CLAUDE_CONFIG_DIR`), assistant lines only |
 | Codex | Local (no login) | `GOUSAGE_CODEX_HOME` > `ZBAR_CODEX_HOME` > `~/.codex` `sessions` rollout logs |
 | DSH | Local (no login) | `~/.dsh/sessions` zstd session logs (merged into all-channel reports and the stats page) |
+| Kiro CLI | Local (no login) | `~/.kiro/sessions/cli/*.json` session metadata (credits per turn) + account quota via the local kiro-cli sign-in (`GetUsageLimits`). kiro-cli exposes no token counts, so token columns show `—`; cost is estimated as credits × $0.04 |
 
 ### Local Source Notes
 

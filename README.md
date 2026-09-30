@@ -32,9 +32,9 @@
 
 ## ✨ 功能
 
-- **7 大数据源聚合**
+- **9 大数据源聚合**
   - 云端账号（内置 WebView 登录，自动同步）：OpenCode Go · BAI (chat.b.ai) · CommandCode (commandcode.ai)
-  - 本机 CLI / 客户端（免登录，只读本地数据）：ZCode (GLM Coding Plan) · Claude Code · Codex · DSH
+  - 本机 CLI / 客户端（免登录，只读本地数据）：ZCode (GLM Coding Plan) · Claude Code · Codex · DSH · Kiro CLI
 - **首页全渠道报表**：各渠道配额窗口、分渠道消耗趋势、渠道占比环形图、渠道明细表；也可切到单渠道视图查看该渠道专属配额与账期汇总
 - **配额窗口监控**：OpenCode 5 小时 / 每周 / 每月、CommandCode 5 小时 / 每周 / 月度积分、GLM Coding Plan 5 小时 / 每周 / MCP 月度，进度条 + 剩余比例 + 重置倒计时
 - **用量统计（数据源分层）**：数据源占比条（点击色块展开对应数据源）、Token 构成（输入 / 输出 / 推理 / 缓存读 / 缓存写 / 会话）、模型用量环形图 + 排行、全渠道用量趋势、单数据源明细面板
@@ -95,6 +95,7 @@ build.bat
 | Claude Code | 本机（免登录） | `~/.claude/projects` 会话 JSONL（支持 `CLAUDE_CONFIG_DIR` 覆盖），只计 assistant 行 |
 | Codex | 本机（免登录） | `GOUSAGE_CODEX_HOME` > `ZBAR_CODEX_HOME` > `~/.codex` 的 `sessions` rollout 日志 |
 | DSH | 本机（免登录） | `~/.dsh/sessions` zstd 会话日志（并入全渠道报表与统计页） |
+| Kiro CLI | 本机（免登录） | `~/.kiro/sessions/cli/*.json` 会话元数据（按对话轮记 credits）+ kiro-cli 本机凭据查询账号额度（`GetUsageLimits`）。kiro-cli 不提供 token 数据，Token 列显示 `—`；费用按 credits × $0.04 估算 |
 
 ### 本机渠道说明
 
