@@ -189,6 +189,16 @@
           <table class="tbl"><thead><tr><th data-i18n="zcodeModel">模型</th><th class="num" data-i18n="totalRequests">请求</th><th class="num" data-i18n="workbuddyCredits">积分</th></tr></thead><tbody id="workbuddy-model-body"></tbody></table>
         </div>
       </div>
+      <div class="card zcode-stats kiro-stats" id="kiro-stats" hidden>
+        <div class="card-h"><h3 data-i18n="kiroStatsTitle">Kiro 本地用量</h3><span class="hint" data-i18n="kiroCostHint">费用按参考价估算（1 Credit ≈ $0.04），非实际扣费</span></div>
+        <div class="zcode-missing" id="kiro-missing" data-i18n="kiroStatsMissing" hidden>暂无 Kiro 用量数据</div>
+        <div class="zcode-missing" id="kiro-skipped" hidden></div>
+        <div class="zcode-missing" id="kiro-import-error" hidden></div>
+        <div class="kpi-row kpi5" id="kiro-kpis"></div>
+        <div id="kiro-tables">
+          <table class="tbl"><thead><tr><th data-i18n="zcodeModel">模型</th><th class="num" data-i18n="kiroTurns">对话轮数</th><th class="num" data-i18n="kiroApiRequests">API 请求</th><th class="num" data-i18n="kiroCredits">Credits</th><th class="num" data-i18n="colCost">费用</th></tr></thead><tbody id="kiro-model-body"></tbody></table>
+        </div>
+      </div>
       <section id="codex-stats" class="codex-stats" hidden>
         <div class="card-h"><h3 data-i18n="codexStatsTitle">Codex 本地用量</h3><span class="hint" data-i18n="codexCostHint">费用为按量价目估算值（订阅套餐实际不按此扣费），未收录定价的模型按 0 计算</span></div>
         <div id="codex-error" role="status" hidden></div>
@@ -229,6 +239,7 @@
         <div class="card-h"><h3 data-i18n="usageRecords">使用记录</h3>
           <div class="ph-right">
             <select id="rec-source-filter" class="select"></select>
+        <span class="hint" data-i18n="kiroRecordsCount">Kiro：行数与会话请求列均为对话轮数，不是 API 请求数</span>
             <select id="rec-model-filter" class="select"><option value=""><span data-i18n="allModels">全部模型</span></option></select>
             <span class="hint" id="rec-count"></span>
           </div>

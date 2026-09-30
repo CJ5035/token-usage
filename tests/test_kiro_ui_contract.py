@@ -143,3 +143,64 @@ def test_kiro_only_bypasses_login_overlay():
     assert(run(`canUseLocalCodex({logged_in:false, kiro_found:true})`), 'Kiro only must enter app');
     assert(!run(`canUseLocalCodex({logged_in:false, kiro_found:false})`), 'empty install');
     """)
+
+
+def test_stats_kiro_nodes_exist_without_i18n_title():
+    p = _nodes()
+    assert {"kiro-stats", "kiro-missing", "kiro-skipped", "kiro-kpis", "kiro-tables",
+            "kiro-model-body"} <= p.ids
+    assert {"kiroStatsTitle", "kiroCostHint", "kiroTurns", "kiroApiRequests", "kiroCredits"} <= p.keys
+    block = HTML[HTML.index('id="kiro-stats"'):HTML.index('id="codex-stats"')]
+    assert "data-i18n-title" not in block
+
+
+def test_stats_and_records_kiro_wiring():
+    assert 'api("/api/kiro/summary?range=" + encodeURIComponent(state.statsRange))' in JS
+    assert 'if (page === "stats") loadKiroSummary().catch(() => {});' in JS
+    assert "loadKiroSummary();  // Kiro 区块跟随 range 切换" in JS
+    assert "if (kiroSummaryLast) renderKiroSummary(kiroSummaryLast);" in JS
+    assert 'tokCell(r.source === "kiro", r.input_tokens)' in JS
+    assert 'tokCell(s.source === "kiro", s.total_input_tokens)' in JS
+
+
+def test_kiro_stats_panel_via_node():
+    _run_node(r"""
+    run(`renderKiroSummary({ found: false })`);
+    assert(elements['kiro-stats'].hidden === true, '未装 kiro-cli 不出区块');
+
+    run(`renderKiroSummary({ found: true, has_data: true, skipped: 2,
+        totals: { credits: 12.5, request_count: 7, turn_count: 2, session_count: 1, total_cost_usd: 0.5 },
+        models: [{ model: 'auto', turns: 1, requests: 3, credits: 2, cost: 0.08 },
+                 { model: 'claude-opus-5', turns: 1, requests: 4, credits: 10.5, cost: 0.42 }] })`);
+    assert(elements['kiro-stats'].hidden === false, 'panel shown');
+    assert(elements['kiro-missing'].hidden === true, 'missing hidden');
+    assert(elements['kiro-skipped'].hidden === false && elements['kiro-skipped'].textContent.includes('2'), 'skipped');
+    const body = elements['kiro-model-body'].innerHTML;
+    assert(body.includes('自动路由（实际模型未知）') && body.includes('claude-opus-5'), body);
+    assert(elements['kiro-kpis'].innerHTML.includes('12.5'), 'kpi credits');
+
+    run(`renderKiroSummary({ found: true, has_data: false, skipped: 0, totals: {}, models: [] })`);
+    assert(elements['kiro-missing'].hidden === false && elements['kiro-tables'].hidden === true, 'empty state');
+    assert(elements['kiro-skipped'].hidden === true, 'no skipped note');
+    """)
+
+
+def test_tok_cell_and_session_card_via_node():
+    _run_node(r"""
+    assert(run(`tokCell(true, 123)`).includes('—'), 'unavailable → —');
+    assert(!run(`tokCell(false, 123)`).includes('—'), 'available → number');
+    run(`renderSessionCard({ source: 'kiro', session_id: 's1', request_count: 3, request_count_exact: true,
+        total_tokens: 0, total_input_tokens: 0, total_output_tokens: 0, total_reasoning_tokens: 0,
+        cache_hit_tokens: 0, hit_rate: 0, speed_samples: 0, ttft_samples: 0 })`);
+    const g = elements['ses-card-grid'].innerHTML;
+    assert(!g.includes(run(`t("totalTokens")`) + " 0"), "must not claim zero tokens");
+    assert((g.match(/Kiro 不提供 Token 数据/g) || []).length >= 3, 'token 指标应说明不可得: ' + g);
+    """)
+
+def test_kiro_only_does_not_show_global_empty():
+    _run_node(r'''
+    for (const id of ['stats-total-cards','zcode-stats','dsh-stats','claudecode-stats','codex-stats']) $(id).hidden = true;
+    run(`renderKiroSummary({found:true, has_data:true, totals:{turn_count:1}, models:[]}); updateStatsEmptyState()`);
+    assert(elements['stats-empty'].hidden, 'Kiro data coexists with global empty');
+    ''')
+

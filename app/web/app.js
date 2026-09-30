@@ -152,7 +152,7 @@ const I18N = {
     dataSinceTip: "该渠道本地最早记录日期（历史覆盖起点），不随上方时间范围变化",
     unusedChannelsHint: "本范围无用量渠道：{chs}",
     noUsageToday: "今日暂无用量", noDataInRange: "该范围暂无数据",
-    cmpExcludesDsh: "涨跌比较未含 DSH", statsScopeHint: "主区仅统计 OpenCode 渠道用量；ZCode / Claude Code / DSH / Codex 本地用量见下方独立区块，且均跟随当前范围。",
+    cmpExcludesDsh: "涨跌比较未含 DSH", statsScopeHint: "主区仅统计 OpenCode 渠道用量；ZCode / Claude Code / DSH / Codex / Kiro 本地用量见下方独立区块，且均跟随当前范围。",
   },
   en: {
     syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh", themeToggle: "Toggle theme", themeSaveFailed: "Theme not saved, retrying", minimize: "Minimize", close: "Close", maximize: "Maximize", restore: "Restore",
@@ -301,7 +301,7 @@ const I18N = {
     dataSinceTip: "Earliest local record date of this channel (history coverage start), unaffected by the range selector",
     unusedChannelsHint: "No usage in this range: {chs}",
     noUsageToday: "No usage today", noDataInRange: "No data in this range",
-    cmpExcludesDsh: "Comparison excludes DSH", statsScopeHint: "Main section covers OpenCode channels only; the dedicated ZCode / Claude Code / DSH / Codex blocks below follow the selected range.",
+    cmpExcludesDsh: "Comparison excludes DSH", statsScopeHint: "Main section covers OpenCode channels only; the dedicated ZCode / Claude Code / DSH / Codex / Kiro blocks below follow the selected range.",
   },
 };
 let lang = "zh";
@@ -482,6 +482,8 @@ function applyLang(l) {
   else if (dshTransportError && dshTransportError.range === state.statsRange) renderDshTransportError();
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);
   if (codexSummaryLast) renderCodexSummary(codexSummaryLast);   // Codex 区块随语言即时重渲染 (复用已拉取数据)
+  if (kiroSummaryLast) renderKiroSummary(kiroSummaryLast);
+  if (kiroQuotaLast && state.page === "home" && state.channel === "kiro") renderKiroQuota(kiroQuotaLast);
   // Step 8a: 语言切换后, 首页 workbuddy/all 报表的动态积分/来源/费用文案由后端数据驱动,
   // 仅当报表已在显示时重取 (init 首次 applyLang homeReportShown=false 不发请求)
   if (state.page === "home" && homeReportShown
@@ -660,6 +662,7 @@ function applyCurrency(cur) {
   if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);  // ZCode 估算费用随货币即时换算
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);  // Claude Code 估算费用随货币即时换算
   if (codexSummaryLast) renderCodexSummary(codexSummaryLast);  // Codex 区块随货币/语言即时重渲染 (费用恒未知, 重渲保文案一致)
+  if (kiroSummaryLast) renderKiroSummary(kiroSummaryLast);  // Kiro 估算费用随货币即时换算
 }
 
 /* ---------------- 页面路由 ---------------- */
@@ -675,6 +678,7 @@ function switchPage(page) {
   if (page === "stats") loadDshUsage().catch(() => {});  // DSH 本地用量区块
   if (page === "stats") loadClaudecodeSummary().catch(() => {});  // Claude Code 本地用量区块
   if (page === "stats") loadWorkbuddySummary().catch(() => {});  // WorkBuddy 积分用量区块
+  if (page === "stats") loadKiroSummary().catch(() => {});  // Kiro 本地用量区块
   if (page === "stats") loadCodexSummary().catch(() => {});  // Codex 本地用量区块
   if (page === "overview") loadOverview().catch(() => {});
   if (page === "records") { loadSessions().catch(() => {}); loadRecords().catch(() => {}); }
@@ -1712,6 +1716,62 @@ function chartClaudecodeTrend(daily7, noAnim) {
 }
 
 
+/* ---------------- 统计页: Kiro 本地用量区块 ---------------- */
+/* 数据源 /api/kiro/summary?range=<statsRange>; found=false（既无会话目录也无已导入历史）时不出区块 */
+let kiroSummaryLast = null;
+let kiroSumSeq = 0;
+let kiroSummaryTimer = null;
+async function loadKiroSummary() {
+  clearTimeout(kiroSummaryTimer);
+  kiroSummaryTimer = null;
+  const seq = ++kiroSumSeq;
+  const box = $("kiro-stats");
+  if (!box) return;
+  try {
+    const data = await api("/api/kiro/summary?range=" + encodeURIComponent(state.statsRange));
+    if (seq !== kiroSumSeq) return;
+    kiroSummaryLast = data;
+    renderKiroSummary(data);
+    if (data.running && state.page === "stats") {
+      kiroSummaryTimer = setTimeout(() => {
+        if (!document.hidden && state.page === "stats") loadKiroSummary();
+      }, 1000);
+    }
+  } catch (e) {
+    if (seq === kiroSumSeq) { kiroSummaryLast = null; box.hidden = true; updateStatsEmptyState(); updateStatsScopeHint(); }
+  }
+}
+function kiroModelLabel(model) {
+  return !model || model === "auto" ? t("kiroAutoModel") : model;
+}
+function renderKiroSummary(data) {
+  const box = $("kiro-stats");
+  if (!box) return;
+  if (!data || data.found !== true) { box.hidden = true; updateStatsEmptyState(); updateStatsScopeHint(); return; }
+  kiroSummaryLast = data;
+  const totals = data.totals || {};
+  const has = data.has_data === true;
+  const skipped = Number(data.skipped) || 0;
+  box.hidden = false;
+  $("kiro-import-error").hidden = !data.error;
+  $("kiro-import-error").textContent = data.error ? t("loadFailed") + ": " + data.error : "";
+  $("kiro-missing").hidden = has;
+  $("kiro-kpis").hidden = !has;
+  $("kiro-tables").hidden = !has;
+  $("kiro-skipped").hidden = skipped === 0;
+  $("kiro-skipped").textContent = skipped ? t("kiroSkipped").replace("{n}", fmtInt(skipped)) : "";
+  $("kiro-kpis").innerHTML = [
+    ["c-green", t("kiroCredits"), fmtCredits(totals.credits)],
+    ["c-slate", t("kiroApiRequests"), fmtInt(totals.request_count)],
+    ["c-cyan", t("kiroTurns"), fmtInt(totals.turn_count)],
+    ["c-amber", t("totalCost"), fmtOptionalMoney(totals.total_cost_usd)],
+    ["c-violet", t("sessions"), fmtInt(totals.session_count)],
+  ].map(([cls, label, value]) => `<div class="card kpi ${cls}"><div class="kpi-l">${label}</div><div class="kpi-v">${value}</div></div>`).join("");
+  $("kiro-model-body").innerHTML = (data.models || []).map((m) => `<tr><td>${escapeHtml(kiroModelLabel(m.model))}</td><td class="num">${fmtInt(m.turns)}</td><td class="num">${fmtInt(m.requests)}</td><td class="num">${fmtCredits(m.credits)}</td><td class="num">${fmtOptionalMoney(m.cost)}</td></tr>`).join("");
+  updateStatsEmptyState();
+  updateStatsScopeHint();
+}
+
 /* ---------------- 统计页: WorkBuddy 积分用量区块 ---------------- */
 let workbuddySummaryLast = null;
 let workbuddySumSeq = 0;
@@ -2033,6 +2093,7 @@ function updateStatsScopeHint() {   // EVOLUTION-7: 主区全 0 且本地渠道�
   const localHas = ((zcT.total_input_tokens || 0) + (zcT.total_output_tokens || 0) + (zcT.total_reasoning_tokens || 0)) > 0 || (zcT.request_count || 0) > 0
     || (ccT.total_tokens || 0) > 0 || (ccT.request_count || 0) > 0
     || (coT.total_tokens || 0) > 0 || (coT.request_count || 0) > 0
+    || !!(kiroSummaryLast && kiroSummaryLast.has_data)
     || ((dshT.input || 0) + (dshT.output || 0)) > 0 || (dsh.sessions_count || 0) > 0;
   const show = mainEmpty && localHas;
   if (show) el.textContent = t("statsScopeHint");
@@ -2184,12 +2245,12 @@ async function loadSessions() {
           ? `<td title="${escapeHtml(s.session_id)}">${escapeHtml(shortId(s.session_id))}</td>`
           : `<td class="unassigned">${t("unassigned")}</td>`}
         <td>${fmtDateTime(s.last_at)}</td>
-        <td class="num">${fmtTokens(s.total_input_tokens)}</td>
-        <td class="num">${fmtTokens(s.total_output_tokens)}</td>
-        <td class="num">${fmtTokens(s.total_reasoning_tokens)}</td>
-        <td class="num">${fmtTokens(s.cache_write_tokens)}</td>
-        <td class="num">${fmtTokens(s.total_tokens != null ? s.total_tokens : s.total_input_tokens + s.total_output_tokens + s.total_reasoning_tokens)}</td>
-        <td class="num">${fmtInt(s.request_count)} / ${fmtTokens(s.total_tokens != null ? s.total_tokens : s.total_input_tokens + s.total_output_tokens + s.total_reasoning_tokens)}</td>
+        <td class="num">${tokCell(s.source === "kiro", s.total_input_tokens)}</td>
+        <td class="num">${tokCell(s.source === "kiro", s.total_output_tokens)}</td>
+        <td class="num">${tokCell(s.source === "kiro", s.total_reasoning_tokens)}</td>
+        <td class="num">${tokCell(s.source === "kiro", s.cache_write_tokens)}</td>
+        <td class="num">${tokCell(s.source === "kiro", s.total_tokens != null ? s.total_tokens : s.total_input_tokens + s.total_output_tokens + s.total_reasoning_tokens)}</td>
+        <td class="num">${fmtInt(s.request_count)} / ${tokCell(s.source === "kiro", s.total_tokens != null ? s.total_tokens : s.total_input_tokens + s.total_output_tokens + s.total_reasoning_tokens)}</td>
         <td class="num">${fmtTps(s.avg_tps)}</td>
         <td class="num">${fmtOptionalMoney(s.total_cost_usd)}</td></tr>`).join("");
       // 固定 7 行, 不足补空行
@@ -2229,20 +2290,23 @@ function renderSessionCard(s) {
   const rounds = s.request_count_exact === false
     ? `≥${fmtInt(s.request_count)}` : fmtInt(s.request_count);
   const hasTtft = (s.ttft_samples || 0) > 0 && s.avg_ttft_ms != null;
+  const tokNa = s.source === "kiro";   // Kiro 无 token 口径: 累计输入/输出/命中率显示 — 并说明原因
   const cards = [
     { l: t("sessionRounds"), v: rounds,
       s: s.request_count_exact === false
-        ? t("sessionAggregated") : `${t("totalTokens")} ${fmtTokens(s.total_tokens)}` },
+        ? t("sessionAggregated") : tokNa ? t("kiroTokensUnavailable")
+          : `${t("totalTokens")} ${fmtTokens(s.total_tokens)}` },
     { l: t("sessionOutSpeed"), v: s.avg_tps == null ? "—" : Number(s.avg_tps).toFixed(1) + " tok/s",
       s: `${t("sessionSamples")} ${fmtInt(s.speed_samples || 0)}/${fmtInt(s.request_count)}` },
     { l: t("sessionTtft"), v: hasTtft ? Math.round(Number(s.avg_ttft_ms)) + " ms" : "—",
       s: hasTtft ? `${t("sessionSamples")} ${fmtInt(s.ttft_samples)}/${fmtInt(s.request_count)}`
                  : t("ttftZcodeOnly") },
-    { l: t("sessionCumIn"), v: fmtTokens(s.total_input_tokens), s: t("inclCache") },
-    { l: t("sessionCumOut"), v: fmtTokens(s.total_output_tokens),
-      s: `${t("colReasoning")} ${fmtTokens(s.total_reasoning_tokens)}` },
-    { l: t("hitRate"), v: (Number(s.hit_rate) || 0).toFixed(1) + "%",
-      s: `${t("hitAmount")} ${fmtTokens(s.cache_hit_tokens)}` },
+    { l: t("sessionCumIn"), v: tokNa ? "—" : fmtTokens(s.total_input_tokens),
+      s: tokNa ? t("kiroTokensUnavailable") : t("inclCache") },
+    { l: t("sessionCumOut"), v: tokNa ? "—" : fmtTokens(s.total_output_tokens),
+      s: tokNa ? t("kiroTokensUnavailable") : `${t("colReasoning")} ${fmtTokens(s.total_reasoning_tokens)}` },
+    { l: t("hitRate"), v: tokNa ? "—" : (Number(s.hit_rate) || 0).toFixed(1) + "%",
+      s: tokNa ? t("kiroTokensUnavailable") : `${t("hitAmount")} ${fmtTokens(s.cache_hit_tokens)}` },
   ];
   $("ses-card-grid").innerHTML = cards.map((c) => `
     <div class="tc"><div class="tc-l">${c.l}</div><div class="tc-v">${c.v}</div><div class="tc-s">${c.s}</div></div>`).join("");
@@ -2298,6 +2362,7 @@ async function loadRecords() {
     if (!wantModels) q.set("with_models", "0");
     const data = await api(`/api/usage/records?${q}`);
     if (seq !== recSeq) return; // 丢弃过期响应 (快速切页/翻页时旧请求)
+    if (data.kiro_local && data.kiro_local.running) pollUntilIdle();
     recFilterKey = key;
     state.records.total = data.total;
     if (data.models) {   // with_models=0 时不下发, 保留现有下拉 DOM
@@ -2317,12 +2382,12 @@ async function loadRecords() {
         <td>${fmtDateTime(r.started_at || r.created_at)}</td>
         <td>${r.model ? `<span class="model-cell">${modelIcon(r.model)}${escapeHtml(r.model)}</span>` : escapeHtml(t("codexUnknownModel"))}</td>
         <td>${escapeHtml(r.provider_id || "—")}</td>
-        <td class="num">${fmtTokens(r.input_tokens)}</td>
-        <td class="num">${fmtTokens(r.output_tokens)}</td>
-        <td class="num">${fmtTokens(r.reasoning_tokens)}</td>
-        <td class="num">${fmtTokens(r.cache_read_tokens)}</td>
-        <td class="num">${fmtTokens(r.cache_write_tokens)}</td>
-        <td class="num">${fmtTokens(r.total_tokens)}</td>
+        <td class="num">${tokCell(r.source === "kiro", r.input_tokens)}</td>
+        <td class="num">${tokCell(r.source === "kiro", r.output_tokens)}</td>
+        <td class="num">${tokCell(r.source === "kiro", r.reasoning_tokens)}</td>
+        <td class="num">${tokCell(r.source === "kiro", r.cache_read_tokens)}</td>
+        <td class="num">${tokCell(r.source === "kiro", r.cache_write_tokens)}</td>
+        <td class="num">${tokCell(r.source === "kiro", r.total_tokens)}</td>
         <td class="num">${fmtTps(r.speed_tps)}</td>
         <td class="num">${fmtOptionalMoney(r.cost_usd)}</td></tr>`).join("");
       // 固定 7 行, 不足补空行
@@ -2383,7 +2448,7 @@ function updateStatsEmptyState() {
   const empty = $("stats-empty");
   if (!empty) return;
   const remoteHidden = $("stats-total-cards") ? $("stats-total-cards").hidden : true;
-  const allLocalHidden = ["zcode-stats", "dsh-stats", "claudecode-stats", "codex-stats"]
+  const allLocalHidden = ["zcode-stats", "dsh-stats", "claudecode-stats", "codex-stats", "kiro-stats"]
     .every((id) => { const el = $(id); return !el || el.hidden; });
   empty.hidden = !(remoteHidden && allLocalHidden);
 }
@@ -2469,6 +2534,7 @@ function pollUntilIdle() {
         if (state.page === "settings") renderSettings();
         if (state.page === "overview") loadOverview(true).catch(() => {});
         refreshCodexVisible();   // stats→loadCodexSummary / records→records+sessions (home 由上方 loadDashboard 覆盖)
+        if (state.page === "stats") loadKiroSummary().catch(() => {});
       }
     } catch (e) {
       // 拉取状态失败也释放按钮, 避免同步卡死无法手动刷新 (timer 保留, 下轮自愈)
@@ -3014,6 +3080,8 @@ function bindEvents() {
       return;
     }
     // Step 8a: 回到前台, home/workbuddy 或 home/all 视图重取一次 (导入若仍在跑, 响应会重新武装轮询)
+    if (state.page === "home" && state.channel === "kiro") loadDashboard(true, true);
+    if (state.page === "stats") loadKiroSummary().catch(() => {});
     if (state.page === "home" && (state.channel === "workbuddy" || state.channel === "all")) loadDashboard(true, true);
     if (state.page === "stats") loadDshUsage().catch(() => {});
     else if (state.page === "home" && (state.channel === "all" || state.channel === "dsh")) dshSchedulerTick("home");
@@ -3031,6 +3099,7 @@ function bindEvents() {
     loadClaudecodeSummary();  // Claude Code 区块跟随 range 切换
     loadCodexSummary();  // Codex 区块跟随 range 切换
     loadWorkbuddySummary();  // WorkBuddy 区块跟随 range 切换
+    loadKiroSummary();  // Kiro 区块跟随 range 切换
   }));
   $("mr-dim").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
