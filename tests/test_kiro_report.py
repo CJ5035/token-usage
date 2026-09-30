@@ -84,3 +84,18 @@ def test_kiro_is_estimated_local_channel_ordered_before_dsh():
 def test_zero_request_credit_keeps_cost(tmp_db, kiro_row):
     db.import_kiro_usage([kiro_row(request_count=0, credits=2.5)])
     assert db.report_windows('kiro')['today']['cost'] == 0.1
+
+
+def test_channel_row_zero_request_turns_keep_cost_available(tmp_db, kiro_row):
+    # 范围内每一轮都是 request_count=0 但 credits>0: 渠道行须与 _win_kiro / kiro_totals
+    # 一样按轮数判定, 不能把真实已知费用标成不可用 (与 report_channels 的通用 else 分支相反)。
+    db.import_kiro_usage([kiro_row(request_count=0, credits=2.5)])
+    k = {r["channel"]: r for r in db.report_channels("7d")}["kiro"]
+    assert k["requests"] == 0
+    assert k["cost"] == pytest.approx(0.10)
+    assert k["cost_available"] is True
+    assert k["request_count_exact"] is True
+    assert k["cost_partial"] is False
+    assert k["local_only"] is True
+    assert k["credits"] == pytest.approx(2.5)
+    assert db.kiro_totals("7d")["cost_available"] is True

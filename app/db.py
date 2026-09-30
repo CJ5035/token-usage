@@ -3136,9 +3136,9 @@ def _win_kiro(where: str, params: list[Any]) -> dict[str, Any]:
 
 
 def _win_merge(*rows: dict[str, Any]) -> dict[str, Any]:
-    """多来源窗口行合并 (简报固定形态): 费用只合计 requests>0 的已知小计;
-    空源不纳入 known; 有数据但费用未知 (如纯 Codex) → cost=NULL, 混合来源
-    保留其他来源已知小计并标 cost_partial, 不删除已估算费用。"""
+    """多来源窗口行合并 (简报固定形态): 费用只合计有用量的来源的已知小计 (Kiro 按
+    轮数判断用量, 其余来源按请求数); 空源不纳入 known; 有数据但费用未知 (如纯 Codex)
+    → cost=NULL, 混合来源保留其他来源已知小计并标 cost_partial, 不删除已估算费用。"""
     # Kiro 一轮可能没有 API 请求但仍有已知费用/真实零；以轮数判断是否存在用量。
     known = [r["cost"] for r in rows
              if r.get("turn_count", r["requests"]) > 0 and r["cost"] is not None]
@@ -3275,7 +3275,8 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
     """渠道明细表行 (R6 五渠道 + codex; dsh 今日行由 server 层并入 T6)。
 
     渠道行固定字段: channel/tokens/input/output/cache_read/cache_write/reasoning/
-    requests/cost/cost_available/cost_partial/request_count_exact/data_since/estimated。
+    requests/cost/cost_available/cost_partial/request_count_exact/data_since/
+    credits/tokens_available/estimated。
     NULL 不是 0: Codex 行 cost=null、cost_available=false、cost_partial=true、
     estimated=false; 当前范围无数据不出行 (历史 tab 仍由 list_channel_summary 保留)。
     """
@@ -3382,6 +3383,7 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
 
     def _channel_row(ch: str, a: dict[str, Any]) -> dict[str, Any]:
         requests = int(a["requests"] or 0)
+        local_only = a.get("local_only", False)
         if ch == "workbuddy":
             if a.get("cost") is None:
                 cost, cost_available, cost_partial = None, False, True
@@ -3397,6 +3399,15 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
             cost = (a["cost"] or 0.0) if cost_available else (None if requests else 0.0)
             cost_partial = not cost_available if requests else False
             exact = bool(a.get("request_count_exact"))
+        elif ch == "kiro":
+            # Kiro 一行 = 一个 user turn: 与 _win_kiro / kiro_totals 一致, 以轮数而非
+            # 请求数判断费用与请求数是否存在 (request_count=0 但 credits>0 的轮仍有
+            # 真实已知费用); 数据源为本机 sidecar 文件, 无账号概念。
+            turns = int(a.get("turns") or 0)
+            cost = a["cost"] or 0.0
+            cost_available, cost_partial = turns > 0, False
+            exact = turns > 0
+            local_only = True
         else:
             cost = a["cost"] or 0.0
             cost_available, cost_partial = requests > 0, False
@@ -3409,7 +3420,7 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
                 "request_count_exact": exact,
                 "data_since": a.get("wb_data_since") if ch == "workbuddy" else since.get(ch),
                 "credits": a.get("credits") if ch in ("workbuddy", "kiro") else None,
-                "local_only": a.get("local_only", False),
+                "local_only": local_only,
                 "tokens_available": ch != "kiro",   # Kiro 上游不下发 token: 0 表示不可得, 前端显示 —
                 "unpriced_requests": int(a.get("unpriced_requests") or 0) if ch == "workbuddy" else 0,
                 "estimated": ch in _LOCAL_EST_CHANNELS
