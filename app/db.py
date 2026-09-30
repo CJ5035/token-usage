@@ -2781,8 +2781,8 @@ def claudecode_last_import_at() -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 _REPORT_RANGE_DAYS = {"7d": 6, "30d": 29}  # 自然日窗口: 含今天共 N 天
-_CHANNEL_ORDER = ["opencode", "bai", "commandcode", "zcode", "claudecode", "workbuddy", "dsh"]
-_LOCAL_EST_CHANNELS = {"bai", "zcode", "claudecode", "codex", "workbuddy"}  # 费用为估算的渠道 (spec v6 est-badge)
+_CHANNEL_ORDER = ["opencode", "bai", "commandcode", "zcode", "claudecode", "workbuddy", "kiro", "dsh"]
+_LOCAL_EST_CHANNELS = {"bai", "zcode", "claudecode", "codex", "workbuddy", "kiro"}  # 费用为估算的渠道 (spec v6 est-badge)
 
 
 def _local_day_utc_start(d) -> str:
@@ -2831,10 +2831,13 @@ def _report_metric_exprs(metric: str) -> dict[str, str]:
     if metric == "cost":
         return {"records": "SUM(r.cost_usd)", "zcode": "SUM(z.cost_raw)/1e8",
                 "claudecode": "SUM(c.cost_raw)/1e8",
-                "workbuddy": "SUM(wl.cost_raw)/1e8"}
+                "workbuddy": "SUM(wl.cost_raw)/1e8",
+                "kiro": "SUM(k.cost_raw)/1e8"}
     if metric == "requests":
+        # kiro 一行是一个 user turn, 请求数取 turn 内 API 请求数之和而非 COUNT(*)
         return {"records": "COUNT(*)", "zcode": "COUNT(*)", "claudecode": "COUNT(*)",
-                "codex": "COUNT(*)", "workbuddy": "COUNT(*)"}
+                "codex": "COUNT(*)", "workbuddy": "COUNT(*)",
+                "kiro": "SUM(k.request_count)"}
     return {"records": "SUM(r.input_tokens + r.output_tokens + r.reasoning_tokens)",
             "zcode": "SUM(z.input_tokens + z.output_tokens + z.reasoning_tokens)",
             "claudecode": "SUM(c.input_tokens + c.output_tokens)",
@@ -2863,6 +2866,15 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
     include_cc = channel is None or channel == "claudecode"
     include_wb = channel is None or channel == "workbuddy"
     include_codex = metric != "cost" and (channel is None or channel == "codex")
+    # Kiro 无 token 口径: 只在 cost/requests 指标出 series (非法 metric 由
+    # _report_metric_exprs 回落 tokens 表达式, 其中没有 kiro 键, 必须同样排除);
+    # tokens 指标下范围内有数据时标为不可用渠道
+    include_kiro = metric in ("cost", "requests") and (channel is None or channel == "kiro")
+    if metric == "tokens" and channel in (None, "kiro") and "kiro" not in unavailable:
+        k_sql, k_params = _report_range_sql(range_, "k.started_at")
+        if get_db().execute(f"SELECT 1 FROM kiro_usage k WHERE {k_sql} LIMIT 1",
+                            k_params).fetchone():
+            unavailable.append("kiro")
     segs: list[str] = []
     params: list[Any] = []
     if include_records:
@@ -2913,6 +2925,13 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
         segs.append(
             f"SELECT substr(datetime(x.started_at,'localtime'),1,10) AS b, 'codex' AS ch,"
             f" {exprs['codex']} AS v FROM codex_usage x"
+            f" WHERE {range_sql} GROUP BY b")
+        params.extend(range_params)
+    if include_kiro:
+        range_sql, range_params = _report_range_sql(range_, "k.started_at")
+        segs.append(
+            f"SELECT substr(datetime(k.started_at,'localtime'),1,10) AS b, 'kiro' AS ch,"
+            f" {exprs['kiro']} AS v FROM kiro_usage k"
             f" WHERE {range_sql} GROUP BY b")
         params.extend(range_params)
     raw_rows: list[tuple[str, str, Any]] = []
@@ -3096,12 +3115,34 @@ def _win_codex(where: str, params: list[Any]) -> dict[str, Any]:
             "request_count_exact": bool(row["exact"])}
 
 
+def _win_kiro(where: str, params: list[Any]) -> dict[str, Any]:
+    """kiro_usage 窗口行 (表别名 k): 无 token 口径, token 类恒 0; requests = Σ 每 turn
+    的 API 请求数; 费用 = credits × 超额单价估算 (cost_raw, 1e-8 USD)。"""
+    row = get_db().execute(
+        "SELECT COUNT(*) turns, COALESCE(SUM(k.request_count), 0) requests,"
+        " COALESCE(SUM(k.cost_raw), 0) / 1e8 cost"
+        " FROM kiro_usage k WHERE " + where,
+        params,
+    ).fetchone()
+    requests = int(row["requests"] or 0)
+    turns = int(row["turns"] or 0)
+    return {"turn_count": turns, "tokens": 0, "input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
+            "cache_write_tokens": 0, "reasoning_tokens": 0,
+            "requests": requests,
+            "cost": float(row["cost"] or 0.0),
+            "cost_available": turns > 0,
+            "cost_partial": False,
+            "request_count_exact": turns > 0}
+
+
 def _win_merge(*rows: dict[str, Any]) -> dict[str, Any]:
     """多来源窗口行合并 (简报固定形态): 费用只合计 requests>0 的已知小计;
     空源不纳入 known; 有数据但费用未知 (如纯 Codex) → cost=NULL, 混合来源
     保留其他来源已知小计并标 cost_partial, 不删除已估算费用。"""
-    known = [r["cost"] for r in rows if r["requests"] > 0 and r["cost"] is not None]
-    has_usage = any(r["requests"] > 0 for r in rows)
+    # Kiro 一轮可能没有 API 请求但仍有已知费用/真实零；以轮数判断是否存在用量。
+    known = [r["cost"] for r in rows
+             if r.get("turn_count", r["requests"]) > 0 and r["cost"] is not None]
+    has_usage = any(r.get("turn_count", r["requests"]) > 0 for r in rows)
     out = {
         "tokens": sum(r["tokens"] for r in rows),
         "input_tokens": sum(r["input_tokens"] for r in rows),
@@ -3114,7 +3155,7 @@ def _win_merge(*rows: dict[str, Any]) -> dict[str, Any]:
         "cost_available": any(r.get("cost_available", False) for r in rows),
         "cost_partial": any(r.get("cost_partial", False) for r in rows),
         "request_count_exact": has_usage and all(
-            r.get("request_count_exact", False) for r in rows if r["requests"] > 0),
+            r.get("request_count_exact", False) for r in rows if r.get("turn_count", r["requests"]) > 0),
     }
     return out
 
@@ -3156,12 +3197,14 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
         xw, xp = local_where(range_, "started_at", same_time)
         wlw, wlp = local_where(range_, "wl.started_at", same_time)
         wb = _win_wb(wlw, wlp) if (not channel or channel == "workbuddy") else dict(_WIN_ZERO)
+        kw, kp = local_where(range_, "k.started_at", same_time)
         return _win_merge(
             _win_records(rw, rp),
             _win_zcode(zw, zp) if not channel or channel == "zcode" else dict(_WIN_ZERO),
             _win_cc(cw, cp) if not channel or channel == "claudecode" else dict(_WIN_ZERO),
             _win_codex(xw, xp) if not channel or channel == "codex" else dict(_WIN_ZERO),
             wb,
+            _win_kiro(kw, kp) if not channel or channel == "kiro" else dict(_WIN_ZERO),
         )
 
     windows = {
@@ -3186,6 +3229,7 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
         _win_cc(*same7_where("c.started_at")) if not channel or channel == "claudecode" else dict(_WIN_ZERO),
         _win_codex(*same7_where("started_at")) if not channel or channel == "codex" else dict(_WIN_ZERO),
         _win_wb(*same7_where("wl.started_at")) if not channel or channel == "workbuddy" else dict(_WIN_ZERO),
+        _win_kiro(*same7_where("k.started_at")) if not channel or channel == "kiro" else dict(_WIN_ZERO),
     )
     early = _dt.datetime.now().hour < 1
     insufficient = early or same_y["requests"] < 5
@@ -3209,7 +3253,8 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
     for tbl, ch, ts in (("zcode_usage z", "zcode", "z.started_at"),
                         ("claudecode_usage c", "claudecode", "c.started_at"),
                         ("codex_usage", "codex", "started_at"),
-                        ("workbuddy_local_usage wl", "workbuddy", "wl.started_at")):
+                        ("workbuddy_local_usage wl", "workbuddy", "wl.started_at"),
+                        ("kiro_usage k", "kiro", "k.started_at")):
         if channel and channel != ch:
             continue
         r = get_db().execute(
@@ -3309,6 +3354,17 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
     ).fetchone()
     if r and ((r["tokens"] or 0) or (r["requests"] or 0)):
         agg["codex"] = dict(r)
+    # Kiro 行: 上游不下发 token, token 类列恒 0 且 tokens_available=False (见 _channel_row)
+    range_sql, range_params = _report_range_sql(range_, "k.started_at")
+    r = get_db().execute(
+        "SELECT 0 tokens, 0 input, 0 output, 0 cache_read, 0 cache_write, 0 reasoning,"
+        " COALESCE(SUM(k.request_count), 0) requests, COALESCE(SUM(k.cost_raw), 0) / 1e8 cost,"
+        " COALESCE(SUM(k.credits), 0) credits, COUNT(*) turns"
+        f" FROM kiro_usage k WHERE {range_sql}",
+        range_params,
+    ).fetchone()
+    if r and (r["turns"] or 0):
+        agg["kiro"] = dict(r)
     since = {r["ch"]: r["oldest"] for r in get_db().execute(
         "SELECT a.source ch, MIN(substr(s.oldest_record_at,1,10)) oldest"
         " FROM accounts a LEFT JOIN usage_sync_state s ON s.account_id = a.id"
@@ -3316,7 +3372,8 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
     ).fetchall()}
     for ch, ts, table in (("zcode", "z.started_at", "zcode_usage z"),
                           ("claudecode", "c.started_at", "claudecode_usage c"),
-                          ("codex", "started_at", "codex_usage")):   # 新R8 N29b: 同 N29, FROM 带别名
+                          ("codex", "started_at", "codex_usage"),   # 新R8 N29b: 同 N29, FROM 带别名
+                          ("kiro", "k.started_at", "kiro_usage k")):
         r = get_db().execute(f"SELECT MIN(substr({ts},1,10)) oldest FROM {table}").fetchone()
         if r["oldest"]:
             since[ch] = r["oldest"]
@@ -3351,8 +3408,9 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
                 "cost_available": cost_available, "cost_partial": cost_partial,
                 "request_count_exact": exact,
                 "data_since": a.get("wb_data_since") if ch == "workbuddy" else since.get(ch),
-                "credits": a.get("credits") if ch == "workbuddy" else None,
+                "credits": a.get("credits") if ch in ("workbuddy", "kiro") else None,
                 "local_only": a.get("local_only", False),
+                "tokens_available": ch != "kiro",   # Kiro 上游不下发 token: 0 表示不可得, 前端显示 —
                 "unpriced_requests": int(a.get("unpriced_requests") or 0) if ch == "workbuddy" else 0,
                 "estimated": ch in _LOCAL_EST_CHANNELS
                              and (ch != "workbuddy" or cost is not None)}
@@ -3374,6 +3432,9 @@ def list_channel_summary() -> list[dict[str, Any]]:
         has_wb = get_db().execute("SELECT 1 FROM workbuddy_local_usage LIMIT 1").fetchone()
         if has_wb:
             m["workbuddy"] = {"accounts": 0, "_at": ""}
+    # Kiro 本地渠道: 有数据才出页签 (accounts=0, 无账号概念)
+    if "kiro" not in m and get_db().execute("SELECT 1 FROM kiro_usage LIMIT 1").fetchone():
+        m["kiro"] = {"accounts": 0, "_at": ""}
     fixed = [c for c in _CHANNEL_ORDER if c != "dsh" and (c in m or c in ("zcode", "claudecode"))]
     extra = sorted((c for c in m if c not in _CHANNEL_ORDER), key=lambda c: m[c]["_at"] or "")
     # 新R8 N31: m 值为 {accounts,_at} dict, 必须取 ["accounts"]; 原写法 m.get(c,1) 返回整个 dict
@@ -3634,6 +3695,8 @@ def channel_totals(range_: str, channel: str) -> dict[str, Any]:
         return _totals_from_row(row)
     if channel == "workbuddy":
         return workbuddy_local_totals(range_)
+    if channel == "kiro":
+        return kiro_totals(range_)
     range_sql, range_params = _report_range_sql(range_, "r.created_at")
     row = get_db().execute(
         f"SELECT COUNT(*) request_count,"
@@ -3660,8 +3723,8 @@ def channel_trend(date_: str = "today", channel: str = "opencode") -> list[dict[
     total 用原生 SUM(total_tokens), 其余来源 total=in+out+reason;
     旧 input/output 键保留兼容。
     """
-    if channel == "dsh":
-        return []                                               # R6: dsh 无历史
+    if channel in ("dsh", "kiro"):
+        return []                                               # R6: dsh 无历史; kiro 无 token 口径
     src = channel if channel in ("zcode", "claudecode", "codex", "workbuddy") else "records"
     al = {"zcode": "z", "claudecode": "c", "codex": "x", "workbuddy": "wl"}.get(src, "r")
     ts = "r.created_at" if src == "records" else f"{al}.started_at"
@@ -3724,6 +3787,7 @@ def report_totals(range_: str) -> dict[str, Any]:
         _win_cc(*_report_range_sql(range_, "c.started_at")),
         codex,
         wb,
+        _win_kiro(*_report_range_sql(range_, "k.started_at")),
     )
     cost = merged["cost"]
     cost_unavail = []
