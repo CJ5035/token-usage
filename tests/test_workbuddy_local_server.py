@@ -107,6 +107,10 @@ def isolate_server_tests(tmp_path, monkeypatch):
 def test_read_entry_points_trigger_workbuddy_import(tmp_db, monkeypatch, route, query):
     calls = []
     monkeypatch.setattr(server, "workbuddy_import_async", lambda: calls.append(1))
+    # 全渠道路由同时触发 Codex / Kiro 导入: 必须屏蔽, 否则真实后台线程会在 tmp_db
+    # 关闭共享连接后继续查询, 触发 access violation 使整个 pytest 进程崩溃
+    monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
+    monkeypatch.setattr(server, "_maybe_trigger_kiro_import", lambda: None)
     monkeypatch.setattr(server.dsh_api, "get_dsh_summary", lambda *args: {"found": False})
     monkeypatch.setattr(server.dsh_api, "get_dsh_summaries", lambda *args: {r: {"found": False} for r in args})
     _call_api(monkeypatch, route, query)

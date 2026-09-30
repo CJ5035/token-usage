@@ -370,6 +370,9 @@ def api_call(monkeypatch):
     monkeypatch.setattr(server, "_ensure_quota_async", lambda *a, **k: None)
     monkeypatch.setattr(server, "_fetch_usd_cny", lambda: 7.2)
     monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
+    # 此夹具验证查询参数，不让导入线程在两次调用之间改变运行状态。
+    monkeypatch.setattr(server, "_maybe_trigger_kiro_import", lambda: None)
+    monkeypatch.setattr(server, "_kiro_import_running", False)
 
     def call(url: str, method: str = "GET") -> dict:
         captured.clear()

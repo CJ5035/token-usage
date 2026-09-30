@@ -20,6 +20,8 @@ from . import claudecode_api
 from . import codex_api
 from . import commandcode_api
 from . import dsh_api
+from . import kiro_api
+from . import kiro_local_api
 from . import zcode_api
 from . import workbuddy_api
 from . import workbuddy_local_api
@@ -1440,6 +1442,86 @@ def _maybe_trigger_workbuddy_import() -> None:
     workbuddy_import_async()
 
 
+# ---------------------------------------------------------------------------
+# Kiro CLI 本地用量增量导入 (与 workbuddy 同构: 同步函数 / 单飞后台 / 读取端点防抖)
+# ---------------------------------------------------------------------------
+_kiro_import_lock = threading.Lock()   # 防 Kiro 本地导入自身重入
+_KIRO_IMPORT_DEBOUNCE = 60.0           # 读取端点触发导入的防抖窗口 (秒)
+_kiro_last_import_trigger: Optional[float] = None
+_kiro_sync_error = ""                  # 最近一次采集错误文案 (空串 = 无错)
+_kiro_import_running = False
+_kiro_trigger_lock = threading.Lock()  # 防抖判定与置位需要原子化
+
+
+def _sync_kiro_local(force: bool = False) -> int:
+    """读签名快照 → 采集变更侧车 → 逐批导入 + 写签名; 返回新增行数, 异常不外抛。
+    调用方负责拿 _kiro_import_lock (本函数不碰任何锁)。行落库与签名写入两步提交,
+    中途崩溃则下次重读该文件, 由 dedupe_key 幂等兜底。"""
+    global _kiro_sync_error
+    if not kiro_local_api.sessions_dir_exists():
+        # 本机没有 kiro-cli 会话目录: 直接返回, 不碰数据库 (未安装 kiro-cli 的机器上
+        # 读取端点每分钟触发一次, 这里短路省掉一次无意义的查询)
+        _kiro_sync_error = ""
+        return 0
+    try:
+        progress = db.get_kiro_file_progress_all()
+        batches = kiro_local_api.import_incremental(progress, force=force)
+        inserted = 0
+        for batch in batches:
+            inserted += db.import_kiro_usage(batch["rows"])
+            db.save_kiro_file_progress(batch["path"], batch["mtime_ns"],
+                                       batch["size"], batch["skipped"])
+        _kiro_sync_error = ""
+        return inserted
+    except Exception as exc:  # noqa: BLE001 失败只记文案, 不影响其他渠道
+        _kiro_sync_error = str(exc)
+        return 0
+
+
+def kiro_import_async() -> None:
+    """非阻塞单飞后台导入; 运行状态在启动前置位、finally 清理。"""
+    global _kiro_import_running
+    if not kiro_local_api.sessions_dir_exists():
+        return  # 没有数据源不创建短命线程，也不产生无意义的 running 抖动
+    if not _kiro_import_lock.acquire(blocking=False):
+        return
+    _kiro_import_running = True
+
+    def worker() -> None:
+        global _kiro_import_running
+        try:
+            _sync_kiro_local()
+        finally:
+            _kiro_import_running = False
+            _kiro_import_lock.release()
+    try:
+        threading.Thread(target=worker, daemon=True, name="gousage-kiro-import").start()
+    except Exception:
+        _kiro_import_running = False
+        _kiro_import_lock.release()
+        raise
+
+
+def _maybe_trigger_kiro_import() -> None:
+    """读取端点按需增量; 单调时钟 + 锁保护防抖。"""
+    global _kiro_last_import_trigger
+    now = time.monotonic()
+    with _kiro_trigger_lock:
+        if (_kiro_last_import_trigger is not None
+                and now - _kiro_last_import_trigger <= _KIRO_IMPORT_DEBOUNCE):
+            return
+        _kiro_last_import_trigger = now
+    kiro_import_async()
+
+
+def _kiro_summary_payload(range_param: str) -> dict[str, Any]:
+    """GET /api/kiro/summary: found=侧车目录存在或镜像已有历史（源目录删除仍展示历史）。"""
+    summary = db.kiro_summary(range_param)
+    return {"found": kiro_local_api.sessions_dir_exists() or summary["data_since"] is not None,
+            "running": _kiro_import_running, "error": _kiro_sync_error,
+            **summary}
+
+
 def _claudecode_summary_payload(range_param: str) -> dict[str, Any]:
     """GET /api/claudecode/summary 数据组装 (纯函数, 便于测试).
 
@@ -1484,6 +1566,10 @@ def _claudecode_summary_payload(range_param: str) -> dict[str, Any]:
 
 # summary/dashboard scope=all 合法范围白名单 (需求 §4); 非法值回落端点默认
 _RANGE_WHITELIST = ("today", "yesterday", "7d", "30d", "all")
+# /api/usage/records 与 /api/usage/sessions 的 source 白名单: all + 统一记录源各段
+# (db._UNIFIED_ARMS) 的 source; tests/test_channel_registry.py 钉住两者一致
+_UNIFIED_SOURCES = frozenset({"all", "opencode", "bai", "commandcode", "zcode",
+                              "claudecode", "codex", "kiro"})
 
 
 def _maybe_trigger_codex_import() -> None:
@@ -1646,8 +1732,12 @@ def _report_windows_response(channel: Optional[str]) -> dict[str, Any]:
 def _report_channels_response(range_: str) -> dict[str, Any]:
     """GET /api/report/channels with DSH range totals and source status."""
     wb_running = _wb_import_running
+    kiro_running = _kiro_import_running  # 查询前快照，避免完成竞争导致不再重取
     rows = db.report_channels(range_)
     summary = db.list_channel_summary()
+    if (not any(x["channel"] == "kiro" for x in summary)
+            and (kiro_local_api.sessions_dir_exists() or kiro_api.read_credentials() is not None)):
+        summary.append({"channel": "kiro", "accounts": 0})
     dsh = dsh_api.get_dsh_summary(range_)
     if dsh.get("found"):
         totals = dsh["totals"]
@@ -1662,6 +1752,7 @@ def _report_channels_response(range_: str) -> dict[str, Any]:
                          "estimated": False})
         summary.append({"channel": "dsh", "accounts": 0})
     return {"rows": rows, "summary": summary, "dsh_status": _dsh_status(dsh),
+            "kiro_local": {"running": kiro_running, "error": _kiro_sync_error},
             "workbuddy_local": {"running": wb_running, "error": _wb_sync_error}}
 
 
@@ -1855,6 +1946,10 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
                 "datadir": db.data_dir(),
                 "codex": _codex_state_snapshot(),   # T7 登录遮罩分离消费
                 "dsh_found": dsh_found,
+                "kiro_found": (kiro_local_api.sessions_dir_exists()
+                               or db.kiro_last_import_at() is not None
+                               or kiro_api.read_credentials() is not None),
+                "kiro_running": _kiro_import_running,
                 # 欢迎页"不再提示": 前端显隐判断走 state, 不依赖 settings 缓存时序
                 "skip_welcome": db.get_settings().get("skip_welcome") is True,
             },
@@ -1976,6 +2071,14 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         if range_param not in _RANGE_WHITELIST:
             range_param = "30d"
         _json_response(handler, db.workbuddy_summary(range_param))
+        return
+
+    if route == "/api/kiro/summary" and method == "GET":
+        _maybe_trigger_kiro_import()
+        range_param = query.get("range", ["30d"])[0]
+        if range_param not in _RANGE_WHITELIST:
+            range_param = "30d"
+        _json_response(handler, _kiro_summary_payload(range_param))
         return
 
     if route == "/api/dsh/usage" and method == "GET":
@@ -2129,8 +2232,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             days = None
         # T6: 显式 source 走四表统一查询; 缺省保持旧函数旧行为 (API 兼容)
         source = query.get("source", [None])[0]
-        if source is not None and source not in {
-                "all", "opencode", "bai", "commandcode", "zcode", "claudecode", "codex"}:
+        if source is not None and source not in _UNIFIED_SOURCES:
             _json_response(handler, {"error": "invalid source"}, 400)
             return
         # 单会话下钻: group_id 只有统一查询路径认识 (legacy 的 usage_records_page 只查
@@ -2142,9 +2244,12 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             return
         if source in ("codex", "all"):   # 统一路由属 Codex 触发点 (防抖, 不等待)
             _maybe_trigger_codex_import()
+        if source in ("kiro", "all"):
+            _maybe_trigger_kiro_import()
         # 翻页不重取模型下拉: DISTINCT model 要扫全部命中行 (实测 21-24ms), 而模型
         # 列表几乎不变。前端只在筛选键变化时请求, 纯翻页带 with_models=0。
         # 只认显式 "0" 关闭, 其它取值 (含垃圾值) 一律保持旧行为, 不引入新的 400。
+        kiro_running = _kiro_import_running
         with_models = query.get("with_models", ["1"])[0] != "0"
         key_names = db.get_key_names()
         if source is None:
@@ -2171,6 +2276,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             "page_size": page_size,
             "filter": filter_info,
         }
+        if source in ("kiro", "all"):
+            payload["kiro_local"] = {"running": kiro_running, "error": _kiro_sync_error}
         if models is not None:
             payload["models"] = models
         _json_response(handler, payload)
@@ -2182,6 +2289,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             _maybe_trigger_codex_import()
         if channel in (None, "workbuddy"):
             _maybe_trigger_workbuddy_import()
+        if channel in (None, "kiro"):
+            _maybe_trigger_kiro_import()
         _json_response(handler, _report_windows_response(channel))
         return
 
@@ -2195,6 +2304,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             _maybe_trigger_codex_import()
         if channel in (None, "workbuddy"):
             _maybe_trigger_workbuddy_import()
+        if channel in (None, "kiro"):
+            _maybe_trigger_kiro_import()
         wb_running = _wb_import_running
         dsh = None
         extra_rows: list[dict[str, Any]] = []
@@ -2223,6 +2334,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             _maybe_trigger_codex_import()
         if channel in (None, "workbuddy"):
             _maybe_trigger_workbuddy_import()
+        if channel in (None, "kiro"):
+            _maybe_trigger_kiro_import()
         wb_running = _wb_import_running
         payload = db.report_hourly(date_, channel)
         if channel in (None, "dsh"):
@@ -2239,6 +2352,7 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
         range_ = range_ if range_ in ("today", "yesterday", "7d", "30d", "all") else "7d"
         _maybe_trigger_codex_import()   # 全渠道明细必然含 codex
         _maybe_trigger_workbuddy_import()
+        _maybe_trigger_kiro_import()
         _json_response(handler, _report_channels_response(range_))
         return
 
@@ -2250,11 +2364,16 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             _maybe_trigger_codex_import()
         if channel == "workbuddy":
             _maybe_trigger_workbuddy_import()
+        if channel == "kiro":
+            _maybe_trigger_kiro_import()
         wb_running = _wb_import_running
         if channel == "dsh":
             _json_response(handler, _dsh_channel_overview(dsh_api.get_dsh_summary(range_)))
             return
+        kiro_running = _kiro_import_running
         payload = db.channel_totals(range_, channel)
+        if channel == "kiro":
+            payload["kiro_local"] = {"running": kiro_running, "error": _kiro_sync_error}
         if channel == "workbuddy":
             payload["workbuddy_local"] = {"running": wb_running, "error": _wb_sync_error}
         _json_response(handler, payload)
@@ -2268,6 +2387,8 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             _maybe_trigger_codex_import()
         if channel == "workbuddy":
             _maybe_trigger_workbuddy_import()
+        if channel == "kiro":
+            _maybe_trigger_kiro_import()
         if channel == "dsh":
             dsh = dsh_api.get_dsh_summary(date_)
             _json_response(handler, [
@@ -2301,12 +2422,13 @@ def _handle_api(handler: BaseHTTPRequestHandler, path: str, query: dict[str, lis
             days = None
         model = query.get("model", [""])[0] or None   # T6: 模型筛选同步应用会话表
         source = query.get("source", [None])[0]
-        if source is not None and source not in {
-                "all", "opencode", "bai", "commandcode", "zcode", "claudecode", "codex"}:
+        if source is not None and source not in _UNIFIED_SOURCES:
             _json_response(handler, {"error": "invalid source"}, 400)
             return
         if source in ("codex", "all"):
             _maybe_trigger_codex_import()
+        if source in ("kiro", "all"):
+            _maybe_trigger_kiro_import()
         key_names = db.get_key_names()
         if source is None:
             records, total = db.session_stats_page(page, page_size, days)
