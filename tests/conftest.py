@@ -108,6 +108,10 @@ def isolate_kiro_sources(tmp_path, monkeypatch):
 
     monkeypatch.setattr(kiro_local_api, "KIRO_SESSIONS_DIR", tmp_path / "_no_kiro_sessions")
     monkeypatch.setattr(kiro_local_api, "_last_import_at", None)
+    from app import kiro_api
+
+    monkeypatch.setattr(kiro_api, "KIRO_DATA_DB", tmp_path / "_no_kiro_data.sqlite3")
+    monkeypatch.setattr(kiro_api, "_last_good", None)
 
 
 @pytest.fixture
