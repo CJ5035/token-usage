@@ -3,7 +3,7 @@
 读取本机 dsh CLI 的会话日志 (~/.dsh/sessions), 作为 GoGauge 的 DSH 数据源
 (与 opencode/bai/zcode 数据源并列, server/前端由后续任务消费):
 
-- 日志形态: <workspace 目录>/<会话目录>/session.jsonl.zstd, zstd 多帧流
+- 日志形态: <workspace 目录>/<会话目录>/session[.vN].jsonl.zstd, zstd 多帧流
   (帧头不带内容大小, 须逐帧切分后用 decompressobj 流式解压), 解压结果为
   JSONL 事件流 (顶层 type/data/time, time 为毫秒 epoch)
 - 统计口径: assistant/message 的 usage 覆盖同 turn:step 的 chunk 样本
@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -47,6 +48,11 @@ _INTERESTING_TYPES = (
     '"assistant/message"',
     '"step/start"',
 )
+
+# 会话日志规范文件名 (镜像 DSH @deepseek-ai/dsh-session-format 的
+# CANONICAL_LOG_FILENAME): 代 0 = session.jsonl.zstd, 代 N = session.vN.jsonl.zstd。
+# 临时/大写 V/前导零 (.v0/.v04)/无 .zstd 的名字都非规范, 不参与 (避免半写文件)。
+_SESSION_LOG_RE = re.compile(r"session(?:\.v([1-9][0-9]*))?\.jsonl\.zstd")
 
 # get_dsh_usage 结果缓存 TTL (秒); dsh 日志写入频繁, TTL 内直接复用上次扫描
 CACHE_TTL_SECONDS = 15.0
@@ -381,8 +387,51 @@ def _empty_result() -> dict[str, Any]:
     }
 
 
+def _session_log_generation(path: Path) -> Optional[int]:
+    """规范会话日志名 → 代数 (代 0 = session.jsonl.zstd); 非规范名 → None。"""
+    match = _SESSION_LOG_RE.fullmatch(path.name)
+    return None if match is None else int(match.group(1) or 0)
+
+
+def _session_log_is_better(generation: int, mtime: float,
+                           current: tuple[int, float, Path]) -> bool:
+    """候选是否优于当前保留项: mtime 更新者胜; mtime 相同则代数更高者胜。"""
+    if mtime != current[1]:
+        return mtime > current[1]
+    return generation > current[0]
+
+
+def _session_log_paths(root: Path) -> list[Path]:
+    """每个会话目录只取一份【当前一代】会话日志。
+
+    DSH 44.0.0 起 SESSION_FORMAT_VERSION=4, 日志名由代 0 的
+    ``session.jsonl.zstd`` 变为 ``session.v4.jsonl.zstd``; 打开老会话时 DSH 会
+    写入新代副本而**保留**旧文件 (本机已验证 1 例, 两代内容完全相同), 因此同一
+    目录必须只取一份, 否则同一会话被双计 (实测会多算 140 步 / 16,192,424 tokens)。
+
+    选取: mtime 更新者胜 (升级后新代必为后写; 降级回旧版后旧代重启写入, 此时
+    高代反而是历史快照), mtime 相同则代数更高者胜。任一情况下都只保留一份,
+    不存在双计路径。rglob 而非 ``*/*/``: 兼容子会话更深层级目录。
+    """
+    best: dict[Path, tuple[int, float, Path]] = {}
+    if not root.is_dir():
+        return []
+    for path in root.rglob("session*.jsonl.zstd"):
+        generation = _session_log_generation(path)
+        if generation is None:
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        current = best.get(path.parent)
+        if current is None or _session_log_is_better(generation, mtime, current):
+            best[path.parent] = (generation, mtime, path)
+    return sorted(entry[2] for entry in best.values())
+
+
 def scan() -> dict[str, Any]:
-    """扫描 sessions_root 下 */*/session.jsonl.zstd 并聚合全部会话.
+    """扫描 sessions_root 下 session[.vN].jsonl.zstd (每会话目录取一份) 并聚合全部会话.
 
     单文件损坏/半帧 → 跳过该文件继续, 不让整体失败.
 
@@ -396,7 +445,7 @@ def scan() -> dict[str, Any]:
          output 降序)}
     """
     root = sessions_root()
-    files = sorted(root.glob("*/*/session.jsonl.zstd")) if root.is_dir() else []
+    files = _session_log_paths(root)
     if not files:
         return _empty_result()
 

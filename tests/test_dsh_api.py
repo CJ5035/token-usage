@@ -54,11 +54,11 @@ def _frames(*chunks: bytes) -> bytes:
     return b"".join(zstandard.compress(c) for c in chunks)
 
 
-def _write_session(root, ws, sid, events):
+def _write_session(root, ws, sid, events, filename="session.jsonl.zstd"):
     """写一个会话日志 (每事件一帧, 拼接为多帧流), 返回日志路径."""
     d = root / ws / sid
     d.mkdir(parents=True, exist_ok=True)
-    path = d / "session.jsonl.zstd"
+    path = d / filename
     path.write_bytes(
         _frames(*((json.dumps(e) + "\n").encode("utf-8") for e in events))
     )
@@ -706,3 +706,74 @@ class TestRangeQueries:
         assert summaries["7d"]["totals"]["tokens"] == 124
         assert sum(row["tokens"] for row in summaries["7d"]["trend"]) == 124
         assert summaries["30d"]["totals"] == summaries["all"]["totals"]
+
+
+# ---------------------------------------------------------------------------
+# 6. 会话日志代发现 (DSH v4 代文件名)
+# ---------------------------------------------------------------------------
+
+import os as _os  # noqa: E402
+
+
+class TestSessionLogDiscovery:
+    """DSH 44.0.0 起日志名为 session.v4.jsonl.zstd; 同目录可能残留旧代副本。"""
+
+    def _dual(self, tmp_path, monkeypatch):
+        """同目录写两代日志: 代 0 = input/output 1, 代 4 = input/output 9。"""
+        _patch_root(monkeypatch, tmp_path)
+        old = [_ctx("p", "m"), _msg(1, 1, 0, {"inputTokens": 1, "outputTokens": 1})]
+        new = [_ctx("p", "m"), _msg(1, 1, 0, {"inputTokens": 9, "outputTokens": 9})]
+        p3 = _write_session(tmp_path, "ws", "s1", old, filename="session.jsonl.zstd")
+        p4 = _write_session(tmp_path, "ws", "s1", new, filename="session.v4.jsonl.zstd")
+        return p3, p4
+
+    def test_v4_filename_scanned(self, tmp_path, monkeypatch):
+        """① 只有 v4 代文件名时也必须被统计。"""
+        _patch_root(monkeypatch, tmp_path)
+        events = [_ctx("p", "m"), _msg(1, 1, 0, {"inputTokens": 5, "outputTokens": 7})]
+        _write_session(tmp_path, "ws", "s1", events, filename="session.v4.jsonl.zstd")
+        r = dsh_api.scan()
+        assert r["found"] is True
+        assert r["sessions_count"] == 1
+        assert r["total"]["input"] == 5
+        assert r["total"]["output"] == 7
+
+    def test_dual_generation_counts_newest_only(self, tmp_path, monkeypatch):
+        """② 两代并存且 v4 更新 → 只算 v4 (不双计)。"""
+        p3, p4 = self._dual(tmp_path, monkeypatch)
+        _os.utime(p3, (1000, 1000))
+        _os.utime(p4, (2000, 2000))
+        r = dsh_api.scan()
+        assert r["sessions_count"] == 1
+        assert r["total"]["input"] == 9
+        assert r["total"]["output"] == 9
+
+    def test_lower_generation_newer_mtime_wins(self, tmp_path, monkeypatch):
+        """③ 降级回旧版后旧代仍在追加 → 取旧代 (mtime 优先)。"""
+        p3, p4 = self._dual(tmp_path, monkeypatch)
+        _os.utime(p4, (2000, 2000))
+        _os.utime(p3, (3000, 3000))
+        r = dsh_api.scan()
+        assert r["sessions_count"] == 1
+        assert r["total"]["input"] == 1
+        assert r["total"]["output"] == 1
+
+    def test_equal_mtime_prefers_higher_generation(self, tmp_path, monkeypatch):
+        """④ mtime 相同 (如迁移工具保留 mtime) → 取代更高者。"""
+        p3, p4 = self._dual(tmp_path, monkeypatch)
+        _os.utime(p3, (2000, 2000))
+        _os.utime(p4, (2000, 2000))
+        r = dsh_api.scan()
+        assert r["sessions_count"] == 1
+        assert r["total"]["input"] == 9
+        assert r["total"]["output"] == 9
+
+    def test_noncanonical_names_ignored(self, tmp_path, monkeypatch):
+        """⑤ 非规范名 (临时/大写/前导零) 一律不参与。"""
+        _patch_root(monkeypatch, tmp_path)
+        events = [_ctx("p", "m"), _msg(1, 1, 0, {"inputTokens": 3, "outputTokens": 3})]
+        for name in ("session.v4.jsonl.zstd.tmp", "session.V5.jsonl.zstd", "session.v0.jsonl.zstd"):
+            _write_session(tmp_path, "ws", name.replace(".", "_"), events, filename=name)
+        r = dsh_api.scan()
+        assert r["found"] is False
+        assert r["sessions_count"] == 0
