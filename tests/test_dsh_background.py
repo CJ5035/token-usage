@@ -45,7 +45,7 @@ def _boom() -> dict:
     raise RuntimeError("scan failed")
 
 
-def _write_session(root, ws, sid, out_tokens=1) -> None:
+def _write_session(root, ws, sid, out_tokens=1, filename="session.jsonl.zstd") -> None:
     """写一个最小会话日志 (每事件一帧, 拼接为多帧 zstd 流)."""
     events = [
         {"type": "request/context", "time": 0, "data": {"provider": "p", "model": "m"}},
@@ -57,7 +57,7 @@ def _write_session(root, ws, sid, out_tokens=1) -> None:
     frames = b"".join(
         zstandard.compress((json.dumps(e) + "\n").encode("utf-8")) for e in events
     )
-    (d / "session.jsonl.zstd").write_bytes(frames)
+    (d / filename).write_bytes(frames)
 
 
 @pytest.fixture(autouse=True)
@@ -404,3 +404,13 @@ def test_scan_sync_waiter_raises_worker_round_failure(tmp_path, monkeypatch):
     assert isinstance(outcome.get("error"), RuntimeError)   # 失败轮错误向等待方抛出
     assert dsh_api._fail_count == 1          # 热态失败保留 stale + 记退避
     assert dsh_api._cache_payload["updated_at"] == "old"
+
+
+def test_v4_generation_log_scanned(tmp_path, monkeypatch):
+    """v4 代文件名也能被同步扫描/后台刷新路径消费 (回归护栏)。"""
+    monkeypatch.setattr(dsh_api, "sessions_root", lambda: tmp_path)
+    _write_session(tmp_path, "ws", "s1", out_tokens=5, filename="session.v4.jsonl.zstd")
+    r = dsh_api.scan_sync()
+    assert r["found"] is True
+    assert r["sessions_count"] == 1
+    assert r["total"]["output"] == 5
