@@ -8,6 +8,7 @@ import json
 import time as time_mod
 from copy import deepcopy
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -361,7 +362,7 @@ class TestScanAggregation:
         ]
         _write_session(tmp_path, "ws", "session-ok", good)
         r = dsh_api.scan()
-        # 损坏文件跳过 (sessions_count 仍计文件数), 正常文件聚合不受影响
+        # 损坏文件跳过 (sessions_count 计会话目录数; 本用例两个目录各一份日志 → 2), 正常文件聚合不受影响
         assert r["found"] is True
         assert r["sessions_count"] == 2
         assert r["total"]["input"] == 7
@@ -777,3 +778,21 @@ class TestSessionLogDiscovery:
         r = dsh_api.scan()
         assert r["found"] is False
         assert r["sessions_count"] == 0
+
+
+def test_generation_regex_contract():
+    """规范名单射契约: 代 0/N 正常解析, 非规范名一律拒绝 (控制方追加项 A1)。"""
+    cases = [
+        ("session.jsonl.zstd", 0),
+        ("session.v4.jsonl.zstd", 4),
+        ("session.v10.jsonl.zstd", 10),
+        ("session.v0.jsonl.zstd", None),
+        ("session.v04.jsonl.zstd", None),
+        ("session.V5.jsonl.zstd", None),
+        ("session.v4.jsonl", None),
+        ("xsession.v4.jsonl.zstd", None),
+        ("session.v4.jsonl.zstd.tmp", None),
+    ]
+    for name, expected in cases:
+        got = dsh_api._session_log_generation(Path(name))
+        assert got == expected, f"{name}: 期望 {expected}, 实际 {got}"
