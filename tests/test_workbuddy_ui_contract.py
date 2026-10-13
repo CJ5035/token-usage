@@ -23,6 +23,10 @@ def test_workbuddy_frontend_contract():
     assert "credits" in js
     assert 'unit === "credits"' in js
     assert "--ch-workbuddy:" in css
+    # 无数据不展示 (20260915 需求5 口径): db_found=false 整卡隐藏 + 参与统计页空态兜底
+    assert "data.db_found === false" in js
+    assert '"zcode-stats", "dsh-stats", "claudecode-stats", "codex-stats", "kiro-stats", "workbuddy-stats"' in js
+    assert "if (workbuddySummaryLast) renderWorkbuddySummary(workbuddySummaryLast);" in js   # applyLang 随语言重渲染
 
 
 def test_workbuddy_i18n_keys_are_bilingual():

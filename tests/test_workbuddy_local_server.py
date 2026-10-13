@@ -111,8 +111,8 @@ def test_read_entry_points_trigger_workbuddy_import(tmp_db, monkeypatch, route, 
     # 关闭共享连接后继续查询, 触发 access violation 使整个 pytest 进程崩溃
     monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
     monkeypatch.setattr(server, "_maybe_trigger_kiro_import", lambda: None)
-    monkeypatch.setattr(server.dsh_api, "get_dsh_summary", lambda *args: {"found": False})
-    monkeypatch.setattr(server.dsh_api, "get_dsh_summaries", lambda *args: {r: {"found": False} for r in args})
+    monkeypatch.setattr(server.dsh_api, "get_dsh_summary", lambda *args, **kw: {"found": False})
+    monkeypatch.setattr(server.dsh_api, "get_dsh_summaries", lambda *args, **kw: {r: {"found": False} for r in args})
     _call_api(monkeypatch, route, query)
     assert len(calls) == 1
 
@@ -128,8 +128,8 @@ def test_read_entry_points_trigger_workbuddy_import(tmp_db, monkeypatch, route, 
 def test_other_channels_and_remote_summary_do_not_trigger_wb_import(tmp_db, monkeypatch, route, query):
     calls = []
     monkeypatch.setattr(server, "workbuddy_import_async", lambda: calls.append(1))
-    monkeypatch.setattr(server.dsh_api, "get_dsh_summary", lambda *args: {"found": False})
-    monkeypatch.setattr(server.dsh_api, "get_dsh_summaries", lambda *args: {r: {"found": False} for r in args})
+    monkeypatch.setattr(server.dsh_api, "get_dsh_summary", lambda *args, **kw: {"found": False})
+    monkeypatch.setattr(server.dsh_api, "get_dsh_summaries", lambda *args, **kw: {r: {"found": False} for r in args})
     _call_api(monkeypatch, route, query)
     assert len(calls) == 0
 
@@ -184,8 +184,8 @@ def test_lock_released_on_thread_start_exception(monkeypatch):
 
 def test_running_snapshot_in_response(tmp_db, monkeypatch):
     """持有 worker 时 running=True, 结束后 False."""
-    monkeypatch.setattr(server.dsh_api, "get_dsh_summary", lambda *args: {"found": False})
-    monkeypatch.setattr(server.dsh_api, "get_dsh_summaries", lambda *args: {r: {"found": False} for r in args})
+    monkeypatch.setattr(server.dsh_api, "get_dsh_summary", lambda *args, **kw: {"found": False})
+    monkeypatch.setattr(server.dsh_api, "get_dsh_summaries", lambda *args, **kw: {r: {"found": False} for r in args})
     server._wb_import_running = True
     payload = _call_api(monkeypatch, "/api/report/channel-overview", {"channel": ["workbuddy"]})
     assert payload["workbuddy_local"]["running"] is True

@@ -536,7 +536,7 @@ def test_arena2_donut_thin_ring_geometry():
 def test_arena2_donut_center_two_lines():
     """环心两行: 范围标签 (i18n 映射) + 数值; 标签在上 (11px) 数值在下 (22px)."""
     js = _js()
-    assert 'const RANGE_LABEL_KEY = { today: "today", yesterday: "yesterday", "7d": "d7", "30d": "d30", all: "all" };' in js, \
+    assert 'const RANGE_LABEL_KEY = { today: "today", yesterday: "yesterday", "7d": "d7", "30d": "d30", all: "all", custom: "customRange" };' in js, \
         "缺少范围标签 i18n 映射"
     assert '600 22px sans-serif' in js, "环心数值行应为 22px/600"
     assert "500 11px sans-serif" in js, "环心标签行应为 11px/500"

@@ -53,13 +53,13 @@ def _existing_projects_dir(tmp_db, monkeypatch):
 def _patch_aggregates(monkeypatch):
     """把四个 db 聚合换成记录 period/days 入参的桩."""
     monkeypatch.setattr(db, "claudecode_totals",
-                        lambda period="30d": {"request_count": 3, "period": period})
+                        lambda period="30d", **kw: {"request_count": 3, "period": period})
     monkeypatch.setattr(db, "claudecode_daily",
-                        lambda days=7: [{"date": "2026-09-01", "days": days}])
+                        lambda days=7, **kw: [{"date": "2026-09-01", "days": days}])
     monkeypatch.setattr(db, "claudecode_channel_stats",
-                        lambda period="30d": [{"channel": "官方", "period": period}])
+                        lambda period="30d", **kw: [{"channel": "官方", "period": period}])
     monkeypatch.setattr(db, "claudecode_model_stats",
-                        lambda period="30d": [{"model": "claude-sonnet-4-5", "period": period}])
+                        lambda period="30d", **kw: [{"model": "claude-sonnet-4-5", "period": period}])
 
 
 # ---------------------------------------------------------------------------

@@ -63,7 +63,7 @@ def _batch(path, rows, warnings=None, **over):
 
 def _mock_dsh_absent(monkeypatch):
     """DSH 缓存注入 found=false (不触发真实 ~/.dsh 扫描; get_dsh_summary 委托同一入口)."""
-    monkeypatch.setattr(dsh_api, "get_dsh_summaries", lambda *ranges: {r: {
+    monkeypatch.setattr(dsh_api, "get_dsh_summaries", lambda *ranges, **kw: {r: {
         "found": False, "scanning": False, "stale": False, "refresh_error": False,
         "updated_at": None, "retry_after_seconds": 0, "range": r, "totals": {},
         "trend": [], "hourly": [], "sessions_count": 0, "data_since": None}
@@ -76,7 +76,7 @@ def _mock_dsh_today(monkeypatch, today_tokens=70):
     bucket = {"steps": 1, "input": today_tokens // 2, "cache": 0, "cache_read": 0,
               "cache_write": 0, "output": today_tokens - today_tokens // 2, "reasoning": 0,
               "tokens": today_tokens, "seconds": 1.0, "tps": float(today_tokens)}
-    monkeypatch.setattr(dsh_api, "get_dsh_summaries", lambda *ranges: {r: {
+    monkeypatch.setattr(dsh_api, "get_dsh_summaries", lambda *ranges, **kw: {r: {
         "found": True, "scanning": False, "stale": False, "refresh_error": False,
         "updated_at": "2026-09-04T10:00:00", "retry_after_seconds": 0, "range": r,
         "totals": dict(bucket), "trend": [{"date": today, **bucket}], "hourly": [],

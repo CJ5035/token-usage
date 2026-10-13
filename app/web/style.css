@@ -680,3 +680,22 @@ html[data-theme="dark"] .windows-bar .wb-cell:first-child { border-color: rgba(9
 .tbl tbody tr.ses-row { cursor: pointer; }
 .tbl tbody tr.ses-row.sel { background: var(--muted); box-shadow: inset 3px 0 0 var(--primary); }
 
+/* 自定义范围弹出面板 (两页共用; 20260926 v2 接入设计 token: popover 令牌/主色按钮/focus 描边) */
+.cr-panel { position: fixed; z-index: 60; width: 264px; padding: 14px;
+  background: var(--surface-popover); border: 1px solid var(--border-popover);
+  border-radius: 12px; box-shadow: var(--shadow); }
+.cr-panel:not([hidden]) { animation: cr-pop .14s ease; }
+@keyframes cr-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+.cr-field { margin-bottom: 10px; }
+.cr-field label { display: block; font-size: 12px; color: var(--text3); margin-bottom: 4px; }
+.cr-field input { width: 100%; box-sizing: border-box; height: 32px; padding: 0 9px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--card);
+  color: var(--text); font-family: var(--font-sans); font-size: 13px;
+  transition: border-color .15s, box-shadow .15s; }
+.cr-field input:hover { border-color: var(--text3); }
+.cr-field input:focus { outline: none; border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--primary-soft); }
+.cr-field input::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .55; }
+.cr-field input:hover::-webkit-calendar-picker-indicator { opacity: .9; }
+.cr-hint { font-size: 11px; color: var(--text3); margin: 2px 0 12px; }
+.cr-actions { display: flex; gap: 8px; justify-content: flex-end; }

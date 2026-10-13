@@ -796,3 +796,39 @@ def test_generation_regex_contract():
     for name, expected in cases:
         got = dsh_api._session_log_generation(Path(name))
         assert got == expected, f"{name}: 期望 {expected}, 实际 {got}"
+
+
+# ---------- 自定义范围 (doc/20260926 设计 §5) ----------
+
+def test_custom_range_epoch_ms_bounds(monkeypatch):
+    """custom: 本地时间串 -> 秒级闭区间毫秒边界; 非法回退 today."""
+    tz = ZoneInfo("UTC")
+    monkeypatch.setattr(dsh_api, "_local_timezone", lambda: tz)
+    now = datetime(2024, 3, 11, 12, tzinfo=tz)
+    selected, start_ms, end_ms, _, _ = dsh_api._range_bounds(
+        "custom", now, start="2024-03-09 08:00:00", end="2024-03-10 18:00:30")
+    assert selected == "custom"
+    assert start_ms == int(datetime(2024, 3, 9, 8, 0, 0, tzinfo=tz).timestamp() * 1000)
+    assert end_ms == int(datetime(2024, 3, 10, 18, 0, 30, tzinfo=tz).timestamp() * 1000) + 999
+    # 非法 (缺 start) -> 回退 today 自然日边界
+    selected2, s2, e2, _, _ = dsh_api._range_bounds("custom", now)
+    assert selected2 == "today"
+
+
+def test_custom_range_query_no_hourly_and_trend_pads_window(monkeypatch):
+    """custom: 无 hourly; totals 只含区间内; trend 补零覆盖 [start.date, end.date]."""
+    tz = ZoneInfo("UTC")
+    monkeypatch.setattr(dsh_api, "_local_timezone", lambda: tz)
+    now = datetime(2024, 3, 11, 12, tzinfo=tz)
+    ms = lambda day, hour=12: int(datetime(2024, 3, day, hour, tzinfo=tz).timestamp() * 1000)
+    snapshot = _range_snapshot(_range_step(ms(9)), _range_step(ms(10), output=20))
+    r = dsh_api.query_dsh_usage(snapshot, "custom", now,
+                                start="2024-03-09 00:00:00", end="2024-03-10 23:59:59")
+    assert r["range"] == "custom"
+    assert r["totals"]["output"] == 30          # 9/10 两天都在区间
+    assert r["hourly"] == []
+    assert [row["date"] for row in r["trend"]] == ["2024-03-09", "2024-03-10"]
+    r2 = dsh_api.query_dsh_usage(snapshot, "custom", now,
+                                 start="2024-03-09 00:00:00", end="2024-03-09 23:59:59")
+    assert r2["totals"]["output"] == 10
+    assert [row["date"] for row in r2["trend"]] == ["2024-03-09"]

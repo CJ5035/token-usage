@@ -1104,13 +1104,19 @@ def insert_workbuddy_rows(rows: list[dict[str, Any]], account_id: Optional[int] 
         return inserted
 
 
-def workbuddy_summary(range_: str = "7d", account_id: Optional[int] = None) -> dict[str, Any]:
-    """Aggregate WorkBuddy credits without converting them to token/USD metrics."""
-    range_sql, params = _report_range_sql(range_, "w.request_time")
+def workbuddy_summary(range_: str = "7d", account_id: Optional[int] = None,
+                      start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
+    """Aggregate WorkBuddy credits without converting them to token/USD metrics.
+
+    db_found = 远程积分表 (workbuddy_usage) 或本地用量表 (workbuddy_local_usage)
+    任一有行 (数据源存在性, 不随 range 过滤); 前端据此整卡隐藏 (20260915 需求5 口径)。"""
+    range_sql, params = _report_range_sql(range_, "w.request_time", start, end)
     aid = int(account_id) if account_id else None
     account_sql = " AND w.account_id = ?" if aid else ""
     all_params = params + ([aid] if aid else [])
     conn = get_db()
+    has_remote = conn.execute("SELECT 1 FROM workbuddy_usage LIMIT 1").fetchone()
+    has_local = conn.execute("SELECT 1 FROM workbuddy_local_usage LIMIT 1").fetchone()
     totals = conn.execute(
         f"SELECT COUNT(*) requests, SUM(w.credit) credits, MIN(substr(w.request_time,1,10)) data_since "
         f"FROM workbuddy_usage w WHERE {range_sql}{account_sql}", all_params
@@ -1124,6 +1130,7 @@ def workbuddy_summary(range_: str = "7d", account_id: Optional[int] = None) -> d
         f"FROM workbuddy_usage w WHERE {range_sql}{account_sql} GROUP BY date ORDER BY date", all_params
     ).fetchall()
     return {
+        "db_found": bool(has_remote or has_local),
         "requests": int(totals["requests"] or 0),
         "credits": float(totals["credits"] or 0.0),
         "models": [{"model": r["model"], "requests": r["requests"], "credits": float(r["credits"] or 0.0)} for r in models],
@@ -1266,7 +1273,8 @@ def _charts_daily_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def charts_aggregate(account_id: Optional[int] = None, days: Optional[int] = None) -> dict[str, Any]:
+def charts_aggregate(account_id: Optional[int] = None, days: Optional[int] = None,
+                     start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
     """commandcode charts_buckets 聚合, 产出与 dashboard 六个统计键同构的数据.
 
     time_bucket 是服务端原样 UTC 字符串, 统一用 datetime(time_bucket, 'localtime')
@@ -1277,31 +1285,55 @@ def charts_aggregate(account_id: Optional[int] = None, days: Optional[int] = Non
     - today_trend: 今日 24 小时补 0, input=未缓存输入 (对照 today_trend 的
       input_tokens 口径), 桶无推理 token 故 reasoning 恒 0
     - models: 按模型聚合 (对应 dashboard "models")
+    自定义范围 (start/end, 秒级闭区间): totals/daily/trend/models 随窗口过滤
+    (time_bucket 为 UTC, 与 _report_range_sql 同侧比较); today/today_trend 不变.
     hit_rate 口径与现有函数一致: cache_read / (cache_read + uncached_input + cache_write) (命中/总输入).
     """
     aid = _resolve_account_id(account_id)
     conn = get_db()
     day_expr = "substr(datetime(time_bucket, 'localtime'), 1, 10)"
     today_cond = f"{day_expr} = date('now', 'localtime')"
+    b = _custom_bounds_utc(start, end)
+    custom_where = ""
+    custom_params: list[Any] = []
+    if b is not None:
+        custom_where = (" AND datetime(time_bucket) >= datetime(?)"
+                        " AND datetime(time_bucket) <= datetime(?)")
+        custom_params = [b[0], b[1]]
 
     row_all = conn.execute(
-        f"SELECT {_CHARTS_AGG_COLS} FROM charts_buckets WHERE account_id = ?", (aid,)
+        f"SELECT {_CHARTS_AGG_COLS} FROM charts_buckets"
+        f" WHERE account_id = ?{custom_where}",
+        [aid] + custom_params,
     ).fetchone()
     row_today = conn.execute(
         f"SELECT {_CHARTS_AGG_COLS} FROM charts_buckets WHERE account_id = ? AND {today_cond}",
         (aid,),
     ).fetchone()
-    daily_rows = conn.execute(
-        f"""SELECT {day_expr} AS date, {_CHARTS_AGG_COLS}
+    if b is not None:
+        daily_where = " AND datetime(time_bucket) >= datetime(?) AND datetime(time_bucket) <= datetime(?)"
+        daily_sql = (f"""SELECT {day_expr} AS date, {_CHARTS_AGG_COLS}
         FROM charts_buckets
-        WHERE account_id = ? AND {day_expr} >= date('now', 'localtime', '-7 days')
+        WHERE account_id = ?{daily_where}
         GROUP BY {day_expr}
-        ORDER BY date ASC""",
-        (aid,),
-    ).fetchall()
+        ORDER BY date ASC""")
+        daily_rows = conn.execute(daily_sql, [aid] + custom_params).fetchall()
+    else:
+        daily_rows = conn.execute(
+            f"""SELECT {day_expr} AS date, {_CHARTS_AGG_COLS}
+            FROM charts_buckets
+            WHERE account_id = ? AND {day_expr} >= date('now', 'localtime', '-7 days')
+            GROUP BY {day_expr}
+            ORDER BY date ASC""",
+            (aid,),
+        ).fetchall()
     trend_where = ""
     trend_params: list[Any] = [aid]
-    if days is not None:
+    if b is not None:
+        trend_where = (" AND datetime(time_bucket) >= datetime(?)"
+                       " AND datetime(time_bucket) <= datetime(?)")
+        trend_params = [aid] + custom_params
+    elif days is not None:
         n = max(1, min(int(days), 365))
         trend_where = f" AND {day_expr} >= date('now', 'localtime', ?)"
         trend_params.append(f"-{n} days")
@@ -1316,10 +1348,10 @@ def charts_aggregate(account_id: Optional[int] = None, days: Optional[int] = Non
     model_rows = conn.execute(
         f"""SELECT model, {_CHARTS_AGG_COLS}
         FROM charts_buckets
-        WHERE account_id = ?
+        WHERE account_id = ?{custom_where}
         GROUP BY model
         ORDER BY (SUM(tokens_in) + SUM(tokens_out)) DESC""",
-        (aid,),
+        [aid] + custom_params,
     ).fetchall()
     hour_rows = conn.execute(
         f"""SELECT CAST(strftime('%H', datetime(time_bucket, 'localtime')) AS INTEGER) AS h,
@@ -1614,7 +1646,12 @@ _PERIOD_CLAUSES = {
 }
 
 
-def _period_where(period: str) -> tuple[str, list[Any]]:
+def _period_where(period: str, start: Optional[str] = None,
+                  end: Optional[str] = None) -> tuple[str, list[Any]]:
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: 秒级闭区间, 优先于枚举档位
+        return ("WHERE datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?)",
+                [b[0], b[1]])
     clauses: list[str] = []
     params: list[Any] = []
     if period in _PERIOD_CLAUSES:
@@ -1632,9 +1669,10 @@ def _period_where(period: str) -> tuple[str, list[Any]]:
 _NUM_DAYS_RE = __import__("re").compile(r"^(\d+)d$")
 
 
-def model_stats(period: str = "30d", account_id: Optional[int] = None) -> list[dict[str, Any]]:
+def model_stats(period: str = "30d", account_id: Optional[int] = None,
+                start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按模型聚合: 请求数 / 会话数 / 输入(含缓存) / 普通输入 / 推理 / 缓存命中 / 缓存写入 / 输出 / 成本 / 命中率."""
-    where, params = _period_where(period)
+    where, params = _period_where(period, start, end)
     where, params = _account_filter(where, params, _resolve_account_id(account_id))
     rows = get_db().execute(
         f"""
@@ -1680,13 +1718,21 @@ def model_stats(period: str = "30d", account_id: Optional[int] = None) -> list[d
     return result
 
 
-def daily_stats(days: int = 30, account_id: Optional[int] = None) -> list[dict[str, Any]]:
+def daily_stats(days: int = 30, account_id: Optional[int] = None,
+                start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """每日聚合: 输入(含缓存) / 普通输入 / 推理 / 缓存命中 / 缓存写入 / 输出 / 成本 / 请求数."""
-    days = max(1, min(days, 365))
     aid = _resolve_account_id(account_id)
-    start_utc = _local_day_utc_start((datetime.now().astimezone() - timedelta(days=days)).date())
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: 精确闭区间, 365 cap 不适用
+        where_extra = " AND datetime(created_at) <= datetime(?)"
+        params: list[Any] = [aid, b[0], b[1]]
+    else:
+        days = max(1, min(days, 365))
+        where_extra = ""
+        start_utc = _local_day_utc_start((datetime.now().astimezone() - timedelta(days=days)).date())
+        params = [aid, start_utc]
     rows = get_db().execute(
-        """
+        f"""
         SELECT substr(datetime(created_at, 'localtime'), 1, 10) AS date,
                SUM(input_tokens + cache_read_tokens + cache_write_5m_tokens + cache_write_1h_tokens) AS total_input_tokens,
                SUM(input_tokens) AS uncached_input_tokens,
@@ -1697,11 +1743,11 @@ def daily_stats(days: int = 30, account_id: Optional[int] = None) -> list[dict[s
                SUM(cost_usd) AS total_cost_usd,
                COUNT(*) AS request_count
         FROM usage_records
-        WHERE account_id = ? AND datetime(created_at) >= datetime(?)
+        WHERE account_id = ? AND datetime(created_at) >= datetime(?){where_extra}
         GROUP BY substr(datetime(created_at, 'localtime'), 1, 10)
         ORDER BY date ASC
         """,
-        (aid, start_utc),
+        params,
     ).fetchall()
     result: list[dict[str, Any]] = []
     for r in rows:
@@ -1758,9 +1804,10 @@ def today_trend(account_id: Optional[int] = None) -> list[dict[str, Any]]:
     return result
 
 
-def totals(period: str = "30d", account_id: Optional[int] = None) -> dict[str, Any]:
+def totals(period: str = "30d", account_id: Optional[int] = None,
+           start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
     """总览指标, 口径与模型占比一致."""
-    where, params = _period_where(period)
+    where, params = _period_where(period, start, end)
     where, params = _account_filter(where, params, _resolve_account_id(account_id))
     row = get_db().execute(
         f"""
@@ -1989,8 +2036,13 @@ _ZCODE_PERIOD_CLAUSES = {
 }
 
 
-def _zcode_period_where(period: str) -> tuple[str, list[Any]]:
+def _zcode_period_where(period: str, start: Optional[str] = None,
+                        end: Optional[str] = None) -> tuple[str, list[Any]]:
     """zcode_usage 的 period 过滤 (口径照抄 _period_where, 列换成 started_at)."""
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: 秒级闭区间, 优先于枚举档位
+        return ("WHERE datetime(started_at) >= datetime(?) AND datetime(started_at) <= datetime(?)",
+                [b[0], b[1]])
     clauses: list[str] = []
     params: list[Any] = []
     if period in _ZCODE_PERIOD_CLAUSES:
@@ -2022,9 +2074,9 @@ def _zcode_cost_usd(row: sqlite3.Row) -> float:
     return round(int(row["total_cost_raw"] or 0) / 100_000_000.0, 6)
 
 
-def zcode_totals(period: str = "30d") -> dict[str, Any]:
+def zcode_totals(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
     """ZCode 用量总览: token/费用口径与 totals() 一致, 附加速率与 TTFT."""
-    where, params = _zcode_period_where(period)
+    where, params = _zcode_period_where(period, start, end)
     row = get_db().execute(
         f"SELECT {_ZCODE_AGG_COLS}, {_ZCODE_SPEED_COLS} FROM zcode_usage {where}",
         params,
@@ -2048,20 +2100,28 @@ def zcode_totals(period: str = "30d") -> dict[str, Any]:
     }
 
 
-def zcode_daily(days: int = 7) -> list[dict[str, Any]]:
+def zcode_daily(days: int = 7, start: Optional[str] = None,
+                end: Optional[str] = None) -> list[dict[str, Any]]:
     """ZCode 每日聚合 (本地日归组), 口径镜像 daily_stats (无速度列)."""
-    days = max(1, min(days, 365))
     day_expr = "substr(datetime(started_at, 'localtime'), 1, 10)"
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: UTC 侧秒级闭区间, day_expr 本地日归组不变
+        where_sql = "datetime(started_at) >= datetime(?) AND datetime(started_at) <= datetime(?)"
+        where_params: list[Any] = [b[0], b[1]]
+    else:
+        days = max(1, min(days, 365))
+        where_sql = f"{day_expr} >= date('now', 'localtime', ?)"
+        where_params = [f"-{days} days"]
     rows = get_db().execute(
         f"""
         SELECT {day_expr} AS date,
                {_ZCODE_AGG_COLS}
         FROM zcode_usage
-        WHERE {day_expr} >= date('now', 'localtime', ?)
+        WHERE {where_sql}
         GROUP BY {day_expr}
         ORDER BY date ASC
         """,
-        (f"-{days} days",),
+        where_params,
     ).fetchall()
     result: list[dict[str, Any]] = []
     for r in rows:
@@ -2087,11 +2147,11 @@ def zcode_daily(days: int = 7) -> list[dict[str, Any]]:
     return result
 
 
-def zcode_provider_stats(period: str = "30d") -> list[dict[str, Any]]:
+def zcode_provider_stats(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按渠道聚合; provider_name 取该渠道最新 synced_at 行的非空快照
     (config.json 改名后旧快照不回写; 全 NULL → None, 前端回退内置映射/截断 UUID).
     """
-    where, params = _zcode_period_where(period)
+    where, params = _zcode_period_where(period, start, end)
     rows = get_db().execute(
         f"""
         SELECT z1.provider_id,
@@ -2134,11 +2194,11 @@ def zcode_provider_stats(period: str = "30d") -> list[dict[str, Any]]:
     return result
 
 
-def zcode_model_stats(period: str = "30d") -> list[dict[str, Any]]:
+def zcode_model_stats(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按渠道+模型聚合, 行字段同 zcode_provider_stats 另含缓存命中率 hit_rate
     (算法照抄 model_stats: hit/(hit+miss+cw)*100, cache_write 计入未命中).
     """
-    where, params = _zcode_period_where(period)
+    where, params = _zcode_period_where(period, start, end)
     rows = get_db().execute(
         f"""
         SELECT z1.provider_id,
@@ -2515,11 +2575,12 @@ def kiro_skipped_total() -> int:
     return int(row["s"] or 0)
 
 
-def kiro_totals(range_: str) -> dict[str, Any]:
+def kiro_totals(range_: str, start: Optional[str] = None,
+                end: Optional[str] = None) -> dict[str, Any]:
     """Kiro 单渠道聚合。键与 db.totals 对齐以复用首页概览; token 类键恒 0 且
     tokens_available=False —— 这里的 0 表示"不可得", 前端必须显示 —。
     request_count = Σ 每 turn 的 API 请求数; turn_count = 对话轮数。"""
-    range_sql, params = _report_range_sql(range_, "k.started_at")
+    range_sql, params = _report_range_sql(range_, "k.started_at", start, end)
     row = get_db().execute(
         "SELECT COUNT(*) turns, COALESCE(SUM(k.request_count), 0) requests,"
         " COUNT(DISTINCT CASE WHEN k.session_id IS NOT NULL AND k.session_id != ''"
@@ -2590,8 +2651,13 @@ _CC_PERIOD_CLAUSES = {
 }
 
 
-def _cc_period_where(period: str) -> tuple[str, list[Any]]:
+def _cc_period_where(period: str, start: Optional[str] = None,
+                     end: Optional[str] = None) -> tuple[str, list[Any]]:
     """claudecode_usage 的 period 过滤 (口径照 _zcode_period_where, 支持 today/all/Nd)."""
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: 秒级闭区间, 优先于枚举档位
+        return ("WHERE datetime(started_at) >= datetime(?) AND datetime(started_at) <= datetime(?)",
+                [b[0], b[1]])
     clauses: list[str] = []
     params: list[Any] = []
     if period in _CC_PERIOD_CLAUSES:
@@ -2621,9 +2687,9 @@ def _cc_cost_usd(row: sqlite3.Row) -> float:
     return round(int(row["total_cost_raw"] or 0) / 100_000_000.0, 6)
 
 
-def claudecode_totals(period: str = "30d") -> dict[str, Any]:
+def claudecode_totals(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
     """Claude Code 用量总览: token/费用口径与 zcode_totals 一致, 附加速率."""
-    where, params = _cc_period_where(period)
+    where, params = _cc_period_where(period, start, end)
     row = get_db().execute(
         f"SELECT {_CC_AGG_COLS}, {_CC_SPEED_COLS} FROM claudecode_usage {where}",
         params,
@@ -2646,20 +2712,28 @@ def claudecode_totals(period: str = "30d") -> dict[str, Any]:
     }
 
 
-def claudecode_daily(days: int = 7) -> list[dict[str, Any]]:
+def claudecode_daily(days: int = 7, start: Optional[str] = None,
+                     end: Optional[str] = None) -> list[dict[str, Any]]:
     """Claude Code 每日聚合 (本地日归组), 口径镜像 zcode_daily (无速度列)."""
-    days = max(1, min(days, 365))
     day_expr = "substr(datetime(started_at, 'localtime'), 1, 10)"
+    b = _custom_bounds_utc(start, end)
+    if b is not None:  # 自定义范围: UTC 侧秒级闭区间, day_expr 本地日归组不变
+        where_sql = "datetime(started_at) >= datetime(?) AND datetime(started_at) <= datetime(?)"
+        where_params: list[Any] = [b[0], b[1]]
+    else:
+        days = max(1, min(days, 365))
+        where_sql = f"{day_expr} >= date('now', 'localtime', ?)"
+        where_params = [f"-{days} days"]
     rows = get_db().execute(
         f"""
         SELECT {day_expr} AS date,
                {_CC_AGG_COLS}
         FROM claudecode_usage
-        WHERE {day_expr} >= date('now', 'localtime', ?)
+        WHERE {where_sql}
         GROUP BY {day_expr}
         ORDER BY date ASC
         """,
-        (f"-{days} days",),
+        where_params,
     ).fetchall()
     result: list[dict[str, Any]] = []
     for r in rows:
@@ -2684,11 +2758,11 @@ def claudecode_daily(days: int = 7) -> list[dict[str, Any]]:
     return result
 
 
-def claudecode_channel_stats(period: str = "30d") -> list[dict[str, Any]]:
+def claudecode_channel_stats(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按渠道聚合 (channel 首插判定, 归属规则见实施文档 §4), 行字段同
     claudecode_totals 另含 channel; 按 输入+输出 token 降序.
     """
-    where, params = _cc_period_where(period)
+    where, params = _cc_period_where(period, start, end)
     rows = get_db().execute(
         f"""
         SELECT channel, {_CC_AGG_COLS}, {_CC_SPEED_COLS}
@@ -2724,9 +2798,9 @@ def claudecode_channel_stats(period: str = "30d") -> list[dict[str, Any]]:
     return result
 
 
-def claudecode_model_stats(period: str = "30d") -> list[dict[str, Any]]:
+def claudecode_model_stats(period: str = "30d", start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按模型聚合, 行字段同 claudecode_channel_stats (model 替代 channel)."""
-    where, params = _cc_period_where(period)
+    where, params = _cc_period_where(period, start, end)
     rows = get_db().execute(
         f"""
         SELECT model, {_CC_AGG_COLS}, {_CC_SPEED_COLS}
@@ -2808,15 +2882,50 @@ def _range_utc_bounds(range_: str) -> Optional[tuple[str, str]]:
     return _local_day_utc_start(start), _local_day_utc_start(end)
 
 
-def _report_range_sql(range_: str, ts_col: str) -> tuple[str, list[str]]:
+def _parse_local_dt(s: str) -> Optional[datetime]:
+    """自定义范围入参解析: 容错 T 分隔/缺秒, 非法返回 None (不抛出)."""
+    t = (s or "").strip().replace("T", " ")
+    if len(t) == 16:  # 缺秒 (datetime-local 默认分精度) 补 :00
+        t += ":00"
+    try:
+        return datetime.strptime(t, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _custom_bounds_utc(start: Optional[str], end: Optional[str]) -> Optional[tuple[str, str]]:
+    """自定义范围 -> (start_utc, end_utc) 秒级闭区间; end 空=当前时刻.
+
+    输入为本地时间串; 非法 (缺 start/不可解析/end<start) 返回 None,
+    调用方据 None 走枚举档位逻辑. 本地->UTC 的唯一转换点 (server 不转)."""
+    s = _parse_local_dt(start or "")
+    if s is None:
+        return None
+    end_s = (end or "").strip()
+    e = _parse_local_dt(end_s) if end_s else datetime.now()
+    if e is None or e < s:
+        return None
+    tz = datetime.now().astimezone().tzinfo
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return (s.replace(tzinfo=tz).astimezone(timezone.utc).strftime(fmt),
+            e.replace(tzinfo=tz).astimezone(timezone.utc).strftime(fmt))
+
+
+def _report_range_sql(range_: str, ts_col: str,
+                      start: Optional[str] = None, end: Optional[str] = None) -> tuple[str, list[str]]:
     """自然日窗口谓词 (v2 性能版): datetime(col) 确定性表达式走 idx_usage_*_utc.
-    返回 (sql 片段, 前置参数) — 谓词位于各 WHERE 首位, 调用方参数须以本参数开头."""
-    b = _range_utc_bounds(range_)
-    if b is None:
+    返回 (sql 片段, 前置参数) — 谓词位于各 WHERE 首位, 调用方参数须以本参数开头.
+    显式 start/end (自定义范围, 秒级闭区间) 优先于 range_ 枚举档位."""
+    b = _custom_bounds_utc(start, end)
+    if b is not None:
+        return (f"datetime({ts_col}) >= datetime(?) AND datetime({ts_col}) <= datetime(?)",
+                [b[0], b[1]])
+    b2 = _range_utc_bounds(range_)
+    if b2 is None:
         return "1=1", []
-    start, end = b
+    start2, end2 = b2
     return (f"datetime({ts_col}) >= datetime(?) AND datetime({ts_col}) < datetime(?)",
-            [start, end])
+            [start2, end2])
 
 
 def _report_channels_expr() -> str:
@@ -2852,7 +2961,8 @@ def _daily_unavailable_channels(metric: str, channel: Optional[str]) -> list[str
 
 def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str = "tokens", *,
                  extra_rows: Optional[list[dict[str, Any]]] = None,
-                 unavailable_sources: Optional[list[str]] = None) -> dict[str, Any]:
+                 unavailable_sources: Optional[list[str]] = None,
+                 start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
     """按自然日 × 渠道堆叠序列 (R6: usage_records + zcode_usage + claudecode_usage
     + codex_usage + workbuddy_local_usage + kiro_usage 六表 UNION); range=all 时
     粒度自适应 (>60 天按周 / >180 天按月)。
@@ -2879,7 +2989,7 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
     segs: list[str] = []
     params: list[Any] = []
     if include_records:
-        range_sql, range_params = _report_range_sql(range_, "r.created_at")
+        range_sql, range_params = _report_range_sql(range_, "r.created_at", start, end)
         ch_where = ""
         ch_params: list[Any] = []
         if channel:
@@ -2893,21 +3003,21 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
         params.extend(range_params)
         params.extend(ch_params)
     if include_zcode:
-        range_sql, range_params = _report_range_sql(range_, "z.started_at")
+        range_sql, range_params = _report_range_sql(range_, "z.started_at", start, end)
         segs.append(
             f"SELECT substr(datetime(z.started_at,'localtime'),1,10) AS b, 'zcode' AS ch,"
             f" {exprs['zcode']} AS v FROM zcode_usage z"
             f" WHERE {range_sql} GROUP BY b")
         params.extend(range_params)
     if include_cc:
-        range_sql, range_params = _report_range_sql(range_, "c.started_at")
+        range_sql, range_params = _report_range_sql(range_, "c.started_at", start, end)
         segs.append(
             f"SELECT substr(datetime(c.started_at,'localtime'),1,10) AS b, 'claudecode' AS ch,"
             f" {exprs['claudecode']} AS v FROM claudecode_usage c"
             f" WHERE {range_sql} GROUP BY b")
         params.extend(range_params)
     if include_wb:
-        range_sql, range_params = _report_range_sql(range_, "wl.started_at")
+        range_sql, range_params = _report_range_sql(range_, "wl.started_at", start, end)
         cost_filter = " AND wl.cost_available = 1" if metric == "cost" else ""
         if metric == "cost":
             unpriced = get_db().execute(
@@ -2922,7 +3032,7 @@ def report_daily(range_: str = "7d", channel: Optional[str] = None, metric: str 
             f" FROM workbuddy_local_usage wl WHERE {range_sql}{cost_filter} GROUP BY b")
         params.extend(range_params)
     if include_codex:
-        range_sql, range_params = _report_range_sql(range_, "x.started_at")
+        range_sql, range_params = _report_range_sql(range_, "x.started_at", start, end)
         segs.append(
             f"SELECT substr(datetime(x.started_at,'localtime'),1,10) AS b, 'codex' AS ch,"
             f" {exprs['codex']} AS v FROM codex_usage x"
@@ -3288,7 +3398,8 @@ def report_windows(channel: Optional[str] = None) -> dict[str, Any]:
     }
 
 
-def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
+def report_channels(range_: str = "7d",
+                   start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """渠道明细表行 (R6 五渠道 + codex; dsh 今日行由 server 层并入 T6)。
 
     渠道行固定字段: channel/tokens/input/output/cache_read/cache_write/reasoning/
@@ -3299,7 +3410,7 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
     """
     exprs_t = _report_metric_exprs("tokens")
     exprs_c = _report_metric_exprs("cost")
-    range_sql, range_params = _report_range_sql(range_, "r.created_at")
+    range_sql, range_params = _report_range_sql(range_, "r.created_at", start, end)
     rows = get_db().execute(
         f"SELECT {_report_channels_expr()} AS ch,"
         f" {exprs_t['records']} tokens, SUM(r.input_tokens) input, SUM(r.output_tokens) output,"
@@ -3314,7 +3425,7 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
     ).fetchall()
     agg = {r["ch"]: dict(r) for r in rows}
     # WorkBuddy: 本机本地 JSONL 优先; 本地无数据时回退远程 billing 行 (仅 credits, 向后兼容)
-    wl_range_sql, wl_params = _report_range_sql(range_, "wl.started_at")
+    wl_range_sql, wl_params = _report_range_sql(range_, "wl.started_at", start, end)
     wb_local = get_db().execute(
         f"SELECT {exprs_t['workbuddy']} tokens, SUM(wl.input_tokens) input,"
         f" SUM(wl.output_tokens) output, SUM(wl.cache_read_tokens) cache_read,"
@@ -3329,7 +3440,7 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
     if wb_local and (wb_local["requests"] or 0):
         agg["workbuddy"] = dict(wb_local, local_only=True)
     else:
-        wb_range_sql, wb_params = _report_range_sql(range_, "w.request_time")
+        wb_range_sql, wb_params = _report_range_sql(range_, "w.request_time", start, end)
         wb = get_db().execute(
             f"SELECT COUNT(*) requests, MIN(substr(w.request_time,1,10)) data_since,"
             f" SUM(CASE WHEN w.credit IS NOT NULL THEN w.credit ELSE 0 END) credits"
@@ -3345,7 +3456,7 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
     # R6: 本地渠道行 (各一次聚合, 同构 dict 并入)
     for ch, alias, table, ts in (("zcode", "z", "zcode_usage", "z.started_at"),
                                  ("claudecode", "c", "claudecode_usage", "c.started_at")):
-        range_sql, range_params = _report_range_sql(range_, ts)
+        range_sql, range_params = _report_range_sql(range_, ts, start, end)
         r = get_db().execute(
             f"SELECT {exprs_t[ch]} tokens, SUM({alias}.input_tokens) input,"
             f" SUM({alias}.output_tokens) output, SUM({alias}.cache_read_tokens) cache_read,"
@@ -3358,7 +3469,7 @@ def report_channels(range_: str = "7d") -> list[dict[str, Any]]:
         if r and ((r["tokens"] or 0) or (r["requests"] or 0)):
             agg[ch] = dict(r)
     # Codex 行 (费用估算; request_count_exact 按事件模式聚合)
-    range_sql, range_params = _report_range_sql(range_, "x.started_at")
+    range_sql, range_params = _report_range_sql(range_, "x.started_at", start, end)
     r = get_db().execute(
         f"SELECT {exprs_t['codex']} tokens, SUM(x.input_tokens) input,"
         f" SUM(x.output_tokens) output, SUM(x.cache_read_tokens) cache_read,"
@@ -3638,14 +3749,15 @@ def _totals_from_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def workbuddy_local_totals(range_: str) -> dict[str, Any]:
+def workbuddy_local_totals(range_: str, start: Optional[str] = None,
+                          end: Optional[str] = None) -> dict[str, Any]:
     """WorkBuddy 本机本地用量的单渠道聚合 (键与 db.totals 对齐, 供现成复用).
 
     口径推导 (见实施计划 §4.3): total_input = SUM(input + cache_read + cache_write);
     因 WorkBuddy 的 input 列语义是"未命中缓存的输入"、cache_write 恒 0, 故
     total_input 恰等于 Σ prompt_tokens, 且 hit_rate 分母 (hit+miss+cw) 恰等于 prompt。
     """
-    range_sql, range_params = _report_range_sql(range_, "wl.started_at")
+    range_sql, range_params = _report_range_sql(range_, "wl.started_at", start, end)
     row = get_db().execute(
         f"SELECT COUNT(*) request_count,"
         f" COUNT(DISTINCT CASE WHEN wl.session_id IS NOT NULL AND wl.session_id != ''"
@@ -3681,16 +3793,17 @@ def workbuddy_local_totals(range_: str) -> dict[str, Any]:
     return out
 
 
-def channel_totals(range_: str, channel: str) -> dict[str, Any]:
+def channel_totals(range_: str, channel: str,
+                   start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
     """单渠道聚合 totals (键与 db.totals 对齐, 供 renderOverview 复用; R6 三表分派
     + codex; dsh 由 server 层组装, 本函数不处理)。
 
     Codex 返回 T2 完整聚合字典 (含 total_tokens), 不交给 _totals_from_row 把
     NULL 费用转零。"""
     if channel == "codex":
-        return codex_totals(range_)
+        return codex_totals(range_, start, end)
     if channel == "zcode":
-        range_sql, range_params = _report_range_sql(range_, "z.started_at")
+        range_sql, range_params = _report_range_sql(range_, "z.started_at", start, end)
         row = get_db().execute(
             f"SELECT COUNT(*) request_count,"
             f" COUNT(DISTINCT CASE WHEN z.session_id IS NOT NULL AND z.session_id != '' THEN z.session_id END) session_count,"
@@ -3706,7 +3819,7 @@ def channel_totals(range_: str, channel: str) -> dict[str, Any]:
         ).fetchone()
         return _totals_from_row(row)
     if channel == "claudecode":
-        range_sql, range_params = _report_range_sql(range_, "c.started_at")
+        range_sql, range_params = _report_range_sql(range_, "c.started_at", start, end)
         row = get_db().execute(
             f"SELECT COUNT(*) request_count,"
             f" COUNT(DISTINCT CASE WHEN c.session_id IS NOT NULL AND c.session_id != '' THEN c.session_id END) session_count,"
@@ -3722,10 +3835,10 @@ def channel_totals(range_: str, channel: str) -> dict[str, Any]:
         ).fetchone()
         return _totals_from_row(row)
     if channel == "workbuddy":
-        return workbuddy_local_totals(range_)
+        return workbuddy_local_totals(range_, start, end)
     if channel == "kiro":
-        return kiro_totals(range_)
-    range_sql, range_params = _report_range_sql(range_, "r.created_at")
+        return kiro_totals(range_, start, end)
+    range_sql, range_params = _report_range_sql(range_, "r.created_at", start, end)
     row = get_db().execute(
         f"SELECT COUNT(*) request_count,"
         f" COUNT(DISTINCT CASE WHEN r.session_id IS NOT NULL AND r.session_id != '' THEN r.session_id END) session_count,"
@@ -3797,7 +3910,8 @@ def channel_trend(date_: str = "today", channel: str = "opencode") -> list[dict[
              } for h in range(24)]
 
 
-def report_totals(range_: str) -> dict[str, Any]:
+def report_totals(range_: str, start: Optional[str] = None,
+                  end: Optional[str] = None) -> dict[str, Any]:
     """全渠道聚合 totals (复用 report_channels 同范围/同源聚合): request_count/
     total_tokens/total_input_tokens/total_output_tokens/cache_hit_tokens/
     total_cost_usd + 费用完整性 (cost_available/cost_partial/
@@ -3808,13 +3922,13 @@ def report_totals(range_: str) -> dict[str, Any]:
     混合来源保留其余来源已知小计。DSH 无历史表, 由 server 层仅对 today 并入
     (与 _report_windows_response 对齐), 本函数不碰 dsh_api。
     """
-    codex = _win_codex(*_report_range_sql(range_, "started_at"))
-    wb = _win_wb(*_report_range_sql(range_, "wl.started_at"))
-    kiro = _win_kiro(*_report_range_sql(range_, "k.started_at"))
+    codex = _win_codex(*_report_range_sql(range_, "started_at", start, end))
+    wb = _win_wb(*_report_range_sql(range_, "wl.started_at", start, end))
+    kiro = _win_kiro(*_report_range_sql(range_, "k.started_at", start, end))
     merged = _win_merge(
-        _win_records(*_report_range_sql(range_, "r.created_at")),
-        _win_zcode(*_report_range_sql(range_, "z.started_at")),
-        _win_cc(*_report_range_sql(range_, "c.started_at")),
+        _win_records(*_report_range_sql(range_, "r.created_at", start, end)),
+        _win_zcode(*_report_range_sql(range_, "z.started_at", start, end)),
+        _win_cc(*_report_range_sql(range_, "c.started_at", start, end)),
         codex,
         wb,
         kiro,
@@ -4237,10 +4351,11 @@ def _codex_totals_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def codex_totals(period: str = "30d") -> dict[str, Any]:
+def codex_totals(period: str = "30d",
+                 start: Optional[str] = None, end: Optional[str] = None) -> dict[str, Any]:
     """Codex 用量总览: 口径按简报固定 SELECT (含 SUM(MAX(input-cache_read,0))
     未命中输入); period 统一自然日窗口 _report_range_sql。"""
-    where, params = _report_range_sql(period, "started_at")
+    where, params = _report_range_sql(period, "started_at", start, end)
     row = get_db().execute(
         f"SELECT {_CODEX_AGG_COLS} FROM codex_usage WHERE {where}", params
     ).fetchone()
@@ -4293,25 +4408,41 @@ def backfill_codex_cost(pricing: Any = None) -> int:
         return len(updates)
 
 
-def codex_daily(days: int = 7) -> list[dict[str, Any]]:
-    """Codex 每日聚合 (本地自然日归组), 补足近 N 个自然日 (含今天) 的 0。"""
-    days = max(1, min(int(days), 365))
-    today = datetime.now().astimezone().date()
-    start = _local_day_utc_start(today - timedelta(days=days - 1))
-    end = _local_day_utc_start(today + timedelta(days=1))
+def codex_daily(days: int = 7, start: Optional[str] = None,
+                end: Optional[str] = None) -> list[dict[str, Any]]:
+    """Codex 每日聚合 (本地自然日归组), 补足近 N 个自然日 (含今天) 的 0。
+
+    自定义范围: 窗口为秒级闭区间, 补零区间改为 [start.date(), min(end.date(), today)]。"""
     day_expr = "substr(datetime(started_at, 'localtime'), 1, 10)"
+    today = datetime.now().astimezone().date()
+    b = _custom_bounds_utc(start, end)
+    if b is not None:
+        start_utc, end_utc = b
+        where_tail = "datetime(started_at) >= datetime(?) AND datetime(started_at) <= datetime(?)"
+        s_day = _parse_local_dt((start or "").replace("T", " ")).date()
+        end_s = (end or "").strip()
+        e_day = (_parse_local_dt(end_s.replace("T", " ")) if end_s else datetime.now()).date()
+        e_day = min(e_day, today)
+        n_days = (e_day - s_day).days + 1
+    else:
+        days = max(1, min(int(days), 365))
+        start_utc = _local_day_utc_start(today - timedelta(days=days - 1))
+        end_utc = _local_day_utc_start(today + timedelta(days=1))
+        where_tail = "datetime(started_at) >= datetime(?) AND datetime(started_at) < datetime(?)"
+        s_day = today - timedelta(days=days - 1)
+        e_day = today
+        n_days = days
     rows = get_db().execute(
         f"""SELECT {day_expr} AS date, {_CODEX_AGG_COLS}
             FROM codex_usage
-            WHERE datetime(started_at) >= datetime(?)
-              AND datetime(started_at) < datetime(?)
+            WHERE {where_tail}
             GROUP BY {day_expr}""",
-        (start, end),
+        (start_utc, end_utc),
     ).fetchall()
     by_date = {r["date"]: r for r in rows}
     daily: list[dict[str, Any]] = []
-    for i in range(days):
-        d = (today - timedelta(days=days - 1 - i)).isoformat()
+    for i in range(n_days):
+        d = (s_day + timedelta(days=i)).isoformat()
         r = by_date.get(d)
         if r is None:
             daily.append({"date": d, "request_count": 0, "session_count": 0,
@@ -4327,9 +4458,10 @@ def codex_daily(days: int = 7) -> list[dict[str, Any]]:
     return daily
 
 
-def codex_channel_stats(period: str = "30d") -> list[dict[str, Any]]:
+def codex_channel_stats(period: str = "30d",
+                         start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按渠道 (provider_id) 聚合; 当前固定只有 codex 一行, 字段保留 provider_id。"""
-    where, params = _report_range_sql(period, "started_at")
+    where, params = _report_range_sql(period, "started_at", start, end)
     rows = get_db().execute(
         f"""SELECT provider_id, {_CODEX_AGG_COLS} FROM codex_usage WHERE {where}
             GROUP BY provider_id
@@ -4339,9 +4471,10 @@ def codex_channel_stats(period: str = "30d") -> list[dict[str, Any]]:
     return [{"provider_id": r["provider_id"], **_codex_totals_dict(r)} for r in rows]
 
 
-def codex_model_stats(period: str = "30d") -> list[dict[str, Any]]:
+def codex_model_stats(period: str = "30d",
+                       start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
     """按渠道+模型 (model/provider_id) 聚合, 行字段同 codex_channel_stats 另含 model。"""
-    where, params = _report_range_sql(period, "started_at")
+    where, params = _report_range_sql(period, "started_at", start, end)
     rows = get_db().execute(
         f"""SELECT provider_id, model, {_CODEX_AGG_COLS} FROM codex_usage WHERE {where}
             GROUP BY provider_id, model

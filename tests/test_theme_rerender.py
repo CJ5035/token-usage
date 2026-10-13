@@ -67,7 +67,7 @@ def test_report_cache_write_side_key_validation():
     """写入点键校验 (备注5): range/metric 与当前 state 不匹配即丢弃, 防连点乱序覆盖."""
     body = _extract_fn(_src(), "loadReportAll")
     # daily URL 使用入口捕获的 metric (而非中途可变的 state.reportMetric)
-    assert "`/api/report/daily?range=${range}&metric=${metric}`" in body
+    assert "`/api/report/daily?${rangeQuery(\"home\")}&metric=${metric}`" in body
     assert "if (range === state.range && metric === state.reportMetric) {" in body
     assert "reportDailyCache = { range, metric, data: daily };" in body
     assert "if (range === state.range) reportHourlyCache = { range, data: hourly };" in body

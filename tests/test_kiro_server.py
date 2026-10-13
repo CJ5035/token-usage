@@ -33,7 +33,7 @@ def kiro_triggers(monkeypatch):
     monkeypatch.setattr(server, "_maybe_trigger_kiro_import", lambda: calls.append(1))
     monkeypatch.setattr(server, "_maybe_trigger_codex_import", lambda: None)
     monkeypatch.setattr(server, "_maybe_trigger_workbuddy_import", lambda: None)
-    monkeypatch.setattr(dsh_api, "get_dsh_summaries", lambda *ranges: {r: {
+    monkeypatch.setattr(dsh_api, "get_dsh_summaries", lambda *ranges, **kw: {r: {
         "found": False, "scanning": False, "stale": False, "refresh_error": False,
         "updated_at": None, "retry_after_seconds": 0, "range": r, "totals": {},
         "trend": [], "hourly": [], "sessions_count": 0, "data_since": None}

@@ -8,6 +8,8 @@ const I18N = {
   zh: {
     syncing: "同步中", themeDark: "暗色", themeLight: "亮色", refresh: "刷新", themeToggle: "切换主题", themeSaveFailed: "主题未保存，重试", minimize: "最小化", close: "关闭", maximize: "最大化", restore: "还原",
     homeTitle: "用量统计总览", navHome: "首页", today: "今天", d7: "近7天", d30: "近30天", all: "全部",
+    customRange: "自定义", rangeStart: "开始", rangeEnd: "结束", rangeApply: "应用", rangeClear: "清除",
+    endEmptyMeansNow: "结束留空表示至今", rangeInvalid: "开始必填，且不能晚于结束",
     overviewTitle: "用量概览", followRange: "数据跟随时间范围",
     todayTrend: "今日趋势", hours24: "24 小时",
     statsTitle: "用量统计", tokenBreakdown: "Token 构成",
@@ -72,7 +74,7 @@ const I18N = {
     pageOf: "第", ofPages: "页",
     loggedIn: "已登录", notLoggedIn: "未登录", connected: "已连接", notConnected: "未连接",
     lastSync: "上次同步", records: "条记录", updatedAt: "更新于",
-    justNow: "刚刚", minAgo: "分钟前", hrAgo: "小时前", dayAgo: "天前", never: "从未同步",
+    justNow: "刚刚", minAgo: "分钟前", hrAgo: "小时前", dayAgo: "天前", never: "从未同步", now: "现在",
     day: "天", hour: "小时", minute: "分钟", soon: "即将重置",
     dUnit: "天", hUnit: "小时", mUnit: "分钟",
     confirm: "确认", cancel: "取消", ok: "确定",
@@ -157,6 +159,8 @@ const I18N = {
   en: {
     syncing: "Syncing", themeDark: "Dark", themeLight: "Light", refresh: "Refresh", themeToggle: "Toggle theme", themeSaveFailed: "Theme not saved, retrying", minimize: "Minimize", close: "Close", maximize: "Maximize", restore: "Restore",
     homeTitle: "Usage Overview", navHome: "Home", today: "Today", d7: "7 Days", d30: "30 Days", all: "All",
+    customRange: "Custom", rangeStart: "Start", rangeEnd: "End", rangeApply: "Apply", rangeClear: "Clear",
+    endEmptyMeansNow: "Leave end empty for up to now", rangeInvalid: "Start is required and must not be after end",
     overviewTitle: "Usage Overview", followRange: "Follows selected range",
     todayTrend: "Today's Trend", hours24: "24 Hours",
     statsTitle: "Usage Stats", tokenBreakdown: "Token Breakdown",
@@ -221,7 +225,7 @@ const I18N = {
     pageOf: "Page", ofPages: "of",
     loggedIn: "Logged in", notLoggedIn: "Not logged in", connected: "Connected", notConnected: "Not connected",
     lastSync: "Last sync", records: "records", updatedAt: "Updated",
-    justNow: "just now", minAgo: "min ago", hrAgo: "hr ago", dayAgo: "d ago", never: "Never synced",
+    justNow: "just now", minAgo: "min ago", hrAgo: "hr ago", dayAgo: "d ago", never: "Never synced", now: "now",
     day: "d", hour: "h", minute: "m", soon: "resets soon",
     dUnit: "d", hUnit: "h", mUnit: "m",
     confirm: "Confirm", cancel: "Cancel", ok: "OK",
@@ -311,6 +315,8 @@ let state = {
   page: "home",
   range: "today",
   statsRange: "7d",
+  rangeCustom: { start: "", end: "" },   // 首页自定义范围 (datetime-local 串, end 空=至今)
+  statsCustom: { start: "", end: "" },   // 统计页自定义范围 (两页独立)
   modelDim: "input",
   data: null,
   exchangeRate: 7.0,
@@ -420,6 +426,59 @@ function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+/* ---------------- 自定义范围: 偏好缓存与恢复 (两页独立) ---------------- */
+const RANGE_PREF_KEY = { home: "gousage-home-range", stats: "gousage-stats-range" };
+const RANGE_DEFAULT = { home: "today", stats: "7d" };
+function rangePrefOf(kind) {
+  return kind === "home"
+    ? { mode: state.range, custom: state.rangeCustom }
+    : { mode: state.statsRange, custom: state.statsCustom };
+}
+function saveRangePref(kind) {
+  try { localStorage.setItem(RANGE_PREF_KEY[kind], JSON.stringify(rangePrefOf(kind))); } catch (e) { /* ignore */ }
+}
+function restoreRangePref() {
+  const modes = ["today", "yesterday", "7d", "30d", "all", "custom"];
+  for (const kind of ["home", "stats"]) {
+    let pref = null;
+    try { pref = JSON.parse(localStorage.getItem(RANGE_PREF_KEY[kind]) || "null"); } catch (e) { pref = null; }
+    if (!pref || typeof pref !== "object" || !modes.includes(pref.mode)) continue;   // 损坏/非法回默认档
+    const custom = (pref.custom && typeof pref.custom.start === "string"
+                    && pref.custom.start && !Number.isNaN(Date.parse(pref.custom.start)))
+      ? { start: pref.custom.start, end: typeof pref.custom.end === "string" ? pref.custom.end : "" }
+      : null;
+    if (pref.mode === "custom" && !custom) continue;   // custom 但值不可用 -> 回默认档
+    if (kind === "home") { state.range = pref.mode; if (custom) state.rangeCustom = custom; }
+    else { state.statsRange = pref.mode; if (custom) state.statsCustom = custom; }
+  }
+  syncRangePills();
+}
+function customRangeSummary(v) {
+  if (!v || !v.start) return t("customRange");
+  const fmt = (s) => s.slice(5, 16).replace("T", " ");   // "MM-DD HH:mm"
+  return v.end ? `${fmt(v.start)}~${fmt(v.end)}` : `${fmt(v.start)}~${t("now")}`;   // end 空=至今, 摘要显式标注
+}
+function syncRangePills() {
+  for (const [ids, kind] of [["home-pills", "home"], ["stats-pills", "stats"]]) {
+    const box = document.getElementById(ids);
+    if (!box) continue;
+    const mode = kind === "home" ? state.range : state.statsRange;
+    box.querySelectorAll(".pill").forEach((p) => p.classList.toggle("active", p.dataset.r === mode));
+    const cp = box.querySelector('.pill[data-r="custom"]');
+    if (cp) cp.textContent = mode === "custom"
+      ? customRangeSummary(kind === "home" ? state.rangeCustom : state.statsCustom)
+      : t("customRange");
+  }
+}
+function rangeQuery(kind) {
+  const mode = kind === "home" ? state.range : state.statsRange;
+  if (mode !== "custom") return "range=" + encodeURIComponent(mode);
+  const v = kind === "home" ? state.rangeCustom : state.statsCustom;
+  let q = "range=custom&start=" + encodeURIComponent(v.start);
+  if (v.end) q += "&end=" + encodeURIComponent(v.end);
+  return q;
+}
+
 /* ---------------- API ---------------- */
 async function api(path, opts = {}) {
   try {
@@ -453,6 +512,7 @@ function applyLang(l) {
     el.textContent = t(el.dataset.i18n);
   });
   syncI18nTitles();   // EVOLUTION-9: tooltip/估算徽标随语言切换
+  syncRangePills();   // 20260926: data-i18n 刷新会把 custom pill 摘要重置为"自定义", 此处恢复
   document.querySelectorAll("#set-lang-pills .pill").forEach((b) => b.classList.toggle("active", b.dataset.v === lang));
   // 版本号: 唯一来源为后端 /api/version (app/__init__.py), 前端动态获取; 副题覆盖远程与本地多来源
   const ver = APP_VERSION ? "v" + APP_VERSION : "GoGauge";
@@ -479,12 +539,13 @@ function applyLang(l) {
   // ZCode 区块随语言即时重渲染 (复用已拉取数据, 不重发请求)
   if (zcodeQuotaLast && state.page === "home" && state.channel === "zcode") renderZcodeQuota(zcodeQuotaLast);
   if (zcodeSummaryLast) renderZcodeSummary(zcodeSummaryLast);
-  if (dshUsageLast && dshUsageLast.range === state.statsRange) renderDsh(dshUsageLast);
+  if (dshUsageLast && dshUsageLast.key === rangeQuery("stats")) renderDsh(dshUsageLast);
   else if (dshTransportError && dshTransportError.range === state.statsRange) renderDshTransportError();
   if (claudecodeSummaryLast) renderClaudecodeSummary(claudecodeSummaryLast);
   if (codexSummaryLast) renderCodexSummary(codexSummaryLast);   // Codex 区块随语言即时重渲染 (复用已拉取数据)
   if (kiroSummaryLast) renderKiroSummary(kiroSummaryLast);
   if (kiroQuotaLast && state.page === "home" && state.channel === "kiro") renderKiroQuota(kiroQuotaLast);
+  if (workbuddySummaryLast) renderWorkbuddySummary(workbuddySummaryLast);   // WorkBuddy 区块随语言即时重渲染 (db_found=false 时重渲走整卡隐藏分支)
   // Step 8a: 语言切换后, 首页 workbuddy/all 报表的动态积分/来源/费用文案由后端数据驱动,
   // 仅当报表已在显示时重取 (init 首次 applyLang homeReportShown=false 不发请求)
   if (state.page === "home" && homeReportShown
@@ -605,6 +666,10 @@ function applyDarkMode(on) {
   document.documentElement.dataset.theme = on ? "dark" : "light";
   $("tb-theme").innerHTML = `◐ <span data-i18n="${on ? "themeLight" : "themeDark"}">${on ? t("themeLight") : t("themeDark")}</span>`;
   try { localStorage.setItem("gousage-dark", on ? "1" : "0"); } catch (e) { /* ignore */ }
+  // 边框颜色跟随主题 (doc/20260927): 与主题背景同色使系统边框带视觉隐形;
+  // fire-and-forget, bootstrap 早期 pywebview 未注入时 pywebviewApi() 为 null 跳过
+  // (初始色已由后端 on_shown 设置), 后端静默兜底 Win10 无 DWMWA_BORDER_COLOR
+  pywebviewApi().then(a => a && a.set_border_color(on ? "#0A0B0F" : "#f8fafc"));
   syncThemePills();
   rerenderCharts();   // EVOLUTION-4: refreshIcons 并入 rerenderCharts 末尾 (唯一入口, 消除双调用重复重建)
 }
@@ -759,7 +824,7 @@ async function loadDashboard(quiet = false, noAnim = false) {
     const seq = ++chSeq;                                  // 新增: 快速切渠道时丢弃过期响应 (方案4④)
     $("report-single").classList.add("swapping");         // 新增: 加载提示 (方案4③)
     const ch = state.channel, range = state.range;        // Step 8a: 请求发起时快照组 URL (防在途 state 漂移)
-    const overviewP = api(`/api/report/channel-overview?range=${range}&channel=${ch}`);
+    const overviewP = api(`/api/report/channel-overview?${rangeQuery("home")}&channel=${ch}`);
     // R54 (Step 8a): WorkBuddy 必须先得 overview (携带 workbuddy_local.running) 再发 trend —
     // overview 的 running=true 会安排完成后的整组重取; overview 迟到 (已切走) 时以 null 收敛,
     // 由 Promise.all 的 seq 守卫整体丢弃, 不再发 trend。其他渠道保持原并发结构。
@@ -812,7 +877,7 @@ async function loadDashboard(quiet = false, noAnim = false) {
   showLoading(true);
   try {
     const range = state.page === "stats" ? state.statsRange : state.range;
-    const data = await api(`/api/dashboard?range=${range}`);
+    const data = await api(`/api/dashboard?${rangeQuery(state.page === "stats" ? "stats" : "home")}`);
     if (seq !== loadSeq) return;
     renderAll(data);
     showLoading(false);
@@ -1194,7 +1259,7 @@ async function loadZcodeSummary() {
   const box = $("zcode-stats");
   if (!box) return;
   try {
-    const data = await api(`/api/zcode/summary?range=${state.statsRange}`);
+    const data = await api(`/api/zcode/summary?${rangeQuery("stats")}`);
     if (seq !== zcodeSumSeq) return;  // 丢弃过期响应 (快速切 range 时旧请求)
     renderZcodeSummary(data);
   } catch (e) {
@@ -1402,35 +1467,36 @@ async function refreshHomeDshStrip() {
 }
 async function loadDshUsage() {
   const range = state.statsRange;
+  const dshRangeKey = rangeQuery("stats");   // Review Focus #3: 去重/缓存键并入 custom 起止, 防不同自定义范围撞键
   const box = $("dsh-stats");
   if (!box || !dshStatsVisible()) return;
-  if (dshRequestControllers.has(range)) return;
+  if (dshRequestControllers.has(dshRangeKey)) return;
   clearDshRefreshTimer();
   const controller = new AbortController();
   dshRequestController = controller;
-  dshRequestControllers.set(range, controller);
+  dshRequestControllers.set(dshRangeKey, controller);
   let timedOut = false;
   const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, DSH_REQUEST_TIMEOUT_MS);
   box.classList.add("swapping");
   try {
-    const data = await api("/api/dsh/usage?range=" + encodeURIComponent(range), { signal: controller.signal });
-    if (range !== state.statsRange || !dshStatsVisible()) return;
+    const data = await api("/api/dsh/usage?" + dshRangeKey, { signal: controller.signal });
+    if (dshRangeKey !== rangeQuery("stats") || !dshStatsVisible()) return;
     dshTransportError = null;
-    dshUsageLast = data;
+    dshUsageLast = { ...data, key: dshRangeKey };
     renderDsh(data);
   } catch (e) {
-    if (range !== state.statsRange || !dshStatsVisible() || (controller.signal.aborted && !timedOut)) return;
+    if (dshRangeKey !== rangeQuery("stats") || !dshStatsVisible() || (controller.signal.aborted && !timedOut)) return;
     dshTransportError = { range, message: timedOut ? t("requestTimeout") : (e.message || String(e)) };
     renderDshTransportError();
     // HTTP 错误缺状态: 前端固定退避 60s 后自动重取 (§3.4), 不清除已显示内容
     scheduleDshRefresh({ refresh_error: true, retry_after_seconds: DSH_FAIL_BACKOFF_S });
   } finally {
     clearTimeout(timeoutId);
-    if (range === state.statsRange) {
+    if (dshRangeKey === rangeQuery("stats")) {
       box.classList.remove("swapping");
       if (dshRequestController === controller) dshRequestController = null;
     }
-    if (dshRequestControllers.get(range) === controller) dshRequestControllers.delete(range);
+    if (dshRequestControllers.get(dshRangeKey) === controller) dshRequestControllers.delete(dshRangeKey);
   }
 }
 function dshRenderHeads() {
@@ -1559,7 +1625,7 @@ function renderDshTransportError() {
   const box = $("dsh-stats");
   if (!box) return;
   box.hidden = false;
-  const cached = dshUsageLast && dshUsageLast.range === state.statsRange && dshUsageLast.found !== false;
+  const cached = dshUsageLast && dshUsageLast.key === rangeQuery("stats") && dshUsageLast.found !== false;
   if (cached) {
     renderDsh(dshUsageLast);
     return;
@@ -1604,7 +1670,7 @@ async function loadClaudecodeSummary() {
   const box = $("claudecode-stats");
   if (!box) return;
   try {
-    const data = await api(`/api/claudecode/summary?range=${state.statsRange}`);
+    const data = await api(`/api/claudecode/summary?${rangeQuery("stats")}`);
     if (seq !== claudecodeSumSeq) return;  // 丢弃过期响应 (快速切 range 时旧请求)
     renderClaudecodeSummary(data);
   } catch (e) {
@@ -1783,7 +1849,7 @@ async function loadWorkbuddySummary() {
   const box = $("workbuddy-stats");
   if (!box) return;
   try {
-    const data = await api("/api/workbuddy/summary?range=" + encodeURIComponent(state.statsRange));
+    const data = await api("/api/workbuddy/summary?" + rangeQuery("stats"));
     if (seq !== workbuddySumSeq) return;
     workbuddySummaryLast = data;
     renderWorkbuddySummary(data);
@@ -1797,6 +1863,16 @@ function renderWorkbuddySummary(data) {
   const missing = $("workbuddy-missing");
   const kpis = $("workbuddy-kpis");
   const table = $("workbuddy-model-body");
+  if (!data || data.db_found === false) {
+    // 数据源不存在 (未登录且本地无记录): 整卡隐藏 (20260915 需求5 口径), 内部状态复位防残留
+    box.hidden = true;
+    missing.hidden = false;
+    kpis.hidden = true;
+    kpis.innerHTML = "";
+    table.innerHTML = "";
+    updateStatsEmptyState();
+    return;
+  }
   const requests = Number(data && data.requests) || 0;
   const credits = Number(data && data.credits) || 0;
   box.hidden = false;
@@ -1823,7 +1899,7 @@ async function loadCodexSummary() {
   const seq = ++codexSumSeq;
   const range = state.statsRange;
   try {
-    const d = await api("/api/codex/summary?range=" + encodeURIComponent(range));
+    const d = await api("/api/codex/summary?" + rangeQuery("stats"));
     if (seq !== codexSumSeq || range !== state.statsRange) return;  // 丢弃过期响应 (快速切 range 时旧请求/旧 range 均不覆盖)
     codexSummaryLast = d;
     renderCodexSummary(d);
@@ -2448,13 +2524,13 @@ function refreshIcons() {
    (opencode/bai/commandcode) 时置 true; rerenderCharts/refreshIcons 据此跳过
    重建 cModel/cTrend, 防切主题在 hidden canvas 上重建 */
 let statsRemoteHidden = false;
-/* stats 页空态兜底 (20260915 需求5): 顶部远程区块与四个本地区块全部隐藏时
-   显示一条提示, 避免整页空白; 由 renderAll 与四个本地渲染函数在显隐变更后调用 */
+/* stats 页空态兜底 (20260915 需求5): 顶部远程区块与五个本地区块全部隐藏时
+   显示一条提示, 避免整页空白; 由 renderAll 与各本地区块渲染函数在显隐变更后调用 */
 function updateStatsEmptyState() {
   const empty = $("stats-empty");
   if (!empty) return;
   const remoteHidden = $("stats-total-cards") ? $("stats-total-cards").hidden : true;
-  const allLocalHidden = ["zcode-stats", "dsh-stats", "claudecode-stats", "codex-stats", "kiro-stats"]
+  const allLocalHidden = ["zcode-stats", "dsh-stats", "claudecode-stats", "codex-stats", "kiro-stats", "workbuddy-stats"]
     .every((id) => { const el = $(id); return !el || el.hidden; });
   empty.hidden = !(remoteHidden && allLocalHidden);
 }
@@ -3095,13 +3171,15 @@ function bindEvents() {
     else if (state.page === "home" && (state.channel === "all" || state.channel === "dsh")) dshSchedulerTick("home");
   });
 
-  document.querySelectorAll("#home-pills .pill").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#home-pills .pill").forEach((b) => b.addEventListener("click", (e) => {
+    if (b.dataset.r === "custom") { e.stopPropagation(); openCustomPanel(b); return; }   // 自定义: 开面板而非立即切换
     document.querySelectorAll("#home-pills .pill").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active"); state.range = b.dataset.r; loadDashboard();
+    b.classList.add("active"); state.range = b.dataset.r; saveRangePref("home"); syncRangePills(); loadDashboard();
   }));
-  document.querySelectorAll("#stats-pills .pill").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll("#stats-pills .pill").forEach((b) => b.addEventListener("click", (e) => {
+    if (b.dataset.r === "custom") { e.stopPropagation(); openCustomPanel(b); return; }   // 自定义: 开面板而非立即切换
     document.querySelectorAll("#stats-pills .pill").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active"); state.statsRange = b.dataset.r; loadDashboard();
+    b.classList.add("active"); state.statsRange = b.dataset.r; saveRangePref("stats"); syncRangePills(); loadDashboard();
     loadDshUsage();
     loadZcodeSummary();  // ZCode 区块跟随 range 切换
     loadClaudecodeSummary();  // Claude Code 区块跟随 range 切换
@@ -3109,6 +3187,46 @@ function bindEvents() {
     loadWorkbuddySummary();  // WorkBuddy 区块跟随 range 切换
     loadKiroSummary();  // Kiro 区块跟随 range 切换
   }));
+  // 自定义范围: 两页 pill 共用一个面板, 应用才生效 (清除回本页默认档)
+  const crPanel = $("custom-range-panel");
+  function openCustomPanel(pill) {
+    const kind = pill.parentElement.id === "home-pills" ? "home" : "stats";
+    const cur = kind === "home" ? state.rangeCustom : state.statsCustom;
+    $("custom-start").value = cur.start || "";
+    $("custom-end").value = cur.end || "";
+    crPanel.dataset.kind = kind;
+    crPanel.hidden = false;                    // 先显示才能量到实际宽度 (hidden 时 offsetWidth=0)
+    const r = pill.parentElement.getBoundingClientRect();   // pill-row 容器 (3px padding), 右缘以容器可见灰底为准
+    const pw = crPanel.offsetWidth || 266;     // 264 内容宽 + 2 边框
+    crPanel.style.left = `${Math.max(8, r.right - pw)}px`; // 右缘与 pills 容器右缘对齐
+    crPanel.style.top = `${r.bottom + 6}px`;
+  }
+  document.addEventListener("click", (e) => {
+    if (!crPanel.hidden && !crPanel.contains(e.target)) crPanel.hidden = true;
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") crPanel.hidden = true; });
+  function customInputsValid() {
+    const s = $("custom-start").value, e2 = $("custom-end").value;
+    return !!s && (!e2 || e2 >= s);   // datetime-local 串同格式可字典序比较
+  }
+  $("custom-apply").addEventListener("click", () => {
+    if (!customInputsValid()) { toast(t("rangeInvalid"), "err"); return; }
+    const kind = crPanel.dataset.kind || "home";
+    const v = { start: $("custom-start").value, end: $("custom-end").value };
+    if (kind === "home") { state.range = "custom"; state.rangeCustom = v; }
+    else { state.statsRange = "custom"; state.statsCustom = v; }
+    saveRangePref(kind); syncRangePills(); crPanel.hidden = true;
+    loadDashboard();
+    if (kind === "stats") { loadDshUsage(); loadZcodeSummary(); loadClaudecodeSummary(); loadCodexSummary(); loadWorkbuddySummary(); }
+  });
+  $("custom-clear").addEventListener("click", () => {
+    const kind = crPanel.dataset.kind || "home";
+    if (kind === "home") state.range = RANGE_DEFAULT.home;
+    else state.statsRange = RANGE_DEFAULT.stats;
+    saveRangePref(kind); syncRangePills(); crPanel.hidden = true;
+    loadDashboard();
+    if (kind === "stats") { loadDshUsage(); loadZcodeSummary(); loadClaudecodeSummary(); loadCodexSummary(); loadWorkbuddySummary(); }
+  });
   $("mr-dim").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
     document.querySelectorAll("#mr-dim button").forEach((x) => x.classList.remove("active"));
@@ -3358,15 +3476,15 @@ async function loadReportAll(quiet = false, noAnim = false) {
     const metric = state.reportMetric;
     const [w, rows, ov, zq, kq, daily, hourly, all] = await Promise.all([   // 三波并一波 (hourly 并入消除 today 档两段式弹入)
       api(`/api/report/windows`),
-      api(`/api/report/channels?range=${range}`),
+      api(`/api/report/channels?${rangeQuery("home")}`),
       api(`/api/accounts/overview`),                    // R1: 摘要条数据并入同一并发 (T9 renderQuotaBar)
       api(`/api/zcode/quota`).catch(() => null),        // 问题5: ZCode 额度并入配额条, 失败不出卡
       api(`/api/kiro/quota`).catch(() => null),         // Kiro 额度并入配额条, 失败不出卡 (原因在 kiro 页签展示)
-      api(`/api/report/daily?range=${range}&metric=${metric}`),
+      api(`/api/report/daily?${rangeQuery("home")}&metric=${metric}`),
       (range === "today" || range === "yesterday")      // 档位条件保留 (条件性 promise)
         ? api(`/api/report/hourly?date=${range}`)
         : Promise.resolve(null),
-      api("/api/dashboard?scope=all&range=" + encodeURIComponent(range)),   // T5: 同范围 report_totals → 范围 KPI 条 (响应仅给 renderReportTotals, 不碰 state.data/不 renderAll)
+      api("/api/dashboard?scope=all&" + rangeQuery("home")),   // T5: 同范围 report_totals → 范围 KPI 条 (响应仅给 renderReportTotals, 不碰 state.data/不 renderAll)
     ]);
     if (seq !== allSeq) return;                         // 过期响应丢弃 (缓存写入在守卫后, 最新胜出)
     renderWindows(w, rows.rows.some((r) => r.estimated));
@@ -3614,7 +3732,7 @@ function chartReportStack(d, noAnim) {
   cStack.resize();
 }
 
-const RANGE_LABEL_KEY = { today: "today", yesterday: "yesterday", "7d": "d7", "30d": "d30", all: "all" };   // 环心范围标签 i18n 映射 (arena2)
+const RANGE_LABEL_KEY = { today: "today", yesterday: "yesterday", "7d": "d7", "30d": "d30", all: "all", custom: "customRange" };   // 环心范围标签 i18n 映射 (arena2)
 
 function chartReportDonut(d, noAnim, range) {
   const canvas = $("report-donut");
@@ -3759,7 +3877,7 @@ function rerenderCharts() {
   }
   // DSH 趋势 (§3.5): 不依赖 state.data 已有远程账号数据 — 统计页首屏 dashboard
   // 加载失败时主题切换仍以 noAnim 重渲, 不残留旧主题配色
-  if (!document.getElementById("page-stats").hidden && dshUsageLast && dshUsageLast.range === state.statsRange) {
+  if (!document.getElementById("page-stats").hidden && dshUsageLast && dshUsageLast.key === rangeQuery("stats")) {
     chartDshTrend(dshUsageLast.trend || [], true);
   }
   refreshIcons();   // 图标变体原地换 src + chartModel 重渲 (唯一入口)
@@ -3808,6 +3926,7 @@ let APP_VERSION = "";  // 后端版本号 (app/__init__.py), 唯一版本源
   applyLang(l);
   applyDarkMode(dark);
   applyCurrency(cur);
+  restoreRangePref();   // 自定义范围偏好: 完整恢复激活档位 (含 custom), bindEvents 前生效
   try { const v = await api("/api/version"); APP_VERSION = v.version || ""; } catch (e) { /* ignore */ }
   bindEvents();
   try { state.settings = await api("/api/settings"); } catch (e) { /* ignore */ }
