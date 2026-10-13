@@ -168,8 +168,12 @@ def test_sync_charts_summary_and_prune(tmp_db, monkeypatch):
     }
     summary = {"totalCount": 205, "totalCost": 0.38}
 
+    # n1 相对 now 造数: 30 天裁剪窗口是滚动的, 固定日期 (2026-09-03) 会随日期滑出被误裁
+    fresh = _usage_row("n1")
+    fresh["created_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") \
+        + f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z"
     monkeypatch.setattr(commandcode_api, "fetch_usage_page",
-                        lambda cookie, limit=50, cursor="": ([_usage_row("n1")], ""))
+                        lambda cookie, limit=50, cursor="": ([fresh], ""))
     monkeypatch.setattr(commandcode_api, "fetch_subscription", lambda cookie: {"planId": "individual-go"})
     monkeypatch.setattr(commandcode_api, "fetch_charts", lambda cookie: [bucket, {"model": "m2"}])
     monkeypatch.setattr(commandcode_api, "fetch_summary", lambda cookie: summary)

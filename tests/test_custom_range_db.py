@@ -242,11 +242,14 @@ def test_channel_totals_custom_window(tmp_crange_db):
 # ---------- daily 系列 + charts_aggregate (Task 5) ----------
 
 def test_daily_stats_custom_window(tmp_crange_db):
-    b = db._custom_bounds_utc("2026-09-15 00:00:00", "2026-09-25 23:59:59")
-    _ = b
-    _seed_records("2026-09-16T12:00:00Z", "2026-09-24T12:00:00Z", "2026-09-10T12:00:00Z")
-    rows = db.daily_stats(30, start="2026-09-15 00:00:00", end="2026-09-25 23:59:59")
-    assert [r["request_count"] for r in rows] == [1, 1]      # 只含 16/24 两天
+    # 相对 now 造数: "不传新参=近30天" 是滚动窗口回归, 固定日期会在窗口滑出后失效
+    now = datetime.now()
+    fmt = "%Y-%m-%d %H:%M:%S"
+    win_s, win_e = (now - timedelta(days=10)).strftime(fmt), (now - timedelta(days=2)).strftime(fmt)
+    iso = lambda dt: dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    _seed_records(iso(now - timedelta(days=9)), iso(now - timedelta(days=3)), iso(now - timedelta(days=15)))
+    rows = db.daily_stats(30, start=win_s, end=win_e)
+    assert [r["request_count"] for r in rows] == [1, 1]      # 只含区间内两天, 区间外前 15 天那条不计
     assert sum(r["request_count"] for r in db.daily_stats(30)) == 3   # 不传新参回归 (近 30 天全量)
 
 
