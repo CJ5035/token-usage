@@ -220,3 +220,28 @@ def test_kiro_only_does_not_show_global_empty():
     assert(elements['stats-empty'].hidden, 'Kiro data coexists with global empty');
     ''')
 
+def test_records_kiro_residual_nodes():
+    p = _nodes()
+    assert "rec-kiro-hint" in p.ids
+    assert "kiroRecordsCount" in p.keys   # 提示文案本身保留, 仅显隐受控
+
+
+def test_records_kiro_residual_hidden_via_node():
+    _run_node(r"""
+    run(`state.kiroFound = false; state.records.source = 'all'; syncSourceFilter()`);
+    const h = elements['rec-source-filter'].innerHTML;
+    assert(!h.includes('value="kiro"'), 'kiro option must be absent when kiro not installed: ' + h);
+    assert(elements['rec-kiro-hint'].hidden === true, 'hint must be hidden when kiro not installed');
+
+    run(`state.kiroFound = true; syncSourceFilter()`);
+    const h2 = elements['rec-source-filter'].innerHTML;
+    assert(h2.includes('value="kiro"'), 'kiro option must be present when kiro installed: ' + h2);
+    assert(elements['rec-kiro-hint'].hidden === false, 'hint must be shown when kiro installed');
+    assert(elements['rec-source-filter'].value === 'all', 'default selection unchanged');
+    """)
+
+
+def test_records_kiro_presence_wiring():
+    assert "kiroFound: false," in JS
+    assert JS.count("state.kiroFound = !!st.kiro_found;") == 2   # checkState + gousageOnLoginSuccess
+

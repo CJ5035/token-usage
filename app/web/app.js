@@ -325,6 +325,7 @@ let state = {
   sessions: { page: 1, pageSize: 7, total: 0 },
   settings: { sync_interval_sec: 300, window_days: 60, auto_sync: true },
   channel: "all",        // 首页渠道 tab; 冷启动强制 all (spec v2)
+  kiroFound: false,      // 本机是否存在 Kiro (/api/state kiro_found); 记录页 kiro 残留 UI 显隐
   reportMetric: "tokens",
 };
 
@@ -2214,7 +2215,10 @@ const SOURCE_OPTIONS = [
 function syncSourceFilter() {
   const sel = $("rec-source-filter");
   if (!sel) return;
-  sel.innerHTML = SOURCE_OPTIONS.map(([v, k]) => `<option value="${v}">${escapeHtml(t(k))}</option>`).join("");
+  // 未装 Kiro 不露出痕迹: 下拉无 kiro 选项, 表头 Kiro 口径提示隐藏 (谓词同 /api/state kiro_found)
+  const opts = SOURCE_OPTIONS.filter(([v]) => v !== "kiro" || state.kiroFound);
+  sel.innerHTML = opts.map(([v, k]) => `<option value="${v}">${escapeHtml(t(k))}</option>`).join("");
+  $("rec-kiro-hint").hidden = !state.kiroFound;
   sel.value = state.records.source || "all";
 }
 function sourceBadge(source) {
@@ -3046,6 +3050,7 @@ function showLoginOverlay(show) {
 async function checkState() {
   try {
     const st = await api("/api/state");
+    state.kiroFound = !!st.kiro_found;
     // logged_in 只表示远程账号: 未登录但本地 Codex 可用时直达面板, 两者皆无才显示欢迎页;
     // skip_welcome (引导页"下次启动隐藏") 时不再显示, 直接进面板 (20260915 需求3)
     if (!st.logged_in && !canUseLocalCodex(st) && !st.skip_welcome) { showLoginOverlay(true); return; }
@@ -3062,6 +3067,7 @@ async function checkState() {
 window.gousageOnLoginSuccess = async function () {
   try {
     const st = await api("/api/state");
+    state.kiroFound = !!st.kiro_found;
     if (st.logged_in) showLoginOverlay(false);  // 欢迎页场景: 直接进入面板
   } catch (e) { /* ignore */ }
   loadDashboard().catch(() => {});
